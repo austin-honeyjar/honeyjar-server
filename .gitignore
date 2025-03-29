@@ -65,3 +65,8 @@ yarn-error.log*
 
 # Yarn Integrity file
 .yarn-integrity
+
+# Ignore all .js files except jest.config.js
+*.js
+!jest.config.js
+dist/

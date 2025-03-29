@@ -1,19 +1,25 @@
-const express = require('express');
-const path = require('path');
-const cors = require('cors');
-require('dotenv').config();
+import express, { Express } from 'express';
+import path from 'path';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { chatHandler } from './src/api/chat';
 
-// Import route handlers
-const chatHandler = require('./api/chat');
+dotenv.config();
 
-const app = express();
+const app: Express = express();
 
-// Validate Langflow environment variables
+// Environment variables type checking
+interface LangflowConfig {
+  REACT_APP_LANGFLOW_ID: string;
+  REACT_APP_FLOW_ID: string;
+  REACT_APP_APPLICATION_TOKEN: string;
+}
+
 const {
   REACT_APP_LANGFLOW_ID,
   REACT_APP_FLOW_ID,
   REACT_APP_APPLICATION_TOKEN
-} = process.env;
+} = process.env as Partial<LangflowConfig>;
 
 if (!REACT_APP_LANGFLOW_ID || !REACT_APP_FLOW_ID || !REACT_APP_APPLICATION_TOKEN) {
   console.error('Missing required Langflow environment variables:', {
@@ -25,7 +31,7 @@ if (!REACT_APP_LANGFLOW_ID || !REACT_APP_FLOW_ID || !REACT_APP_APPLICATION_TOKEN
 
 // CORS configuration
 const isDevelopment = process.env.NODE_ENV !== 'production';
-const corsOptions = {
+const corsOptions: cors.CorsOptions = {
   origin: isDevelopment ? ['http://localhost:3000', 'http://localhost:3004'] : '*',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
@@ -37,11 +43,8 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Keep your existing routes here
-// ... existing honeyjar-server routes ...
-
 // Add the chat endpoint
-app.post('/api/chat', chatHandler);
+app.post('/api/chat', chatHandler as any);
 
 const PORT = process.env.PORT || (isDevelopment ? 3005 : 3000);
 app.listen(PORT, () => {

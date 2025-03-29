@@ -1,9 +1,17 @@
-const axios = require('axios');
+import { Request, Response } from 'express';
+import axios, { AxiosRequestConfig, AxiosError } from 'axios';
 
-async function chatHandler(req, res) {
+interface ChatRequest extends Request {
+  body: {
+    input_value: string;
+    output_type: string;
+    input_type: string;
+  }
+}
+
+export const chatHandler = async (req: ChatRequest, res: Response): Promise<Response> => {
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    return res.status(200).end();
   }
 
   try {
@@ -20,7 +28,7 @@ async function chatHandler(req, res) {
 
     const apiUrl = `https://api.langflow.astra.datastax.com/lf/${process.env.REACT_APP_LANGFLOW_ID}/api/v1/run/${process.env.REACT_APP_FLOW_ID}`;
     
-    const axiosConfig = {
+    const axiosConfig: AxiosRequestConfig = {
       method: 'post',
       url: apiUrl,
       data: req.body,
@@ -33,9 +41,7 @@ async function chatHandler(req, res) {
         'Referer': req.headers.referer || 'http://localhost:3000/',
         'Host': 'api.langflow.astra.datastax.com'
       },
-      validateStatus: function (status) {
-        return status < 500;
-      }
+      validateStatus: (status: number) => status < 500
     };
 
     console.log('Making request with config:', {
@@ -56,26 +62,25 @@ async function chatHandler(req, res) {
     return res.status(response.status).json(response.data);
 
   } catch (error) {
+    const axiosError = error as AxiosError;
     console.error('API Error:', {
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data,
+      message: axiosError.message,
+      status: axiosError.response?.status,
+      data: axiosError.response?.data,
       config: {
-        url: error.config?.url,
-        method: error.config?.method,
+        url: axiosError.config?.url,
+        method: axiosError.config?.method,
         headers: {
-          ...error.config?.headers,
+          ...axiosError.config?.headers,
           Authorization: 'Bearer [HIDDEN]'
         }
       }
     });
 
-    return res.status(error.response?.status || 500).json({
+    return res.status(axiosError.response?.status || 500).json({
       error: 'API request failed',
-      message: error.message,
-      details: error.response?.data || 'No additional details available'
+      message: axiosError.message,
+      details: axiosError.response?.data || 'No additional details available'
     });
   }
-}
-
-module.exports = chatHandler; 
+}; 
