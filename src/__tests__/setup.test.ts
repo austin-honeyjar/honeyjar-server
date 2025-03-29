@@ -1,12 +1,41 @@
 import { testDb } from './utils/testDb';
 import { chats, csvMetadata } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 describe('Database Setup Tests', () => {
+  beforeAll(async () => {
+    // Create tables before all tests
+    await testDb.execute(sql`
+      CREATE TABLE IF NOT EXISTS chats (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS csv_metadata (
+        id SERIAL PRIMARY KEY,
+        table_name TEXT NOT NULL UNIQUE,
+        column_names TEXT[] NOT NULL,
+        file_name TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+  });
+
   beforeEach(async () => {
     // Clean up tables before each test
     await testDb.delete(chats);
     await testDb.delete(csvMetadata);
+  });
+
+  afterAll(async () => {
+    // Clean up tables after all tests
+    await testDb.execute(sql`
+      DROP TABLE IF EXISTS chats;
+      DROP TABLE IF EXISTS csv_metadata;
+    `);
   });
 
   describe('Chat Functionality', () => {
