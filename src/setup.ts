@@ -2,7 +2,6 @@ import 'dotenv/config';
 import { Pool } from 'pg';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import pool from './db/db';
 
 const __dirname = process.cwd();
 
@@ -16,11 +15,7 @@ interface ColumnRow {
 
 async function setupDatabase(): Promise<void> {
   const pool = new Pool({
-    user: process.env.PG_USER,
-    host: process.env.PG_HOST,
-    database: process.env.PG_DATABASE,
-    password: process.env.PG_PASSWORD,
-    port: Number(process.env.PG_PORT) || 5432,
+    connectionString: process.env.DATABASE_URL,
   });
 
   try {
@@ -37,18 +32,27 @@ async function setupDatabase(): Promise<void> {
 }
 
 async function setup(): Promise<void> {
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+  });
+  
   const client = await pool.connect();
   console.log('Connected to database');
 
   try {
+    // Create extension for UUID support
+    await client.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
+    console.log('UUID extension created/verified');
+
     // Create chats table
     await client.query(`
       CREATE TABLE IF NOT EXISTS chats (
-        id SERIAL PRIMARY KEY,
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        thread_id UUID NOT NULL,
         user_id TEXT NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
       )
     `);
     console.log('chats table created/verified');
@@ -69,6 +73,7 @@ async function setup(): Promise<void> {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_csv_metadata_table_name ON csv_metadata(table_name);
       CREATE INDEX IF NOT EXISTS idx_csv_metadata_created_at ON csv_metadata(created_at);
+      CREATE INDEX IF NOT EXISTS idx_chats_thread_id ON chats(thread_id);
       CREATE INDEX IF NOT EXISTS idx_chats_user_id ON chats(user_id);
       CREATE INDEX IF NOT EXISTS idx_chats_created_at ON chats(created_at);
     `);
@@ -112,6 +117,7 @@ async function setup(): Promise<void> {
     throw error;
   } finally {
     client.release();
+    await pool.end();
     console.log('Database connection released');
   }
 }

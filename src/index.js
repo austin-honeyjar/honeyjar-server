@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import csvRoutes from './routes/csv.js';
-import chatRoutes from './routes/chat.js';
+import chatRoutes from './routes/chatRoutes.js';
 import pkg from 'pg';
 
 const app = express();
