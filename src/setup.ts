@@ -1,26 +1,24 @@
 import 'dotenv/config';
-import pkg from 'pg';
+import { Pool } from 'pg';
 import { readFile } from 'fs/promises';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import pool from './db.js';
+import { join } from 'path';
 
-const { Pool } = pkg;
+const __dirname = process.cwd();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+interface TableRow {
+  table_name: string;
+}
 
-async function setupDatabase() {
+interface ColumnRow {
+  column_name: string;
+}
+
+async function setupDatabase(): Promise<void> {
   const pool = new Pool({
-    user: process.env.PG_USER,
-    host: process.env.PG_HOST,
-    database: process.env.PG_DATABASE,
-    password: process.env.PG_PASSWORD,
-    port: process.env.PG_PORT || 5432,
+    connectionString: process.env.DATABASE_URL,
   });
 
   try {
-    // Read and execute the setup SQL
     const sqlPath = join(__dirname, 'setup.sql');
     const setupSQL = await readFile(sqlPath, 'utf8');
     
@@ -33,12 +31,33 @@ async function setupDatabase() {
   }
 }
 
-async function setup() {
+async function setup(): Promise<void> {
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+  });
+  
   const client = await pool.connect();
   console.log('Connected to database');
 
   try {
-    // Create csv_metadata table if it doesn't exist
+    // Create extension for UUID support
+    await client.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
+    console.log('UUID extension created/verified');
+
+    // Create chats table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chats (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        thread_id UUID NOT NULL,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+      )
+    `);
+    console.log('chats table created/verified');
+
+    // Create csv_metadata table
     await client.query(`
       CREATE TABLE IF NOT EXISTS csv_metadata (
         id SERIAL PRIMARY KEY,
@@ -54,11 +73,13 @@ async function setup() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_csv_metadata_table_name ON csv_metadata(table_name);
       CREATE INDEX IF NOT EXISTS idx_csv_metadata_created_at ON csv_metadata(created_at);
+      CREATE INDEX IF NOT EXISTS idx_chats_thread_id ON chats(thread_id);
+      CREATE INDEX IF NOT EXISTS idx_chats_user_id ON chats(user_id);
+      CREATE INDEX IF NOT EXISTS idx_chats_created_at ON chats(created_at);
     `);
     console.log('Indexes created/verified');
 
-    // Check if there are any existing tables
-    const tablesResult = await client.query(`
+    const tablesResult = await client.query<TableRow>(`
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = 'public' 
@@ -66,7 +87,6 @@ async function setup() {
     `);
     console.log('Existing CSV tables:', tablesResult.rows);
 
-    // For each existing table, ensure it has metadata
     for (const { table_name } of tablesResult.rows) {
       const metadataResult = await client.query(
         'SELECT * FROM csv_metadata WHERE table_name = $1',
@@ -74,8 +94,7 @@ async function setup() {
       );
 
       if (metadataResult.rows.length === 0) {
-        // Get column names from the table
-        const columnsResult = await client.query(`
+        const columnsResult = await client.query<ColumnRow>(`
           SELECT column_name 
           FROM information_schema.columns 
           WHERE table_name = $1 
@@ -85,7 +104,6 @@ async function setup() {
 
         const columnNames = columnsResult.rows.map(col => col.column_name);
 
-        // Insert metadata
         await client.query(
           'INSERT INTO csv_metadata (table_name, column_names, file_name) VALUES ($1, $2, $3)',
           [table_name, columnNames, table_name]
@@ -99,6 +117,7 @@ async function setup() {
     throw error;
   } finally {
     client.release();
+    await pool.end();
     console.log('Database connection released');
   }
 }
