@@ -3,7 +3,7 @@ import { createTable, deleteTable, getAllTables } from '../controllers/csvContro
 
 const router = express.Router();
 
-// Get all CSV tables
+// Get all CSV tables and their data
 router.get('/', getAllTables);
 
 // Create a new table and insert CSV data
