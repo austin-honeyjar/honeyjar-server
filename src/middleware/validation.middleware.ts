@@ -5,11 +5,7 @@ import { BadRequestError } from '../errors/appError';
 export const validate = (schema: AnyZodObject) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await schema.parseAsync({
-        body: req.body,
-        query: req.query,
-        params: req.params,
-      });
+      await schema.parseAsync(req.body);
       return next();
     } catch (error) {
       if (error instanceof ZodError) {
@@ -17,7 +13,8 @@ export const validate = (schema: AnyZodObject) => {
           path: err.path.join('.'),
           message: err.message,
         }));
-        return next(new BadRequestError('Validation failed', JSON.stringify(details)));
+        const errorMessage = details.map(d => `${d.path}: ${d.message}`).join(', ');
+        return next(new BadRequestError(`Validation failed: ${errorMessage}`));
       }
       return next(error);
     }

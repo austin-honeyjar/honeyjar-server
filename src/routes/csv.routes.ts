@@ -21,7 +21,7 @@ router.use((req, res, next) => {
 
 /**
  * @swagger
- * /api/csv/tables:
+ * /api/v1/csv/tables:
  *   get:
  *     tags: [CSV]
  *     summary: Get all CSV tables
@@ -40,7 +40,7 @@ router.get('/tables', getAllTables);
 
 /**
  * @swagger
- * /api/csv/tables:
+ * /api/v1/csv/tables:
  *   post:
  *     tags: [CSV]
  *     summary: Create a new CSV table
@@ -51,15 +51,41 @@ router.get('/tables', getAllTables);
  *         application/json:
  *           schema:
  *             type: object
+ *             required:
+ *               - columns
+ *               - data
+ *               - fileName
  *             properties:
- *               fileName:
- *                 type: string
- *                 description: Name of the CSV file
+ *               columns:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Column names
+ *                 example: ['id', 'name', 'age', 'email']
  *               data:
  *                 type: array
  *                 items:
- *                   type: object
- *                 description: CSV data as JSON array
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 description: Table data rows where each inner array represents a row of data
+ *                 example: [
+ *                   ['1', 'John Doe', '30', 'john@example.com'],
+ *                   ['2', 'Jane Smith', '25', 'jane@example.com'],
+ *                   ['3', 'Bob Johnson', '35', 'bob@example.com']
+ *                 ]
+ *               fileName:
+ *                 type: string
+ *                 description: Name of the CSV file
+ *                 example: 'users.csv'
+ *           example:
+ *             columns: ['id', 'name', 'age', 'email']
+ *             data: [
+ *               ['1', 'John Doe', '30', 'john@example.com'],
+ *               ['2', 'Jane Smith', '25', 'jane@example.com'],
+ *               ['3', 'Bob Johnson', '35', 'bob@example.com']
+ *             ]
+ *             fileName: 'users.csv'
  *     responses:
  *       200:
  *         description: Success
@@ -73,6 +99,7 @@ router.get('/tables', getAllTables);
  *                   example: Table created successfully
  *                 tableName:
  *                   type: string
+ *                   example: 'csv_users_1234567890'
  *       400:
  *         description: Bad Request
  *         content:
@@ -87,7 +114,7 @@ router.post('/tables',
 
 /**
  * @swagger
- * /api/csv/tables:
+ * /api/v1/csv/tables:
  *   delete:
  *     tags: [CSV]
  *     summary: Delete a CSV table

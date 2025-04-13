@@ -4,7 +4,7 @@ export const defaultConfig: AppConfig = {
   server: {
     port: 3005,
     env: 'devlocal',
-    apiPrefix: '/api',
+    apiPrefix: '/api/v1',
     autoDeploy: false,
   },
   database: {

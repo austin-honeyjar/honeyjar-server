@@ -7,6 +7,7 @@ export const devlocalConfig: AppConfig = {
     ...defaultConfig.server,
     env: 'devlocal',
     port: 3005,
+    apiPrefix: '/api/v1',
     autoDeploy: false,
     branch: 'local',
   },

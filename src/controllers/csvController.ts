@@ -81,12 +81,14 @@ export const createTable = async (req: CreateTableRequest, res: Response) => {
     console.log(`Creating table: ${tableName}`);
 
     // Create table using raw SQL
-    const columnDefinitions = columns.map(colName => {
-      const safeColName = colName.toLowerCase()
-        .replace(/[^a-z0-9_]/g, '_')
-        .slice(0, 63); // PostgreSQL has a 63-character limit for identifiers
-      return `${safeColName} TEXT`;
-    }).join(', ');
+    const columnDefinitions = columns
+      .filter(colName => colName.toLowerCase() !== 'id') // Exclude id column if present
+      .map(colName => {
+        const safeColName = colName.toLowerCase()
+          .replace(/[^a-z0-9_]/g, '_')
+          .slice(0, 63); // PostgreSQL has a 63-character limit for identifiers
+        return `${safeColName} TEXT`;
+      }).join(', ');
 
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (
@@ -112,10 +114,12 @@ export const createTable = async (req: CreateTableRequest, res: Response) => {
     const insertData = data.map(row => {
       const rowData: Record<string, string> = {};
       columns.forEach((colName, index) => {
-        const safeColName = colName.toLowerCase()
-          .replace(/[^a-z0-9_]/g, '_')
-          .slice(0, 63); // PostgreSQL has a 63-character limit for identifiers
-        rowData[safeColName] = row[index];
+        if (colName.toLowerCase() !== 'id') { // Skip id column when inserting data
+          const safeColName = colName.toLowerCase()
+            .replace(/[^a-z0-9_]/g, '_')
+            .slice(0, 63); // PostgreSQL has a 63-character limit for identifiers
+          rowData[safeColName] = row[index];
+        }
       });
       return rowData;
     });
