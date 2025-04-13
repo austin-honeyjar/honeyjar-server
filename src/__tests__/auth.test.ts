@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeAll } from '@jest/globals';
 import request from 'supertest';
 import { app } from '../server.js';
-import { db } from '../server.js';
-import { clerkClient } from '../config/clerk.js';
 import logger from '../utils/logger.js';
 
 describe('Authentication Flow', () => {
