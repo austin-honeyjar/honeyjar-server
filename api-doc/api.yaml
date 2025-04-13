@@ -1,0 +1,91 @@
+openapi: 3.0.0
+info:
+  title: Honeyjar API
+  version: 1.0.0
+  description: API documentation for the Honeyjar server
+  contact:
+    name: API Support
+servers:
+  - url: http://localhost:3005
+    description: Local development server
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Enter your Clerk session token in the format: Bearer <token>
+    clerkAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Clerk authentication token
+  schemas:
+    Error:
+      type: object
+      properties:
+        status:
+          type: string
+          example: error
+        message:
+          type: string
+          example: Error message
+    HealthCheck:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+        uptime:
+          type: number
+          description: Server uptime in seconds
+security:
+  - bearerAuth: []
+  - clerkAuth: []
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Auth
+    description: Authentication related endpoints
+paths:
+  /health:
+    get:
+      summary: Basic health check endpoint
+      description: Returns the server status without authentication
+      tags: [Health]
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheck'
+  /health/auth:
+    get:
+      summary: Authenticated health check endpoint
+      description: Returns the server status with authentication
+      tags: [Health]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Server is healthy and user is authenticated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/HealthCheck'
+                  - type: object
+                    properties:
+                      userId:
+                        type: string
+                        example: user_123
+        '401':
+          description: Unauthorized - Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error' 

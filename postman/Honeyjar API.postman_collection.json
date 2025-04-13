@@ -1,0 +1,97 @@
+{
+  "info": {
+    "name": "Honeyjar API",
+    "description": "Collection for Honeyjar API endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Public Endpoint",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/public",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "public"]
+            }
+          }
+        },
+        {
+          "name": "Protected Endpoint",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/protected",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "protected"]
+            }
+          }
+        },
+        {
+          "name": "Session Info",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/session",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "session"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Health Check with Auth",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/health/auth",
+              "host": ["{{base_url}}"],
+              "path": ["health", "auth"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+} 
