@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { AppConfig, Environment } from './types.js';
-import { defaultConfig } from './default.js';
-import { devlocalConfig } from './devlocal.js';
-import { sandboxConfig } from './sandbox.js';
-import { testConfig } from './test.js';
-import { demoConfig } from './demo.js';
-import { productionConfig } from './production.js';
-import logger from '../utils/logger.js';
+import { AppConfig, Environment } from './types';
+import { defaultConfig } from './default';
+import { devlocalConfig } from './devlocal';
+import { sandboxConfig } from './sandbox';
+import { testConfig } from './test';
+import { demoConfig } from './demo';
+import { productionConfig } from './production';
+import logger from '../utils/logger';
 
 // Configuration schema for validation
 const configSchema = z.object({

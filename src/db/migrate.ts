@@ -1,10 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { sql } from "drizzle-orm";
-import pkg from 'pg';
+import { Pool } from 'pg';
 import { config } from 'dotenv';
-
-const { Pool } = pkg;
 
 // Ensure this runs first
 config();
@@ -20,7 +17,7 @@ const pool = new Pool({
 
 const db = drizzle(pool);
 
-async function main() {
+async function main(): Promise<void> {
   console.log('Running migrations...');
   
   try {

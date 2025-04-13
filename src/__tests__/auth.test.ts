@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from '@jest/globals';
 import request from 'supertest';
-import { app } from '../server.js';
-import logger from '../utils/logger.js';
+import { app } from '../server';
+import logger from '../utils/logger';
 
 describe('Authentication Flow', () => {
   let validToken: string;

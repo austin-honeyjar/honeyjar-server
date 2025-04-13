@@ -1,5 +1,5 @@
-import { AppConfig } from './types.js';
-import { defaultConfig } from './default.js';
+import { AppConfig } from './types';
+import { defaultConfig } from './default';
 
 export const devlocalConfig: AppConfig = {
   ...defaultConfig,

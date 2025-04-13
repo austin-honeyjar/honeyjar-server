@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import { JwtPayload } from 'jsonwebtoken';
 
 // Clerk session types
 export interface ClerkSession {
@@ -21,6 +22,12 @@ declare global {
         sessionId: string;
       };
       session?: ClerkSession;
+      auth: {
+        userId: string;
+        token?: string;
+        payload?: JwtPayload;
+        sessionId?: string;
+      };
     }
   }
 }
@@ -30,8 +37,10 @@ export interface VersionedRequest extends Request {
 }
 
 export interface AuthRequest extends VersionedRequest {
-  auth?: {
+  auth: {
     userId: string;
-    sessionId: string;
+    token?: string;
+    payload?: JwtPayload;
+    sessionId?: string;
   };
 } 

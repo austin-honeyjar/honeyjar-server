@@ -1,7 +1,7 @@
 import { Response, NextFunction } from 'express';
-import { config } from '../config/index.js';
-import logger from '../utils/logger.js';
-import { VersionedRequest } from '../types/request.js';
+import { config } from '../config/index';
+import logger from '../utils/logger';
+import { VersionedRequest } from '../types/request';
 
 // Supported API versions
 const SUPPORTED_VERSIONS = ['v1'];

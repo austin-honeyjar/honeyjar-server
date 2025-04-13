@@ -1,8 +1,16 @@
-import { db } from './index.js';
+import { db } from './index';
 import { sql } from 'drizzle-orm';
-import { csvMetadata } from './schema.js';
+import { csvMetadata } from './schema';
 
-async function resetDatabase() {
+interface CsvMetadata {
+  id: number;
+  tableName: string;
+  columnNames: string[];
+  fileName: string;
+  createdAt: Date;
+}
+
+async function resetDatabase(): Promise<void> {
   try {
     console.log('Starting database reset...');
 

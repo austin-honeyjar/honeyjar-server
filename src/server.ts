@@ -1,16 +1,16 @@
 import express from 'express';
 import cors from 'cors';
-import { config } from './config/index.js';
-import { securityHeaders, rateLimiter } from './middleware/security.middleware.js';
-import authRoutes from './routes/auth.routes.js';
-import healthRoutes from './routes/health.routes.js';
+import { config } from './config/index';
+import { securityHeaders, rateLimiter } from './middleware/security.middleware';
+import authRoutes from './routes/auth.routes';
+import healthRoutes from './routes/health.routes';
 import swaggerUi from 'swagger-ui-express';
-import { swaggerSpec, swaggerUiOptions } from './config/swagger.js';
+import { swaggerSpec, swaggerUiOptions } from './config/swagger';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import logger from './utils/logger.js';
-import csvRoutes from './routes/csv.routes.js';
-import chatRoutes from './routes/chat.routes.js';
+import logger from './utils/logger';
+import csvRoutes from './routes/csv.routes';
+import chatRoutes from './routes/chat.routes';
 
 // Initialize express app
 export const app = express();
@@ -24,7 +24,7 @@ app.use(rateLimiter);
 // Routes
 app.use(config.server.apiPrefix + '/auth', authRoutes);
 app.use(config.server.apiPrefix + '/csv', csvRoutes);
-//app.use(config.server.apiPrefix + '/chat', chatRoutes);
+app.use(config.server.apiPrefix + '/chat', chatRoutes);
 
 // Health check routes (unversioned)
 app.use('/health', healthRoutes);

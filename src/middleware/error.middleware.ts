@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { AppError } from '../errors/appError.js';
-import logger from '../utils/logger.js';
+import { AppError } from '../errors/appError';
+import logger from '../utils/logger';
 
 const isDev = process.env.NODE_ENV === 'devlocal';
 

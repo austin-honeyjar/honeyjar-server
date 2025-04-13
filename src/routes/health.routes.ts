@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { db } from '../db/index.js';
-import { csvMetadata } from '../db/schema.js';
+import { db } from '../db/index';
+import { csvMetadata } from '../db/schema';
 import os from 'os';
-import logger from '../utils/logger.js';
+import logger from '../utils/logger';
 
 const router = Router();
 

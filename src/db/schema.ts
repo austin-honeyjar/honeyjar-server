@@ -1,37 +1,37 @@
 import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
 
-// Chat Threads Table
-export const chatThreads = pgTable('chat_threads', {
-  id: text('id').primaryKey(),
-  userId: text('user_id').notNull(),
-  title: text('title').notNull(),
-  createdAt: timestamp('created_at').defaultNow()
-});
-
-// Chat Messages Table
-export const chatMessages = pgTable('chat_messages', {
-  id: serial('id').primaryKey(),
-  userId: text('user_id').notNull(),
-  threadId: text('thread_id').notNull().references(() => chatThreads.id),
-  role: text('role').notNull(),
-  content: text('content').notNull(),
-  createdAt: timestamp('created_at').defaultNow()
-});
-
-// CSV Metadata Table
+// CSV Metadata table
 export const csvMetadata = pgTable('csv_metadata', {
   id: serial('id').primaryKey(),
   tableName: text('table_name').notNull().unique(),
-  fileName: text('file_name').notNull(),
   columnNames: text('column_names').array().notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  fileName: text('file_name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Chat threads table
+export const chatThreads = pgTable('chat_threads', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  title: text('title').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Chat messages table
+export const chatMessages = pgTable('chat_messages', {
+  id: serial('id').primaryKey(),
+  threadId: serial('thread_id').notNull().references(() => chatThreads.id),
+  userId: text('user_id').notNull(),
+  role: text('role').notNull(),
+  content: text('content').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Helper function to create dynamic table schemas for CSV data
 export const createDynamicTableSchema = (tableName: string, columnNames: string[]) => {
   const columns: Record<string, any> = {
     id: serial('id').primaryKey(),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   };
 
   columnNames.forEach((colName) => {

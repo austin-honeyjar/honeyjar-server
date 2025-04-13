@@ -1,5 +1,5 @@
 import rateLimit from 'express-rate-limit';
-import logger from '../utils/logger.js';
+import logger from '../utils/logger';
 
 export const rateLimitMiddleware = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
