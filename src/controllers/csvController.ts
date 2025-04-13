@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { db } from '../db/index.js';
-import { csvMetadata, createDynamicTableSchema } from '../db/schema.js';
+import { db } from '../db/index';
+import { csvMetadata, createDynamicTableSchema } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 
@@ -82,7 +82,9 @@ export const createTable = async (req: CreateTableRequest, res: Response) => {
 
     // Create table using raw SQL
     const columnDefinitions = columns.map(colName => {
-      const safeColName = colName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      const safeColName = colName.toLowerCase()
+        .replace(/[^a-z0-9_]/g, '_')
+        .slice(0, 63); // PostgreSQL has a 63-character limit for identifiers
       return `${safeColName} TEXT`;
     }).join(', ');
 
@@ -95,11 +97,11 @@ export const createTable = async (req: CreateTableRequest, res: Response) => {
     `);
     console.log(`Created table: ${tableName}`);
 
-    // Insert metadata
+    // Insert metadata with properly formatted PostgreSQL array
     await db.insert(csvMetadata).values({
       tableName,
       fileName,
-      columnNames: columns
+      columnNames: sql`ARRAY[${sql.join(columns.map(col => sql`${col}`), sql`, `)}]::text[]`
     });
     console.log(`Inserted metadata for table: ${tableName}`);
 
@@ -110,7 +112,9 @@ export const createTable = async (req: CreateTableRequest, res: Response) => {
     const insertData = data.map(row => {
       const rowData: Record<string, string> = {};
       columns.forEach((colName, index) => {
-        const safeColName = colName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+        const safeColName = colName.toLowerCase()
+          .replace(/[^a-z0-9_]/g, '_')
+          .slice(0, 63); // PostgreSQL has a 63-character limit for identifiers
         rowData[safeColName] = row[index];
       });
       return rowData;

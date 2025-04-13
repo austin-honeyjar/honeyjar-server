@@ -63,6 +63,70 @@ const options: swaggerJsdoc.Options = {
             },
           },
         },
+        CSVTable: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'number',
+              description: 'Table ID',
+            },
+            tableName: {
+              type: 'string',
+              description: 'Name of the table',
+            },
+            fileName: {
+              type: 'string',
+              description: 'Original file name',
+            },
+            columnNames: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+              description: 'Column names in the table',
+            },
+            createdAt: {
+              type: 'string',
+              format: 'date-time',
+              description: 'Creation timestamp',
+            },
+            data: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: true,
+              },
+              description: 'Table data',
+            },
+          },
+        },
+        CreateTableRequest: {
+          type: 'object',
+          required: ['columns', 'data', 'fileName'],
+          properties: {
+            columns: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+              description: 'Column names',
+            },
+            data: {
+              type: 'array',
+              items: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                },
+              },
+              description: 'Table data rows',
+            },
+            fileName: {
+              type: 'string',
+              description: 'Original file name',
+            },
+          },
+        },
       },
       parameters: {
         version: {
@@ -92,6 +156,10 @@ const options: swaggerJsdoc.Options = {
       {
         name: 'Auth',
         description: 'Authentication related endpoints',
+      },
+      {
+        name: 'CSV',
+        description: 'CSV table management endpoints',
       },
       {
         name: 'v1',

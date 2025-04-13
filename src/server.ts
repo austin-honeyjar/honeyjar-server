@@ -9,6 +9,8 @@ import { swaggerSpec, swaggerUiOptions } from './config/swagger.js';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import logger from './utils/logger.js';
+import csvRoutes from './routes/csv.routes.js';
+import chatRoutes from './routes/chat.routes.js';
 
 // Initialize express app
 export const app = express();
@@ -21,6 +23,8 @@ app.use(rateLimiter);
 
 // Routes
 app.use(config.server.apiPrefix + '/auth', authRoutes);
+app.use(config.server.apiPrefix + '/csv', csvRoutes);
+//app.use(config.server.apiPrefix + '/chat', chatRoutes);
 
 // Health check routes (unversioned)
 app.use('/health', healthRoutes);

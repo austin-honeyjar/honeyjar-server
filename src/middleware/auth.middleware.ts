@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import { clerkClient } from '../config/clerk.js';
-import { UnauthorizedError, InvalidSessionError, SessionExpiredError, ClerkError } from '../errors/appError.js';
-import logger from '../utils/logger.js';
-import { ClerkSession } from '../types/request.js';
+import { clerkClient } from '../config/clerk';
+import { UnauthorizedError, InvalidSessionError, SessionExpiredError, ClerkError } from '../errors/appError';
+import logger from '../utils/logger';
+import { ClerkSession } from '../types/request';
 
 const isDev = process.env.NODE_ENV === 'devlocal';
 
@@ -21,25 +21,37 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
 
     try {
       // Verify the session token with Clerk
-      const session = await clerkClient.verifySession(token) as ClerkSession;
+      const session = await clerkClient.sessions.getSession(token);
       
       if (!session) {
         throw new InvalidSessionError();
       }
 
+      // Convert Clerk session to our ClerkSession type
+      const clerkSession: ClerkSession = {
+        userId: session.userId,
+        sessionId: session.id,
+        status: session.status,
+        lastActiveAt: new Date(session.lastActiveAt).getTime(),
+        expireAt: new Date(session.expireAt).getTime(),
+        abandonAt: new Date(session.abandonAt).getTime(),
+        createdAt: new Date(session.createdAt).getTime(),
+        updatedAt: new Date(session.updatedAt).getTime()
+      };
+
       // Check if session is expired
-      if (session.expireAt < Date.now()) {
+      if (clerkSession.expireAt < Date.now()) {
         throw new SessionExpiredError();
       }
 
       // Attach the session and user info to the request
-      req.session = session;
+      req.session = clerkSession;
       req.user = {
-        id: session.userId,
-        sessionId: session.sessionId
+        id: clerkSession.userId,
+        sessionId: clerkSession.sessionId
       };
 
-      logger.info(`Authenticated user ${session.userId} with session ${session.sessionId}`);
+      logger.info(`Authenticated user ${clerkSession.userId} with session ${clerkSession.sessionId}`);
       next();
     } catch (error) {
       if (error instanceof UnauthorizedError) {
