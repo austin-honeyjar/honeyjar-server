@@ -1,20 +1,10 @@
-export default {
+/** @type {import('jest').Config} */
+module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  extensionsToTreatAsEsm: ['.ts'],
-  moduleNameMapper: {
-    '^(\\.{1,2}/.*)\\.js$': '$1',
-  },
   transform: {
-    '^.+\\.(ts|js)x?$': [
-      'ts-jest',
-      {
-        useESM: true,
-      },
-    ],
+    '^.+\\.tsx?$': 'ts-jest',
   },
   testMatch: ['**/__tests__/**/*.test.ts'],
-  transformIgnorePatterns: [
-    'node_modules/(?!(drizzle-orm|pg)/)'
-  ]
+  setupFiles: ['dotenv/config'],
 }; 
