@@ -1,77 +1,44 @@
 # Build stage
-FROM node:20-alpine AS builder
+FROM node:18-alpine AS builder
 
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
-COPY tsconfig.json ./
-COPY drizzle.config.ts ./
 
 # Install dependencies
 RUN npm install
 
-# Copy source code
-COPY src ./src
-COPY migrations ./migrations
-COPY scripts ./scripts
+# Copy the rest of the application
+COPY . .
 
 # Build the application
 RUN npm run build
 
-# Development stage
-FROM node:20-alpine
-
-WORKDIR /app
-
-# Install dependencies first (better caching)
-COPY package*.json ./
-COPY tsconfig.json ./
-COPY drizzle.config.ts ./
-
-# Install all dependencies including dev dependencies
-RUN npm install
-
-# Copy source code
-COPY src ./src
-COPY migrations ./migrations
-COPY scripts ./scripts
-
-# Copy environment files
-COPY .env* ./
-
-# Expose the port the app runs on
-EXPOSE 3005
-
-# Start the server in development mode
-CMD ["npm", "run", "dev"]
-
 # Production stage
-FROM node:20-alpine
+FROM node:18-alpine AS runner
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
-
-# Install production dependencies only
-RUN npm install --omit=dev
-
-# Copy built files from builder stage
+# Copy necessary files from builder
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/migrations ./migrations
-COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/package*.json ./
 
-# Copy environment files if they exist, fallback to example if they don't
-COPY .env* ./
-RUN if [ ! -f .env ]; then \
-      if [ -f .env.example ]; then \
-        cp .env.example .env; \
-      fi \
-    fi
+# Install production dependencies
+RUN npm install --production
 
-# Expose the port the app runs on
+# Set environment variables
+ENV NODE_ENV=production
+ENV PORT=3005
+ENV CLERK_SECRET_KEY=your_clerk_secret
+ENV PG_USER=postgres
+ENV PG_PASSWORD=postgres
+ENV PG_HOST=postgres
+ENV PG_PORT=5432
+ENV PG_DATABASE=honeyjar
+
+# Expose the port
 EXPOSE 3005
 
-# Start the server
-CMD ["npm", "start"] 
+# Start the application
+CMD ["node", "dist/index.js"] 
