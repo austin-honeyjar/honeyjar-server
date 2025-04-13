@@ -1,0 +1,36 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/honeyjar-server:$COMMIT_SHA', '.']
+
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/honeyjar-server:$COMMIT_SHA']
+
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'honeyjar-server'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/honeyjar-server:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'NODE_ENV=production,DATABASE_URL=$$DATABASE_URL,CLERK_SECRET_KEY=$$CLERK_SECRET_KEY'
+
+# Store images in Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/honeyjar-server:$COMMIT_SHA'
+
+# Timeout for the build
+timeout: '1600s'
+
+# Available machine types: N1_HIGHCPU_8, N1_HIGHCPU_32
+options:
+  machineType: 'N1_HIGHCPU_8' 
