@@ -1,7 +1,23 @@
 import { Router } from 'express';
 import { getAllTables, createTable, deleteTable } from '../controllers/csvController';
+import { validate } from '../middleware/validation.middleware';
+import { createTableSchema, deleteTableSchema } from '../validators/csv.validator';
+import logger from '../utils/logger';
 
 const router = Router();
+
+// Apply logging middleware to all routes
+router.use((req, res, next) => {
+  logger.info('Incoming request', {
+    method: req.method,
+    url: req.url,
+    params: req.params,
+    query: req.query,
+    ip: req.ip,
+    userAgent: req.get('user-agent')
+  });
+  next();
+});
 
 /**
  * @swagger
@@ -34,7 +50,16 @@ router.get('/tables', getAllTables);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/CreateTableRequest'
+ *             type: object
+ *             properties:
+ *               fileName:
+ *                 type: string
+ *                 description: Name of the CSV file
+ *               data:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                 description: CSV data as JSON array
  *     responses:
  *       200:
  *         description: Success
@@ -55,7 +80,10 @@ router.get('/tables', getAllTables);
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
-router.post('/tables', createTable);
+router.post('/tables', 
+  validate(createTableSchema),
+  createTable
+);
 
 /**
  * @swagger
@@ -89,6 +117,9 @@ router.post('/tables', createTable);
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
-router.delete('/tables', deleteTable);
+router.delete('/tables', 
+  validate(deleteTableSchema),
+  deleteTable
+);
 
 export default router; 
