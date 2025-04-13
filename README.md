@@ -102,6 +102,14 @@ API server for the Honeyjar application, handling CSV file management and data s
 
 ## Development
 
+To start the server in development mode:
+
+```bash
+npm run dev
+```
+
+This will start the server in devlocal mode with hot reloading enabled.
+
 ### Running Tests
 ```bash
 npm test
@@ -122,3 +130,9 @@ npm run db:studio
 ## License
 
 MIT 
+
+## Environment Variables
+
+The following environment variables are required:
+
+- `NODE_ENV`: The environment to run in (devlocal, production) 

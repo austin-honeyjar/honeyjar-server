@@ -11,12 +11,12 @@ dotenv.config();
 const app: Express = express();
 
 // CORS configuration
-const isDevelopment = process.env.NODE_ENV !== 'production';
+const isDevlocal = process.env.NODE_ENV === 'devlocal';
 const corsOptions: cors.CorsOptions = {
-  origin: isDevelopment ? ['http://localhost:3000', 'http://localhost:3004'] : '*',
+  origin: isDevlocal ? ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:3003', 'http://localhost:3004', 'http://localhost:3005'] : '*',
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-  credentials: isDevelopment
+  credentials: isDevlocal
 };
 
 // Middleware
@@ -31,7 +31,7 @@ app.use(express.static(path.join(process.cwd(), 'public')));
 app.get('/api/csv', getAllTables);
 app.post('/api/csv', createTable);
 
-const PORT = process.env.PORT || (isDevelopment ? 3001 : 3000);
+const PORT = process.env.PORT || (isDevlocal ? 3005 : 3000);
 
 // Start server after ensuring database tables exist
 ensureTables()
@@ -40,7 +40,7 @@ ensureTables()
       console.log(`Server running on port ${PORT}`);
       console.log('Environment:', {
         nodeEnv: process.env.NODE_ENV,
-        isDevelopment
+        isDevlocal
       });
     });
   })

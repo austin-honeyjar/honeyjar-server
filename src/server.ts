@@ -25,6 +25,7 @@ app.use(config.server.apiPrefix + '/auth', authRoutes);
 app.use(errorHandler);
 
 // Start server
+const isDev = process.env.NODE_ENV === 'devlocal';
 app.listen(config.server.port, () => {
   logger.info(`Server running on port ${config.server.port}`, {
     env: config.server.env,

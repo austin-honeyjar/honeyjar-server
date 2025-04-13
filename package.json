@@ -5,14 +5,16 @@
   "main": "dist/server.js",
   "type": "module",
   "scripts": {
-    "start": "node dist/server.js",
-    "dev": "tsx watch src/server.ts",
+    "start": "node dist/index.js",
+    "dev": "NODE_ENV=devlocal nodemon --exec ts-node src/index.ts",
     "build": "tsc",
     "db:generate": "drizzle-kit generate:pg",
     "db:push": "drizzle-kit push:pg",
     "db:studio": "drizzle-kit studio",
-    "test": "tsx jest",
-    "test:watch": "tsx jest --watch"
+    "test": "NODE_ENV=devlocal jest",
+    "test:watch": "NODE_ENV=devlocal jest --watch",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\""
   },
   "dependencies": {
     "@clerk/backend": "^1.27.3",

@@ -4,6 +4,8 @@ const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',') 
   : ['http://localhost:3000', 'http://localhost:3004'];
 
+const isDev = process.env.NODE_ENV === 'devlocal';
+
 export const corsMiddleware = cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps or curl requests)

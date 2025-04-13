@@ -4,6 +4,8 @@ import { UnauthorizedError, InvalidSessionError, SessionExpiredError, ClerkError
 import logger from '../utils/logger.js';
 import { ClerkSession } from '../types/request.js';
 
+const isDev = process.env.NODE_ENV === 'devlocal';
+
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers.authorization;

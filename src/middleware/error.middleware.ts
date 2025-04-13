@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../errors/appError.js';
 import logger from '../utils/logger.js';
 
+const isDev = process.env.NODE_ENV === 'devlocal';
+
 export const errorHandler = (
   err: Error,
   req: Request,
@@ -45,7 +47,7 @@ export const errorHandler = (
       error: {
         code: 'DATABASE_ERROR',
         message: 'A database error occurred',
-        details: process.env.NODE_ENV === 'development' ? err.message : undefined,
+        details: isDev ? err.message : undefined,
       },
     });
   }
@@ -77,7 +79,7 @@ export const errorHandler = (
     error: {
       code: 'INTERNAL_SERVER_ERROR',
       message: 'An unexpected error occurred',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined,
+      details: isDev ? err.message : undefined,
     },
   });
 }; 
