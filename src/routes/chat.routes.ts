@@ -21,7 +21,7 @@ router.use((req, res, next) => {
 
 /**
  * @swagger
- * /api/chat/messages:
+ * /api/v1/chat/messages:
  *   post:
  *     summary: Create a new chat message
  *     tags: [Chat]
@@ -38,14 +38,20 @@ router.use((req, res, next) => {
  *               threadId:
  *                 type: string
  *                 description: ID of the chat thread
+ *                 example: '550e8400-e29b-41d4-a716-446655440000'
  *               content:
  *                 type: string
  *                 description: Message content
+ *                 example: 'Hello, how can I help you today?'
  *               role:
  *                 type: string
  *                 enum: [user, assistant]
  *                 default: user
  *                 description: Role of the message sender
+ *           example:
+ *             threadId: '550e8400-e29b-41d4-a716-446655440000'
+ *             content: 'Hello, how can I help you today?'
+ *             role: 'user'
  *     responses:
  *       201:
  *         description: Message created successfully
@@ -62,7 +68,7 @@ router.post('/messages', validate(createChatSchema), chatController.create);
 
 /**
  * @swagger
- * /api/chat/threads:
+ * /api/v1/chat/threads:
  *   get:
  *     summary: Get all chat threads
  *     tags: [Chat]
@@ -82,7 +88,7 @@ router.get('/threads', chatController.listThreads);
 
 /**
  * @swagger
- * /api/chat/threads:
+ * /api/v1/chat/threads:
  *   post:
  *     summary: Create a new chat thread
  *     tags: [Chat]
@@ -98,6 +104,9 @@ router.get('/threads', chatController.listThreads);
  *               title:
  *                 type: string
  *                 description: Title of the chat thread
+ *                 example: 'My First Chat Thread'
+ *           example:
+ *             title: 'My First Chat Thread'
  *     responses:
  *       201:
  *         description: Thread created successfully
@@ -108,11 +117,11 @@ router.get('/threads', chatController.listThreads);
  *       500:
  *         description: Server error
  */
-router.post('/threads', chatController.createThread);
+router.post('/threads', validate(createThreadSchema), chatController.createThread);
 
 /**
  * @swagger
- * /api/chat/threads/{threadId}:
+ * /api/v1/chat/threads/{threadId}:
  *   get:
  *     summary: Get a specific chat thread with its messages
  *     tags: [Chat]
@@ -122,6 +131,7 @@ router.post('/threads', chatController.createThread);
  *         required: true
  *         schema:
  *           type: string
+ *           example: '550e8400-e29b-41d4-a716-446655440000'
  *         description: ID of the chat thread
  *     responses:
  *       200:
@@ -139,7 +149,7 @@ router.get('/threads/:threadId', validate(getThreadSchema), chatController.getTh
 
 /**
  * @swagger
- * /api/chat/threads/{threadId}:
+ * /api/v1/chat/threads/{threadId}:
  *   delete:
  *     summary: Delete a chat thread and all its messages
  *     tags: [Chat]
@@ -149,6 +159,7 @@ router.get('/threads/:threadId', validate(getThreadSchema), chatController.getTh
  *         required: true
  *         schema:
  *           type: string
+ *           example: '550e8400-e29b-41d4-a716-446655440000'
  *         description: ID of the chat thread
  *     responses:
  *       200:

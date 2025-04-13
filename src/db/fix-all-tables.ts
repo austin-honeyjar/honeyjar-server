@@ -1,43 +1,35 @@
 import { db } from './index';
 import { sql } from 'drizzle-orm';
 
-async function fixAllTables() {
+export async function fixAllTables() {
   try {
-    console.log('Checking and fixing all tables...');
-
-    // Drop all tables in correct order to handle dependencies
+    // Drop existing tables in the correct order to handle dependencies
     await db.execute(sql`
       DROP TABLE IF EXISTS chat_messages CASCADE;
       DROP TABLE IF EXISTS chat_threads CASCADE;
       DROP TABLE IF EXISTS csv_metadata CASCADE;
     `);
 
-    // Create csv_metadata table first
+    // Create tables in the correct order
     await db.execute(sql`
-      CREATE TABLE csv_metadata (
+      CREATE TABLE IF NOT EXISTS csv_metadata (
         id SERIAL PRIMARY KEY,
         table_name TEXT NOT NULL UNIQUE,
         column_names TEXT[] NOT NULL,
         file_name TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
       );
-    `);
 
-    // Create chat_threads table
-    await db.execute(sql`
-      CREATE TABLE chat_threads (
-        id SERIAL PRIMARY KEY,
+      CREATE TABLE IF NOT EXISTS chat_threads (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id TEXT NOT NULL,
         title TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
       );
-    `);
 
-    // Create chat_messages table with foreign key reference
-    await db.execute(sql`
-      CREATE TABLE chat_messages (
-        id SERIAL PRIMARY KEY,
-        thread_id INTEGER NOT NULL REFERENCES chat_threads(id),
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        thread_id UUID NOT NULL REFERENCES chat_threads(id),
         user_id TEXT NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
@@ -45,9 +37,9 @@ async function fixAllTables() {
       );
     `);
 
-    console.log('All tables fixed successfully');
+    console.log('All tables recreated successfully');
   } catch (error) {
-    console.error('Error fixing tables:', error);
+    console.error('Error recreating tables:', error);
     throw error;
   }
 }

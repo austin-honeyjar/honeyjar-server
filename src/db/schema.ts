@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 // CSV Metadata table
 export const csvMetadata = pgTable('csv_metadata', {
@@ -11,7 +11,7 @@ export const csvMetadata = pgTable('csv_metadata', {
 
 // Chat threads table
 export const chatThreads = pgTable('chat_threads', {
-  id: serial('id').primaryKey(),
+  id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull(),
   title: text('title').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -19,8 +19,8 @@ export const chatThreads = pgTable('chat_threads', {
 
 // Chat messages table
 export const chatMessages = pgTable('chat_messages', {
-  id: serial('id').primaryKey(),
-  threadId: serial('thread_id').notNull().references(() => chatThreads.id),
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id),
   userId: text('user_id').notNull(),
   role: text('role').notNull(),
   content: text('content').notNull(),
