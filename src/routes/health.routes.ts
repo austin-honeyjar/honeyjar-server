@@ -6,7 +6,22 @@ import logger from '../utils/logger.js';
 
 const router = Router();
 
-// Basic health check
+/**
+ * @openapi
+ * /health:
+ *   get:
+ *     tags:
+ *       - Health
+ *     summary: Basic health check
+ *     description: Returns basic health information about the API
+ *     responses:
+ *       200:
+ *         description: Service is healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/HealthCheck'
+ */
 router.get('/', (req, res) => {
   res.json({
     status: 'ok',
@@ -15,7 +30,35 @@ router.get('/', (req, res) => {
   });
 });
 
-// Database health check
+/**
+ * @openapi
+ * /health/database:
+ *   get:
+ *     tags:
+ *       - Health
+ *     summary: Database health check
+ *     description: Checks if the database connection is working
+ *     responses:
+ *       200:
+ *         description: Database is connected
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: ok
+ *                 database:
+ *                   type: string
+ *                   example: connected
+ *       503:
+ *         description: Database connection failed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 router.get('/database', async (req, res) => {
   try {
     await db.select().from(csvMetadata).limit(1);
@@ -33,7 +76,53 @@ router.get('/database', async (req, res) => {
   }
 });
 
-// System resources check
+/**
+ * @openapi
+ * /health/resources:
+ *   get:
+ *     tags:
+ *       - Health
+ *     summary: System resources check
+ *     description: Returns information about system resources (CPU, memory)
+ *     responses:
+ *       200:
+ *         description: Resource information retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: ok
+ *                 memory:
+ *                   type: object
+ *                   properties:
+ *                     heapUsed:
+ *                       type: number
+ *                       description: Memory used by the V8 heap
+ *                     heapTotal:
+ *                       type: number
+ *                       description: Total available heap memory
+ *                     rss:
+ *                       type: number
+ *                       description: Resident Set Size (total memory allocated)
+ *                 cpu:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: number
+ *                       description: Number of CPU cores
+ *                     model:
+ *                       type: string
+ *                       description: CPU model name
+ *                     speed:
+ *                       type: number
+ *                       description: CPU speed in MHz
+ *                 uptime:
+ *                   type: number
+ *                   description: System uptime in seconds
+ */
 router.get('/resources', (req, res) => {
   const memory = process.memoryUsage();
   const cpus = os.cpus();
@@ -54,7 +143,61 @@ router.get('/resources', (req, res) => {
   });
 });
 
-// Full health check (all checks combined)
+/**
+ * @openapi
+ * /health/full:
+ *   get:
+ *     tags:
+ *       - Health
+ *     summary: Full health check
+ *     description: Performs a comprehensive health check of all system components
+ *     responses:
+ *       200:
+ *         description: All systems are healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: ok
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                 uptime:
+ *                   type: number
+ *                 database:
+ *                   type: string
+ *                   example: connected
+ *                 resources:
+ *                   type: object
+ *                   properties:
+ *                     memory:
+ *                       type: object
+ *                       properties:
+ *                         heapUsed:
+ *                           type: number
+ *                         heapTotal:
+ *                           type: number
+ *                         rss:
+ *                           type: number
+ *                     cpu:
+ *                       type: object
+ *                       properties:
+ *                         count:
+ *                           type: number
+ *                         load:
+ *                           type: array
+ *                           items:
+ *                             type: number
+ *       503:
+ *         description: One or more systems are unhealthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 router.get('/full', async (req, res) => {
   const checks = {
     status: 'ok',
