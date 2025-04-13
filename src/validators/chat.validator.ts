@@ -14,12 +14,16 @@ export const createThreadSchema = z.object({
 
 // Schema for getting thread messages
 export const getThreadSchema = z.object({
-  threadId: z.string().min(1, 'Thread ID is required')
+  params: z.object({
+    threadId: z.string().min(1, 'Thread ID is required')
+  })
 });
 
 // Schema for deleting a thread
 export const deleteThreadSchema = z.object({
-  threadId: z.string().min(1, 'Thread ID is required')
+  params: z.object({
+    threadId: z.string().min(1, 'Thread ID is required')
+  })
 });
 
 // Export types
