@@ -1,33 +1,32 @@
 import { AppConfig } from './types.js';
 import { defaultConfig } from './default.js';
 
-export const productionConfig: AppConfig = {
+export const sandboxConfig: AppConfig = {
   ...defaultConfig,
   server: {
     ...defaultConfig.server,
-    env: 'production',
-    port: Number(process.env.PORT) || 3001,
-    autoDeploy: false,
-    branch: 'main',
+    env: 'sandbox',
+    port: 3002,
+    autoDeploy: true,
+    branch: process.env.FEATURE_BRANCH,
   },
   database: {
     ...defaultConfig.database,
-    url: process.env.DATABASE_URL || defaultConfig.database.url,
-    maxConnections: 25,
+    url: process.env.DATABASE_URL || 'postgres://localhost:5432/honeyjar_sandbox',
   },
   security: {
     ...defaultConfig.security,
     cors: {
       ...defaultConfig.security.cors,
-      origin: process.env.CORS_ORIGIN?.split(',') || defaultConfig.security.cors.origin,
+      origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
     },
     rateLimit: {
       ...defaultConfig.security.rateLimit,
-      max: 50, // More restrictive rate limiting in production
+      max: 50,
     },
   },
   logging: {
     ...defaultConfig.logging,
-    level: 'info',
+    level: 'debug',
   },
 }; 

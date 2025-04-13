@@ -1,29 +1,29 @@
 import { AppConfig } from './types.js';
 import { defaultConfig } from './default.js';
 
-export const productionConfig: AppConfig = {
+export const testConfig: AppConfig = {
   ...defaultConfig,
   server: {
     ...defaultConfig.server,
-    env: 'production',
-    port: Number(process.env.PORT) || 3001,
-    autoDeploy: false,
-    branch: 'main',
+    env: 'test',
+    port: 3003,
+    autoDeploy: true,
+    branch: 'develop',
   },
   database: {
     ...defaultConfig.database,
-    url: process.env.DATABASE_URL || defaultConfig.database.url,
-    maxConnections: 25,
+    url: process.env.DATABASE_URL || 'postgres://localhost:5432/honeyjar_test',
+    maxConnections: 15,
   },
   security: {
     ...defaultConfig.security,
     cors: {
       ...defaultConfig.security.cors,
-      origin: process.env.CORS_ORIGIN?.split(',') || defaultConfig.security.cors.origin,
+      origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
     },
     rateLimit: {
       ...defaultConfig.security.rateLimit,
-      max: 50, // More restrictive rate limiting in production
+      max: 75,
     },
   },
   logging: {

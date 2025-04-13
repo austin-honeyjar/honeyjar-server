@@ -1,7 +1,10 @@
 import { z } from 'zod';
-import { AppConfig } from './types.js';
+import { AppConfig, Environment } from './types.js';
 import { defaultConfig } from './default.js';
-import { developmentConfig } from './development.js';
+import { devlocalConfig } from './devlocal.js';
+import { sandboxConfig } from './sandbox.js';
+import { testConfig } from './test.js';
+import { demoConfig } from './demo.js';
 import { productionConfig } from './production.js';
 import logger from '../utils/logger.js';
 
@@ -9,8 +12,10 @@ import logger from '../utils/logger.js';
 const configSchema = z.object({
   server: z.object({
     port: z.number().int().positive(),
-    env: z.enum(['development', 'production']),
+    env: z.enum(['devlocal', 'sandbox', 'test', 'demo', 'production']),
     apiPrefix: z.string(),
+    branch: z.string().optional(),
+    autoDeploy: z.boolean(),
   }),
   database: z.object({
     url: z.string().url(),
@@ -41,17 +46,28 @@ const configSchema = z.object({
 });
 
 function loadConfig(): AppConfig {
-  const env = process.env.NODE_ENV || 'development';
+  const env = (process.env.NODE_ENV || 'devlocal') as Environment;
   let config: AppConfig;
 
   switch (env) {
+    case 'devlocal':
+      config = devlocalConfig;
+      break;
+    case 'sandbox':
+      config = sandboxConfig;
+      break;
+    case 'test':
+      config = testConfig;
+      break;
+    case 'demo':
+      config = demoConfig;
+      break;
     case 'production':
       config = productionConfig;
       break;
-    case 'development':
     default:
-      config = developmentConfig;
-      break;
+      logger.warn(`Unknown environment: ${env}, falling back to devlocal`);
+      config = devlocalConfig;
   }
 
   // Override with environment variables
@@ -66,7 +82,11 @@ function loadConfig(): AppConfig {
   try {
     // Validate the configuration
     configSchema.parse(config);
-    logger.info('Configuration loaded successfully', { env });
+    logger.info('Configuration loaded successfully', { 
+      env: config.server.env,
+      branch: config.server.branch,
+      autoDeploy: config.server.autoDeploy,
+    });
     return config;
   } catch (error) {
     logger.error('Configuration validation failed', { error });

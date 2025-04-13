@@ -23,10 +23,14 @@ export interface ClerkConfig {
   webhookSecret?: string;
 }
 
+export type Environment = 'devlocal' | 'sandbox' | 'test' | 'demo' | 'production';
+
 export interface ServerConfig {
   port: number;
-  env: string;
+  env: Environment;
   apiPrefix: string;
+  branch?: string;
+  autoDeploy: boolean;
 }
 
 export interface LogConfig {
