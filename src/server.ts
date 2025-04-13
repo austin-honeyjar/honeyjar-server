@@ -4,6 +4,7 @@ import { securityHeaders, rateLimiter } from './middleware/security.middleware.j
 import { errorHandler } from './middleware/error.middleware.js';
 import authRoutes from './routes/auth.routes.js';
 import logger from './utils/logger.js';
+import { config } from './config/index.js';
 
 // Initialize express app
 export const app = express();
@@ -14,22 +15,19 @@ app.use(express.urlencoded({ extended: true }));
 
 // Security middleware
 app.use(securityHeaders);
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+app.use(cors(config.security.cors));
 app.use(rateLimiter);
 
 // Routes
-app.use('/api/auth', authRoutes);
+app.use(config.server.apiPrefix + '/auth', authRoutes);
 
 // Error handling
 app.use(errorHandler);
 
 // Start server
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
+app.listen(config.server.port, () => {
+  logger.info(`Server running on port ${config.server.port}`, {
+    env: config.server.env,
+    apiPrefix: config.server.apiPrefix,
+  });
 }); 
