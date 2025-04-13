@@ -19,6 +19,12 @@ const options: swaggerJsdoc.Options = {
     ],
     components: {
       securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'Enter your Clerk session token in the format: Bearer <token>'
+        },
         clerkAuth: {
           type: 'http',
           scheme: 'bearer',
@@ -60,6 +66,9 @@ const options: swaggerJsdoc.Options = {
       },
     },
     security: [
+      {
+        bearerAuth: [],
+      },
       {
         clerkAuth: [],
       },
