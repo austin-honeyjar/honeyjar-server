@@ -25,7 +25,7 @@ app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'public')));
 
 // Routes
-app.use('/api/chat', chatRouter);
+//app.use('/api/chat', chatRouter);
 
 // CSV endpoints
 app.get('/api/csv', getAllTables);
@@ -44,7 +44,7 @@ ensureTables()
       });
     });
   })
-  .catch(error => {
+  .catch((error: Error) => {
     console.error('Failed to start server:', error);
     process.exit(1);
   }); 

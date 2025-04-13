@@ -1,14 +1,23 @@
+import { Request, Response } from 'express';
 import { db } from '../db/index.js';
 import { csvMetadata, createDynamicTableSchema } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { sql } from 'drizzle-orm';
 
-export const getAllTables = async (req, res) => {
+interface DbMetadataEntry {
+  id: number;
+  tableName: string;
+  fileName: string;
+  columnNames: string[];
+  createdAt: Date;
+}
+
+export const getAllTables = async (req: Request, res: Response) => {
   try {
     console.log('Fetching all tables...');
     
     // Get all metadata entries
-    const metadataEntries = await db.select().from(csvMetadata).orderBy(csvMetadata.createdAt);
+    const metadataEntries = await db.select().from(csvMetadata).orderBy(csvMetadata.createdAt) as DbMetadataEntry[];
     console.log(`Found ${metadataEntries.length} metadata entries`);
 
     // Get data for each table
@@ -23,7 +32,7 @@ export const getAllTables = async (req, res) => {
             ...entry,
             data
           };
-        } catch (error) {
+        } catch (error: any) {
           console.error(`Error fetching table ${entry.tableName}:`, error);
           // If table doesn't exist, remove it from metadata
           if (error.code === '42P01') { // relation does not exist
@@ -40,7 +49,7 @@ export const getAllTables = async (req, res) => {
     const validTables = tablesWithData.filter(table => table !== null);
     console.log(`Successfully fetched ${validTables.length} tables with data`);
     res.json(validTables);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error getting tables:', error);
     res.status(500).json({ 
       error: error.message,
@@ -49,7 +58,15 @@ export const getAllTables = async (req, res) => {
   }
 };
 
-export const createTable = async (req, res) => {
+interface CreateTableRequest extends Request {
+  body: {
+    columns: string[];
+    data: any[][];
+    fileName: string;
+  }
+}
+
+export const createTable = async (req: CreateTableRequest, res: Response) => {
   const { columns, data, fileName } = req.body;
   
   if (!columns || !data || !fileName) {
@@ -81,8 +98,8 @@ export const createTable = async (req, res) => {
     // Insert metadata
     await db.insert(csvMetadata).values({
       tableName,
-      columnNames: columns,
-      fileName
+      fileName,
+      columnNames: columns
     });
     console.log(`Inserted metadata for table: ${tableName}`);
 
@@ -91,7 +108,7 @@ export const createTable = async (req, res) => {
 
     // Insert data using Drizzle
     const insertData = data.map(row => {
-      const rowData = {};
+      const rowData: Record<string, string> = {};
       columns.forEach((colName, index) => {
         const safeColName = colName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
         rowData[safeColName] = row[index];
@@ -103,7 +120,7 @@ export const createTable = async (req, res) => {
     console.log(`Inserted ${insertData.length} rows into table: ${tableName}`);
 
     res.json({ message: 'Table created successfully', tableName });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error creating table:', error);
     res.status(500).json({ 
       error: error.message,
@@ -112,7 +129,13 @@ export const createTable = async (req, res) => {
   }
 };
 
-export const deleteTable = async (req, res) => {
+interface DeleteTableRequest extends Request {
+  query: {
+    tableName: string;
+  }
+}
+
+export const deleteTable = async (req: DeleteTableRequest, res: Response) => {
   const { tableName } = req.query;
   
   if (!tableName) {
@@ -132,7 +155,7 @@ export const deleteTable = async (req, res) => {
     console.log(`Dropped table: ${tableName}`);
 
     res.json({ message: 'Table deleted successfully' });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error deleting table:', error);
     res.status(500).json({ 
       error: error.message,

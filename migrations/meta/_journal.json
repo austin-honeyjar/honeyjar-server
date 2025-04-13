@@ -5,23 +5,9 @@
     {
       "idx": 0,
       "version": "5",
-      "when": 1743273710435,
-      "tag": "0000_many_green_goblin",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1743275697267,
-      "tag": "0001_dear_dragon_man",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1743884495242,
-      "tag": "0002_modern_iron_man",
+      "when": 1744499476454,
+      "tag": "0000_csv_metadata",
       "breakpoints": true
     }
   ]
-}
+} 
