@@ -5,6 +5,8 @@ import { errorHandler } from './middleware/error.middleware.js';
 import authRoutes from './routes/auth.routes.js';
 import logger from './utils/logger.js';
 import { config } from './config/index.js';
+import v1Routes from './routes/v1/index.js';
+import healthRoutes from './routes/health.routes.js';
 
 // Initialize express app
 export const app = express();
@@ -20,6 +22,10 @@ app.use(rateLimiter);
 
 // Routes
 app.use(config.server.apiPrefix + '/auth', authRoutes);
+app.use('/api/v1', v1Routes);
+
+// Health check routes (unversioned)
+app.use('/health', healthRoutes);
 
 // Error handling
 app.use(errorHandler);
