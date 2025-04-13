@@ -23,4 +23,15 @@ declare global {
       session?: ClerkSession;
     }
   }
+}
+
+export interface VersionedRequest extends Request {
+  apiVersion?: string;
+}
+
+export interface AuthRequest extends VersionedRequest {
+  auth?: {
+    userId: string;
+    sessionId: string;
+  };
 } 

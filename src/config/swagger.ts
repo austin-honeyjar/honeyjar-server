@@ -64,6 +64,17 @@ const options: swaggerJsdoc.Options = {
           },
         },
       },
+      parameters: {
+        version: {
+          in: 'header',
+          name: 'Accept',
+          description: 'API version',
+          schema: {
+            type: 'string',
+            default: 'application/json; version=v1',
+          },
+        },
+      },
     },
     security: [
       {
@@ -82,6 +93,10 @@ const options: swaggerJsdoc.Options = {
         name: 'Auth',
         description: 'Authentication related endpoints',
       },
+      {
+        name: 'v1',
+        description: 'Version 1 of the API',
+      },
     ],
   },
   apis: ['./src/routes/*.ts', './src/routes/**/*.ts'],
@@ -96,5 +111,7 @@ export const swaggerUiOptions = {
   swaggerOptions: {
     persistAuthorization: true,
     docExpansion: 'list',
+    defaultModelsExpandDepth: -1,
+    displayRequestDuration: true,
   },
 }; 
