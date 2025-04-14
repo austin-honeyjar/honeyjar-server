@@ -27,16 +27,6 @@ COPY --from=builder /app/package*.json ./
 # Install production dependencies
 RUN npm install --production
 
-# Set environment variables
-ENV NODE_ENV=production
-ENV PORT=3005
-ENV CLERK_SECRET_KEY=your_clerk_secret
-ENV PG_USER=postgres
-ENV PG_PASSWORD=postgres
-ENV PG_HOST=postgres
-ENV PG_PORT=5432
-ENV PG_DATABASE=honeyjar
-
 # Expose the port
 EXPOSE 3005
 
