@@ -1,0 +1,26 @@
+# Development stage
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install dependencies first (better caching)
+COPY package*.json ./
+COPY tsconfig.json ./
+COPY drizzle.config.ts ./
+
+# Install all dependencies including dev dependencies
+RUN npm install --legacy-peer-deps
+
+# Copy source code
+COPY src ./src
+COPY migrations ./migrations
+COPY scripts ./scripts
+
+# Copy environment files
+COPY .env* ./
+
+# Expose the port the app runs on
+EXPOSE 3005
+
+# Start the server in development mode
+CMD ["npm", "run", "dev"] 

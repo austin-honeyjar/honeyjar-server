@@ -33,4 +33,6 @@ coverage
 
 # Misc
 .DS_Store
-*.pem 
+*.pem
+
+README.md 

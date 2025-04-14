@@ -1,50 +1,34 @@
 # Build stage
-FROM node:20-alpine AS builder
+FROM node:18-alpine AS builder
 
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
-COPY tsconfig.json ./
-COPY drizzle.config.ts ./
 
 # Install dependencies
 RUN npm install
 
-# Copy source code
-COPY src ./src
-COPY migrations ./migrations
-COPY scripts ./scripts
+# Copy the rest of the application
+COPY . .
 
 # Build the application
 RUN npm run build
 
 # Production stage
-FROM node:20-alpine
+FROM node:18-alpine AS runner
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
-
-# Install production dependencies only
-RUN npm install --omit=dev
-
-# Copy built files from builder stage
+# Copy necessary files from builder
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/migrations ./migrations
-COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/package*.json ./
 
-# Copy environment files if they exist, fallback to example if they don't
-COPY .env* ./
-RUN if [ ! -f .env ]; then \
-      if [ -f .env.example ]; then \
-        cp .env.example .env; \
-      fi \
-    fi
+# Install production dependencies
+RUN npm install --production
 
-# Expose the port the app runs on
+# Expose the port
 EXPOSE 3005
 
-# Start the server
-CMD ["npm", "start"] 
+# Start the application
+CMD ["node", "dist/index.js"] 

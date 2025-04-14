@@ -4,19 +4,21 @@ services:
   server:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     ports:
       - "3005:3005"
     environment:
       - NODE_ENV=devlocal
       - DATABASE_URL=postgres://postgres:Password1@db:5432/client_db
       - CLERK_SECRET_KEY=${CLERK_SECRET_KEY}
+      - TZ=UTC
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
       - .:/app
       - /app/node_modules
-    command: npm run dev
+    command: sh -c "npm install && npm run dev"
 
   db:
     image: postgres:15-alpine
@@ -26,8 +28,14 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=Password1
       - POSTGRES_DB=client_db
+      - TZ=UTC
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data: 
