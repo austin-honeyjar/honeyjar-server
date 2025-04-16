@@ -5,6 +5,8 @@ import { eq, and } from 'drizzle-orm';
 import logger from '../utils/logger';
 import { CreateChatInput, CreateThreadInput } from '../validators/chat.validator';
 import { v4 as uuidv4 } from 'uuid';
+import { WorkflowService } from '../services/workflow.service';
+import { ChatService } from '../services/chat.service';
 
 // Temporary test user ID for development
 const TEST_USER_ID = 'test_user_123';
@@ -43,8 +45,27 @@ export const chatController = {
         })
         .returning();
 
+      // Handle the message in the workflow
+      const workflowService = new WorkflowService();
+      const chatService = new ChatService();
+      const response = await chatService.handleUserMessage(threadId, content);
+
+      // Log workflow state change
+      const workflow = await workflowService.getWorkflowByThreadId(threadId);
+      logger.info('Workflow state updated', {
+        threadId,
+        workflowId: workflow?.id,
+        currentStep: workflow?.currentStepId,
+        stepStatus: workflow?.steps?.find(s => s.id === workflow?.currentStepId)?.status,
+        totalSteps: workflow?.steps?.length,
+        completedSteps: workflow?.steps?.filter(s => s.status === 'complete')?.length
+      });
+
       logger.info('Created chat message', { messageId: message.id, threadId });
-      res.status(201).json(message);
+      res.status(201).json({
+        message,
+        response
+      });
     } catch (error) {
       logger.error('Error creating chat message:', error);
       res.status(500).json({
@@ -102,8 +123,22 @@ export const chatController = {
         .where(eq(chatMessages.threadId, threadId))
         .orderBy(chatMessages.createdAt);
 
+      // Get workflow state
+      const workflowService = new WorkflowService();
+      const workflow = await workflowService.getWorkflowByThreadId(threadId);
+
+      // Log workflow state
+      logger.info('Retrieved workflow state', {
+        threadId,
+        workflowId: workflow?.id,
+        currentStep: workflow?.currentStepId,
+        stepStatus: workflow?.steps?.find(s => s.id === workflow?.currentStepId)?.status,
+        totalSteps: workflow?.steps?.length,
+        completedSteps: workflow?.steps?.filter(s => s.status === 'complete')?.length
+      });
+
       logger.info('Retrieved chat thread', { threadId, messageCount: messages.length });
-      res.json({ ...thread, messages });
+      res.json({ ...thread, messages, workflow });
     } catch (error) {
       logger.error('Error getting chat thread:', error);
       res.status(500).json({
@@ -119,6 +154,7 @@ export const chatController = {
       const { title } = req.body as CreateThreadInput;
       const userId = TEST_USER_ID;
 
+      // Create thread
       const [thread] = await db.insert(chatThreads)
         .values({
           id: uuidv4(),
@@ -127,8 +163,34 @@ export const chatController = {
         })
         .returning();
 
-      logger.info('Created chat thread', { threadId: thread.id, userId });
-      res.status(201).json(thread);
+      // Initialize workflow for the thread
+      const workflowService = new WorkflowService();
+      const chatService = new ChatService();
+
+      // Start a new workflow
+      const template = await workflowService.getTemplateByName("Launch Announcement");
+      if (!template) {
+        throw new Error("Template not found");
+      }
+
+      const workflow = await workflowService.createWorkflow(thread.id, template.id);
+      const nextPrompt = await chatService.handleUserMessage(thread.id, "I want to create a launch announcement");
+
+      // Log workflow initialization
+      logger.info('Workflow initialized', {
+        threadId: thread.id,
+        workflowId: workflow.id,
+        templateId: template.id,
+        initialStep: workflow.currentStepId,
+        totalSteps: workflow.steps.length
+      });
+
+      logger.info('Created chat thread and workflow', { threadId: thread.id, workflowId: workflow.id });
+      res.status(201).json({
+        thread,
+        workflow,
+        nextPrompt
+      });
     } catch (error) {
       logger.error('Error creating chat thread:', error);
       res.status(500).json({
@@ -158,6 +220,14 @@ export const chatController = {
           error: 'NOT_FOUND',
           message: 'Thread not found or access denied'
         });
+      }
+
+      // Delete any associated workflow
+      const workflowService = new WorkflowService();
+      const workflow = await workflowService.getWorkflowByThreadId(threadId);
+      if (workflow) {
+        await workflowService.deleteWorkflow(workflow.id);
+        logger.info('Deleted associated workflow', { workflowId: workflow.id, threadId });
       }
 
       // Delete messages first (due to foreign key constraint)
