@@ -11,6 +11,7 @@ import { join } from 'path';
 import logger from './utils/logger';
 import csvRoutes from './routes/csv.routes';
 import chatRoutes from './routes/chat.routes';
+import { WorkflowService } from './services/workflow.service';
 
 // Initialize express app
 export const app = express();
@@ -67,11 +68,24 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 // Start server
 if (process.env.NODE_ENV !== 'test') {
   const port = config.server.port || 3005;
-  app.listen(port, () => {
-    logger.info(`Server is running on port ${port}`);
-    if (process.env.NODE_ENV === 'devlocal') {
-      logger.info(`API documentation available at http://localhost:${port}/api-docs`);
-      logger.info(`Raw OpenAPI spec available at http://localhost:${port}/api-docs/api.yaml`);
-    }
-  });
+  
+  // Initialize workflow templates
+  const workflowService = new WorkflowService();
+  workflowService.initializeTemplates()
+    .then(() => {
+      logger.info('Workflow templates initialized successfully');
+      
+      // Start server after templates are initialized
+      app.listen(port, () => {
+        logger.info(`Server is running on port ${port}`);
+        if (process.env.NODE_ENV === 'devlocal') {
+          logger.info(`API documentation available at http://localhost:${port}/api-docs`);
+          logger.info(`Raw OpenAPI spec available at http://localhost:${port}/api-docs/api.yaml`);
+        }
+      });
+    })
+    .catch(error => {
+      logger.error('Failed to initialize workflow templates:', error);
+      process.exit(1);
+    });
 } 
