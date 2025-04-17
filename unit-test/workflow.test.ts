@@ -125,23 +125,41 @@ async function runWorkflowTest() {
 
     // Test the complete workflow
     console.log('\nTesting complete workflow...');
-    // Step 1: Initial Goal Assessment - "Hi, what are you looking to achieve for your PR goals today?"
-    // Step 2: Announcement Type Selection - "We promote 6 different announcement types. They are: Product Launch, Funding Round, Partnership, Company Milestone, Executive Hire, and Industry Award. Would you like help creating one of these or did you have another in mind?"
-    // Step 3: Asset Selection - "Based on your announcement type, we suggest the following assets. Which would you like to generate?"
-    // Step 4: Asset Confirmation - "Please confirm which assets you'd like to generate"
-    // Step 5: Information Collection - "To generate these assets, we need some information. Would you like to: 1) Fill out our complete onboarding form, 2) Upload existing bios or pitch transcripts, or 3) Provide information directly in chat?"
-    // Step 6: Asset Generation - "Generating assets based on provided information..."
-    // Step 7: Asset Review - "Here are the generated assets. Please review and let me know if you'd like any changes."
-    // Step 8: Post-Asset Tasks - "Now that we have your assets ready, would you like help with: 1) Creating a media list, 2) Planning a publishing strategy, 3) Scheduling distribution, or 4) Something else?"
+    // Test conversation flow
+    // Prompt: "What would you like to create today?"
+    // Prompt: "What would you like to name this announcement?"
+    // Prompt: "Would you like to generate any of the following assets? (Press Release, Media Pitch, Social Post)"
+    // Prompt: "Would you like me to generate these assets for you?"
+    // Prompt: "Would you like to provide the information directly in chat, or would you prefer to upload a document?"
+    // Prompt: "Please provide the company name and product details."
+    // Prompt: "Who is the target audience for this product?"
+    // Prompt: "What are the key features and benefits of the product?"
+    // Prompt: "What is the main value proposition or unique selling point?"
+    // Prompt: "What is the call to action for potential customers?"
     const messages = [
-      "I'm looking to create a comprehensive PR campaign for our new sustainable product launch",
-      "I'd like to create a Product Launch announcement",
-      "I'd like to generate a Press Release, Media Pitch, and Social Post",
-      "Yes, please generate all three assets",
-      "I'll provide the information directly in chat",
-      "We are EcoTech, a sustainability-focused startup launching our first product - a revolutionary self-cleaning water bottle made from 100% recycled materials. Our mission is to reduce single-use plastic waste while providing premium hydration solutions.",
-      "The assets look great! The messaging aligns well with our brand voice and the key features are highlighted effectively.",
-      "I'd like help with creating a media list and planning the publishing strategy"
+      "I want to launch a new product",
+      "Product Launch",
+      "Press Release, Media Pitch, Social Post",
+      "Yes, generate those",
+      "I'll provide information directly in chat",
+      "Our company is EcoTech, launching a sustainable water bottle",
+      "Environmentally conscious consumers",
+      "100% recycled materials, self-cleaning technology",
+      "Reducing plastic waste while providing premium hydration",
+      "Visit our website to pre-order",
+      // This message will trigger the OpenAI service to generate assets using the template and collected inputs
+      // The service will use the following template with filled-in values:
+      `Generating assets using press release template and collected information:
+      
+Template Variables:
+- Company Name: EcoTech
+- Product Name: Sustainable Water Bottle
+- Product Type: Self-cleaning water bottle
+- Target Audience: Environmentally conscious consumers
+- Key Features: 100% recycled materials, self-cleaning technology
+- Value Proposition: Reducing plastic waste while providing premium hydration
+- Call to Action: Visit our website to pre-order
+`
     ];
 
     for (const message of messages) {
