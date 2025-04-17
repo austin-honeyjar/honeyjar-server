@@ -119,6 +119,10 @@ async function runWorkflowTest() {
     );
     console.log('Initial response:', initialResponse);
     
+    // Get workflow state
+    const workflow = await workflowService.getWorkflowByThreadId(threadId);
+    console.log('Workflow state:', workflow);
+    
     // Target audience
     console.log('\n2. Providing target audience...');
     const targetAudienceResponse = await chatService.handleUserMessage(
@@ -151,6 +155,10 @@ async function runWorkflowTest() {
     );
     console.log('Final response:', finalResponse);
 
+    // Verify workflow completion
+    const completedWorkflow = await workflowService.getWorkflowByThreadId(threadId);
+    console.log('Completed workflow state:', completedWorkflow);
+
     // Verify conversation flow
     console.log('\nVerifying conversation flow...');
     const messages = await chatService.getThreadMessages(threadId);
@@ -158,6 +166,15 @@ async function runWorkflowTest() {
     messages.forEach((msg, i) => {
       console.log(`Message ${i + 1}:`, msg.content.substring(0, 50) + '...');
     });
+
+    // Test error case - invalid thread ID
+    try {
+      console.log('\nTesting error case with invalid thread ID...');
+      await chatService.handleUserMessage('invalid-thread-id', 'Test message');
+      console.log('Error: Expected an error for invalid thread ID');
+    } catch (error) {
+      console.log('Caught expected error:', error);
+    }
 
     // Clean up
     console.log('\nCleaning up test data...');

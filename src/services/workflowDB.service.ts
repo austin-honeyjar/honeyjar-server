@@ -9,6 +9,7 @@ import {
   WorkflowStatus,
   StepType,
 } from "../types/workflow";
+import logger from "../utils/logger";
 
 export class WorkflowDBService {
   // Template Operations
@@ -152,5 +153,19 @@ export class WorkflowDBService {
     await db
       .delete(workflows)
       .where(eq(workflows.id, id));
+  }
+
+  async updateWorkflowCurrentStep(workflowId: string, stepId: string | null): Promise<void> {
+    logger.info('Updating workflow current step', {
+      workflowId,
+      stepId
+    });
+
+    await db.update(workflows)
+      .set({
+        currentStepId: stepId,
+        updatedAt: new Date()
+      })
+      .where(eq(workflows.id, workflowId));
   }
 } 

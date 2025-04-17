@@ -58,21 +58,23 @@ export class ChatService {
       return this.getNextPrompt(threadId);
     }
 
-    // If workflow exists, update current step
-    const currentStep = await this.workflowService.getNextStep(workflow.id);
-    if (currentStep) {
-      await this.workflowService.updateStep(currentStep.id, {
-        status: StepStatus.COMPLETE,
-        userInput: content,
-      });
+    // If workflow exists, handle the current step
+    if (workflow.currentStepId) {
+      const response = await this.workflowService.handleStepResponse(workflow.currentStepId, content);
+      
+      if (response.isComplete) {
+        return this.generateFinalResponse(workflow);
+      }
+
+      // Add AI response to thread if provided
+      if (response.response) {
+        await this.addMessage(threadId, response.response, false);
+      }
+
+      return response.response;
     }
 
-    // Check if workflow is complete
-    const updatedWorkflow = await this.workflowService.getWorkflow(workflow.id);
-    if (updatedWorkflow?.status === WorkflowStatus.COMPLETED) {
-      return this.generateFinalResponse(updatedWorkflow);
-    }
-
+    // If no current step, get the next one
     return this.getNextPrompt(threadId);
   }
 
@@ -82,27 +84,80 @@ export class ChatService {
       throw new Error("Workflow not found");
     }
 
-    const nextStep = await this.workflowService.getNextStep(workflow.id);
-    if (!nextStep) {
-      throw new Error("No next step found");
+    // If there's no current step, get the first pending step
+    if (!workflow.currentStepId) {
+      const nextStep = workflow.steps.find(step => step.status === StepStatus.PENDING);
+      if (!nextStep) {
+        throw new Error("No next step found");
+      }
+
+      // Set this as the current step
+      await this.workflowService.updateStep(nextStep.id, { status: StepStatus.IN_PROGRESS });
+      await this.workflowService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+
+      const prompt = nextStep.prompt || "Please provide the required information.";
+      await this.addMessage(threadId, prompt, false);
+      return prompt;
     }
 
-    const prompt = nextStep.prompt || "Please provide the required information.";
+    // Get the current step
+    const currentStep = workflow.steps.find(step => step.id === workflow.currentStepId);
+    if (!currentStep) {
+      throw new Error("Current step not found");
+    }
+
+    // If current step is complete, get the next pending step
+    if (currentStep.status === StepStatus.COMPLETE) {
+      const nextStep = workflow.steps.find(step => 
+        step.status === StepStatus.PENDING && 
+        step.order > currentStep.order &&
+        step.dependencies.every(dep => 
+          workflow.steps.find(s => s.name === dep)?.status === StepStatus.COMPLETE
+        )
+      );
+
+      if (!nextStep) {
+        throw new Error("No next step found");
+      }
+
+      // Set this as the current step
+      await this.workflowService.updateStep(nextStep.id, { status: StepStatus.IN_PROGRESS });
+      await this.workflowService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+
+      const prompt = nextStep.prompt || "Please provide the required information.";
+      await this.addMessage(threadId, prompt, false);
+      return prompt;
+    }
+
+    // Return the current step's prompt
+    const prompt = currentStep.prompt || "Please provide the required information.";
     await this.addMessage(threadId, prompt, false);
     return prompt;
   }
 
   private async generateFinalResponse(workflow: any) {
+    // Get steps in order
+    const orderedSteps = workflow.steps.sort((a: any, b: any) => a.order - b.order);
+
+    // Find the relevant steps and their responses
+    const initialGoal = orderedSteps.find((s: any) => s.order === 0)?.aiSuggestion || '';
+    const targetAudience = orderedSteps.find((s: any) => s.order === 1)?.userInput || '';
+    const keyFeatures = orderedSteps.find((s: any) => s.order === 2)?.userInput || '';
+    const valueProposition = orderedSteps.find((s: any) => s.order === 3)?.userInput || '';
+    const callToAction = orderedSteps.find((s: any) => s.order === 4)?.userInput || '';
+
     const announcement = `We're excited to announce our new product launch!
 
-${workflow.steps.find((s: any) => s.name.includes("Target Audience"))?.userInput}
+Target Audience:
+${targetAudience}
 
 Key Features:
-${workflow.steps.find((s: any) => s.name.includes("Key Features"))?.userInput}
+${keyFeatures}
 
-${workflow.steps.find((s: any) => s.name.includes("Value Proposition"))?.userInput}
+Value Proposition:
+${valueProposition}
 
-${workflow.steps.find((s: any) => s.name.includes("Call to Action"))?.userInput}
+${callToAction}
 
 Join us on this exciting journey!`;
 
