@@ -200,6 +200,9 @@ export class WorkflowService {
       const workflow = await this.dbService.getWorkflow(step.workflowId);
       if (!workflow) throw new Error('Workflow not found');
 
+      // Sort steps by order to ensure proper sequence
+      const sortedSteps = workflow.steps.sort((a, b) => a.order - b.order);
+
       // If this is the first step, set it as current
       if (workflow.currentStepId === null && step.order === 0) {
         await this.dbService.updateWorkflowCurrentStep(workflow.id, stepId);
@@ -213,62 +216,79 @@ export class WorkflowService {
       }
 
       // Check dependencies
-      const incompleteDependencies = workflow.steps.filter(s => 
+      const incompleteDependencies = sortedSteps.filter(s => 
         step.dependencies.includes(s.name) && s.status !== StepStatus.COMPLETE
       );
       if (incompleteDependencies.length > 0) {
         throw new Error('Cannot process step: dependencies not complete');
       }
 
-      // Get previous step responses for context
-      const previousSteps = workflow.steps
+      // Get previous step responses for context, ensuring proper order
+      const previousSteps = sortedSteps
         .filter(s => s.order < step.order && s.status === StepStatus.COMPLETE)
         .map(s => ({
           stepName: s.name,
-          response: s.userInput || ''
+          response: s.userInput || '',
+          order: s.order
         }));
 
-      // Generate AI response
-      const aiResponse = await this.openAIService.generateStepResponse(
-        step,
-        userInput,
-        previousSteps
-      );
+      // Generate AI response based on step type
+      let aiResponse;
+      if (step.stepType === 'user_input') {
+        aiResponse = await this.openAIService.generateStepResponse(
+          step,
+          userInput,
+          previousSteps
+        );
+      } else if (step.stepType === 'ai_suggestion') {
+        aiResponse = await this.openAIService.generateStepResponse(
+          step,
+          userInput,
+          previousSteps
+        );
+      } else {
+        aiResponse = step.prompt || 'Please provide the required information.';
+      }
 
-      // Update current step
+      // Update current step with user input and AI response
       await this.dbService.updateStep(stepId, {
         userInput,
         aiSuggestion: aiResponse,
         status: StepStatus.COMPLETE
       });
 
-      // Get and prepare next step
-      const nextStep = workflow.steps.find(s => s.order === step.order + 1);
-      const isComplete = !nextStep || nextStep.order >= workflow.steps.length;
+      // Find the next step based on order and dependencies
+      const nextStep = sortedSteps
+        .filter(s => s.order > step.order && s.status === StepStatus.PENDING)
+        .find(s => 
+          s.dependencies.every(dep => 
+            sortedSteps.find(ws => ws.name === dep)?.status === StepStatus.COMPLETE
+          )
+        );
 
-      if (isComplete) {
-        await this.dbService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
-      } else {
+      const isComplete = !nextStep;
+
+      if (nextStep) {
+        // Set the next step as current
         await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
         await this.dbService.updateStep(nextStep.id, { status: StepStatus.IN_PROGRESS });
+        
+        // Return the next step's prompt as part of the response
+        return {
+          response: `${aiResponse}\n\n${nextStep.prompt || 'Please provide the required information.'}`,
+          nextStep,
+          isComplete
+        };
+      } else {
+        // No more steps, complete the workflow
+        await this.dbService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
+        return {
+          response: aiResponse,
+          isComplete: true
+        };
       }
-
-      return {
-        response: nextStep?.prompt || aiResponse,
-        nextStep: nextStep ? {
-          id: nextStep.id,
-          name: nextStep.name,
-          description: nextStep.description,
-          prompt: nextStep.prompt,
-          metadata: nextStep.metadata
-        } : undefined,
-        isComplete
-      };
     } catch (error) {
-      logger.error('Error handling workflow step response:', {
-        stepId,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
+      logger.error('Error handling step response:', error);
       throw error;
     }
   }

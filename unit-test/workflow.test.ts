@@ -2,11 +2,12 @@ import { WorkflowService } from '../src/services/workflow.service.js';
 import { ChatService } from '../src/services/chat.service.js';
 import { db } from '../src/db/index.js';
 import { eq } from 'drizzle-orm';
-import { chatMessages, chatThreads, workflowTemplates, workflows, workflowSteps, workflowStatusEnum, stepStatusEnum, stepTypeEnum } from '../src/db/schema.js';
+import { chatMessages, chatThreads, workflowTemplates, workflows, workflowSteps } from '../src/db/schema.js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { sql } from 'drizzle-orm';
+import fetch from 'node-fetch';
 
 async function setupDatabase() {
   console.log('Setting up database...');
@@ -102,87 +103,83 @@ async function runWorkflowTest() {
     console.log('Initializing workflow templates...');
     await workflowService.initializeTemplates();
     
-    // Create a test thread
+    // Create a test thread using the API
     console.log('Creating test thread...');
-    const thread = await chatService.createThread('test-user', 'Launch Announcement Test');
-    const threadId = thread.id;
+    const response = await fetch('http://localhost:3005/api/v1/chat/threads', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: 'Launch Announcement Test'
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to create thread: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const threadId = data.thread.id;
     console.log('Created thread:', threadId);
 
     // Test the complete workflow
     console.log('\nTesting complete workflow...');
-    
-    // Start workflow
-    console.log('\n1. Starting workflow...');
-    const initialResponse = await chatService.handleUserMessage(
-      threadId,
-      'I want to create a launch announcement'
-    );
-    console.log('Initial response:', initialResponse);
-    
-    // Get workflow state
-    const workflow = await workflowService.getWorkflowByThreadId(threadId);
-    console.log('Workflow state:', workflow);
-    
-    // Target audience
-    console.log('\n2. Providing target audience...');
-    const targetAudienceResponse = await chatService.handleUserMessage(
-      threadId,
-      'Our target audience is tech-savvy professionals aged 25-45 who are interested in productivity tools.'
-    );
-    console.log('Target audience response:', targetAudienceResponse);
-    
-    // Key features
-    console.log('\n3. Providing key features...');
-    const keyFeaturesResponse = await chatService.handleUserMessage(
-      threadId,
-      'Key features include:\n1. AI-powered task management\n2. Real-time collaboration\n3. Smart notifications\n4. Cross-platform sync'
-    );
-    console.log('Key features response:', keyFeaturesResponse);
-    
-    // Value proposition
-    console.log('\n4. Providing value proposition...');
-    const valuePropResponse = await chatService.handleUserMessage(
-      threadId,
-      'Our product helps professionals save 10+ hours per week by automating routine tasks and providing intelligent insights.'
-    );
-    console.log('Value proposition response:', valuePropResponse);
-    
-    // Call to action
-    console.log('\n5. Providing call to action...');
-    const finalResponse = await chatService.handleUserMessage(
-      threadId,
-      'Sign up now for early access and get 3 months free!'
-    );
-    console.log('Final response:', finalResponse);
+    // Step 1: Initial Goal Assessment - "Hi, what are you looking to achieve for your PR goals today?"
+    // Step 2: Announcement Type Selection - "We promote 6 different announcement types. They are: Product Launch, Funding Round, Partnership, Company Milestone, Executive Hire, and Industry Award. Would you like help creating one of these or did you have another in mind?"
+    // Step 3: Asset Selection - "Based on your announcement type, we suggest the following assets. Which would you like to generate?"
+    // Step 4: Asset Confirmation - "Please confirm which assets you'd like to generate"
+    // Step 5: Information Collection - "To generate these assets, we need some information. Would you like to: 1) Fill out our complete onboarding form, 2) Upload existing bios or pitch transcripts, or 3) Provide information directly in chat?"
+    // Step 6: Asset Generation - "Generating assets based on provided information..."
+    // Step 7: Asset Review - "Here are the generated assets. Please review and let me know if you'd like any changes."
+    // Step 8: Post-Asset Tasks - "Now that we have your assets ready, would you like help with: 1) Creating a media list, 2) Planning a publishing strategy, 3) Scheduling distribution, or 4) Something else?"
+    const messages = [
+      "I'm looking to create a comprehensive PR campaign for our new sustainable product launch",
+      "I'd like to create a Product Launch announcement",
+      "I'd like to generate a Press Release, Media Pitch, and Social Post",
+      "Yes, please generate all three assets",
+      "I'll provide the information directly in chat",
+      "We are EcoTech, a sustainability-focused startup launching our first product - a revolutionary self-cleaning water bottle made from 100% recycled materials. Our mission is to reduce single-use plastic waste while providing premium hydration solutions.",
+      "The assets look great! The messaging aligns well with our brand voice and the key features are highlighted effectively.",
+      "I'd like help with creating a media list and planning the publishing strategy"
+    ];
 
-    // Verify workflow completion
-    const completedWorkflow = await workflowService.getWorkflowByThreadId(threadId);
-    console.log('Completed workflow state:', completedWorkflow);
-
-    // Verify conversation flow
-    console.log('\nVerifying conversation flow...');
-    const messages = await chatService.getThreadMessages(threadId);
-    console.log(`Total messages: ${messages.length}`);
-    messages.forEach((msg, i) => {
-      console.log(`Message ${i + 1}:`, msg.content.substring(0, 50) + '...');
-    });
-
-    // Test error case - invalid thread ID
-    try {
-      console.log('\nTesting error case with invalid thread ID...');
-      await chatService.handleUserMessage('invalid-thread-id', 'Test message');
-      console.log('Error: Expected an error for invalid thread ID');
-    } catch (error) {
-      console.log('Caught expected error:', error);
+    for (const message of messages) {
+      const response = await chatService.handleUserMessage(threadId, message);
+      
+      // Get the current workflow state
+      const workflow = await workflowService.getWorkflowByThreadId(threadId);
+      const currentStep = workflow?.steps.find(s => s.id === workflow?.currentStepId);
+      
+      console.log('\n=== Conversation Step ===');
+      console.log('Step Name:', currentStep?.name);
+      console.log('Step Prompt:', currentStep?.prompt);
+      console.log('User Input:', message);
+      console.log('AI Response:', response);
+      console.log('Step Status:', currentStep?.status);
+      console.log('Step Order:', currentStep?.order);
+      console.log('Step Dependencies:', currentStep?.dependencies);
+      console.log('Step Metadata:', currentStep?.metadata);
+      console.log('Step AI Suggestion:', currentStep?.aiSuggestion);
+      console.log('Step User Input:', currentStep?.userInput);
+      console.log('=====================\n');
     }
 
-    // Clean up
-    console.log('\nCleaning up test data...');
-    await db.delete(workflowSteps);
-    await db.delete(workflows);
-    await db.delete(chatMessages).where(eq(chatMessages.threadId, threadId));
-    await db.delete(chatThreads).where(eq(chatThreads.id, threadId));
-    await db.delete(workflowTemplates);
+    // Verify workflow completion
+    const finalWorkflow = await workflowService.getWorkflowByThreadId(threadId);
+    console.log('\nFinal workflow state:', {
+      status: finalWorkflow?.status,
+      currentStepId: finalWorkflow?.currentStepId,
+      steps: finalWorkflow?.steps.map(s => ({
+        name: s.name,
+        status: s.status,
+        order: s.order,
+        prompt: s.prompt,
+        userInput: s.userInput,
+        aiSuggestion: s.aiSuggestion,
+        dependencies: s.dependencies
+      }))
+    });
     
     console.log('\nTest completed successfully!');
   } catch (error) {

@@ -42,8 +42,7 @@ export class OpenAIService {
 
       // Create the messages array for the chat completion
       const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        { role: 'system', content: systemMessage },
-        { role: 'user', content: userInput }
+        { role: 'system', content: systemMessage }
       ];
 
       // Add previous responses as context if available
@@ -56,8 +55,14 @@ export class OpenAIService {
           role: 'assistant' as const,
           content: `Previous step (${response.stepName}): ${response.response}`
         }));
-        messages.splice(1, 0, ...contextMessages);
+        messages.push(...contextMessages);
       }
+
+      // Add the current step's prompt and user input
+      messages.push(
+        { role: 'assistant', content: step.prompt || 'Please provide the required information.' },
+        { role: 'user', content: userInput }
+      );
 
       logger.debug('Sending request to OpenAI', {
         stepId: step.id,
@@ -65,11 +70,19 @@ export class OpenAIService {
         messageCount: messages.length
       });
 
+      // Determine if we should limit the response length
+      const isChatStep = step.stepType === 'user_input' || step.stepType === 'ai_suggestion';
+      const maxTokens = isChatStep ? 100 : 1000;
+      const presencePenalty = isChatStep ? 0.5 : 0;
+      const frequencyPenalty = isChatStep ? 0.5 : 0;
+
       const completion = await this.client.chat.completions.create({
         model: this.model,
         messages,
         temperature: 0.7,
-        max_tokens: 1000,
+        max_tokens: maxTokens,
+        presence_penalty: presencePenalty,
+        frequency_penalty: frequencyPenalty,
       });
 
       const response = completion.choices[0]?.message?.content;
@@ -81,15 +94,23 @@ export class OpenAIService {
         throw new Error('No response generated from OpenAI');
       }
 
+      // Only limit response length for chat steps
+      let finalResponse = response;
+      if (isChatStep) {
+        const sentences = response.split(/[.!?]+/).filter(s => s.trim().length > 0);
+        finalResponse = sentences.slice(0, 2).join('. ').trim() + '.';
+      }
+
       logger.info('Generated OpenAI response', {
         stepId: step.id,
         stepName: step.name,
         model: this.model,
-        responseLength: response.length,
-        usage: completion.usage
+        responseLength: finalResponse.length,
+        usage: completion.usage,
+        isChatStep
       });
 
-      return response;
+      return finalResponse;
     } catch (error) {
       logger.error('Error generating OpenAI response:', {
         stepId: step.id,
@@ -158,17 +179,28 @@ export class OpenAIService {
       systemMessage += '\n';
     }
 
-    // Add response guidelines
-    systemMessage += `Guidelines for your response:
+    // Add response guidelines based on step type
+    const isChatStep = step.stepType === 'user_input' || step.stepType === 'ai_suggestion';
+    if (isChatStep) {
+      systemMessage += `Guidelines for your response:
 1. Be professional and concise
-2. Focus on the specific task at hand
-3. Consider the available options and metadata
-4. If suggesting options, explain the benefits of each
-5. If asking for clarification, be specific about what information is needed`;
+2. Limit your response to 1-2 sentences
+3. Focus on the specific task at hand
+4. If suggesting options, be brief and clear
+5. If asking for clarification, be specific but concise`;
+    } else {
+      systemMessage += `Guidelines for your response:
+1. Be professional and thorough
+2. Provide detailed and comprehensive responses
+3. Include all necessary information
+4. Format the response appropriately for the task
+5. Ensure the response is complete and actionable`;
+    }
 
     logger.debug('System message constructed', {
       stepId: step.id,
-      messageLength: systemMessage.length
+      messageLength: systemMessage.length,
+      isChatStep
     });
 
     return systemMessage;
