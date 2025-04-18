@@ -174,6 +174,13 @@ export const chatController = {
       }
 
       const workflow = await workflowService.createWorkflow(thread.id, template.id);
+      
+      // Get the workflow with steps
+      const workflowWithSteps = await workflowService.getWorkflow(workflow.id);
+      if (!workflowWithSteps) {
+        throw new Error("Failed to get workflow with steps");
+      }
+
       const nextPrompt = await chatService.handleUserMessage(thread.id, "I want to create a launch announcement");
 
       // Log workflow initialization
@@ -182,13 +189,13 @@ export const chatController = {
         workflowId: workflow.id,
         templateId: template.id,
         initialStep: workflow.currentStepId,
-        totalSteps: workflow.steps.length
+        totalSteps: workflowWithSteps.steps.length
       });
 
       logger.info('Created chat thread and workflow', { threadId: thread.id, workflowId: workflow.id });
       res.status(201).json({
         thread,
-        workflow,
+        workflow: workflowWithSteps,
         nextPrompt
       });
     } catch (error) {

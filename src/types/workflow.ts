@@ -94,6 +94,7 @@ export interface WorkflowTemplate {
     name: string;
     description: string;
     prompt?: string;
+    order?: number;
     dependencies: string[];
     metadata?: Record<string, any>;
   }>;

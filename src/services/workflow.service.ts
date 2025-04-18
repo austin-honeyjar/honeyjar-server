@@ -6,11 +6,12 @@ import {
   WorkflowStatus,
   StepType,
 } from "../types/workflow";
-import { LAUNCH_ANNOUNCEMENT_TEMPLATE } from "../templates/workflows/launch-announcement";
 import {WorkflowDBService} from "./workflowDB.service";
 import { OpenAIService } from './openai.service';
 import logger from '../utils/logger';
-
+import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow';
+import { DUMMY_WORKFLOW_TEMPLATE } from "../templates/workflows/dummy-workflow";
+import { LAUNCH_ANNOUNCEMENT_TEMPLATE } from "../templates/workflows/launch-announcement";
 export class WorkflowService {
   private dbService: WorkflowDBService;
   private openAIService: OpenAIService;
@@ -28,6 +29,8 @@ export class WorkflowService {
   async initializeTemplates(): Promise<void> {
     console.log('Initializing templates...');
     const templates = {
+      "Base Workflow": BASE_WORKFLOW_TEMPLATE,
+      "Dummy Workflow": DUMMY_WORKFLOW_TEMPLATE,
       "Launch Announcement": LAUNCH_ANNOUNCEMENT_TEMPLATE
     };
 
@@ -46,50 +49,59 @@ export class WorkflowService {
 
   // Workflow Management
   async createWorkflow(threadId: string, templateId: string): Promise<Workflow> {
+    console.log(`Proceeding to create workflow with templateId: ${templateId} for threadId: ${threadId}`);
+
+    // Ensure the template exists before creating workflow record
     const template = await this.dbService.getTemplate(templateId);
     if (!template) {
       throw new Error(`Template not found: ${templateId}`);
     }
+    console.log(`Using template "${template.name}" with ${template.steps?.length || 0} steps defined.`);
 
-    // Create workflow
     const workflow = await this.dbService.createWorkflow({
       threadId,
       templateId,
       status: WorkflowStatus.ACTIVE,
-      currentStepId: null // Ensure this is explicitly set to null initially
+      currentStepId: null
     });
+    console.log(`Created workflow record ${workflow.id}. Now creating steps...`);
 
-    // Create steps with proper dependencies and order
-    const steps = await Promise.all(
-      template.steps.map(async (step, index) => {
-        const stepData = {
-          workflowId: workflow.id,
-          stepType: step.type,
-          name: step.name,
-          description: step.description,
-          prompt: step.prompt,
-          status: index === 0 ? StepStatus.IN_PROGRESS : StepStatus.PENDING,
-          order: index,
-          dependencies: step.dependencies || [],
-          metadata: step.metadata || {},
-        };
-
-        const createdStep = await this.dbService.createStep(stepData);
+    // Create steps and set first step as IN_PROGRESS
+    let firstStepId: string | null = null;
+    if (template.steps && template.steps.length > 0) {
+      for (let i = 0; i < template.steps.length; i++) {
+        const stepDefinition = template.steps[i];
         
-        // If this is the first step, set it as the current step
-        if (index === 0) {
-          await this.dbService.updateWorkflowCurrentStep(workflow.id, createdStep.id);
-          workflow.currentStepId = createdStep.id;
+        // Log the definition being used for this iteration
+        console.log(`Creating step ${i} from definition: ${JSON.stringify({name: stepDefinition.name, prompt: stepDefinition.prompt})}`);
+
+        const createdStep = await this.dbService.createStep({
+          workflowId: workflow.id,
+          stepType: stepDefinition.type,
+          name: stepDefinition.name,
+          description: stepDefinition.description,
+          prompt: stepDefinition.prompt,
+          status: i === 0 ? StepStatus.IN_PROGRESS : StepStatus.PENDING,
+          order: i,
+          dependencies: stepDefinition.dependencies || [],
+          metadata: stepDefinition.metadata || {}
+        });
+        // dbService.createStep logging will confirm insertion details
+
+        if (i === 0) {
+          firstStepId = createdStep.id;
         }
+      }
 
-        return createdStep;
-      })
-    );
+      if (firstStepId) {
+        await this.dbService.updateWorkflowCurrentStep(workflow.id, firstStepId);
+        console.log(`Set currentStepId for workflow ${workflow.id} to ${firstStepId}`);
+        return this.dbService.getWorkflow(workflow.id) as Promise<Workflow>;
+      }
+    }
 
-    return {
-      ...workflow,
-      steps
-    };
+    console.log(`Workflow ${workflow.id} created with no steps or first step ID not set.`);
+    return this.dbService.getWorkflow(workflow.id) as Promise<Workflow>;
   }
 
   async getWorkflow(id: string): Promise<Workflow | null> {
@@ -97,7 +109,53 @@ export class WorkflowService {
   }
 
   async getWorkflowByThreadId(threadId: string): Promise<Workflow | null> {
-    return this.dbService.getWorkflowByThreadId(threadId);
+    // This function should return the *single* ACTIVE workflow for the thread, if one exists.
+    const workflows = await this.dbService.getWorkflowsByThreadId(threadId);
+    console.log(`getWorkflowByThreadId: Found ${workflows.length} workflows for thread ${threadId}. Checking for ACTIVE...`);
+
+    const activeWorkflows = workflows.filter((w: Workflow) => w.status === WorkflowStatus.ACTIVE);
+
+    if (activeWorkflows.length === 1) {
+      console.log(`getWorkflowByThreadId: Found ACTIVE workflow: ${activeWorkflows[0].id} (Template: ${activeWorkflows[0].templateId})`);
+      return activeWorkflows[0];
+    } else if (activeWorkflows.length > 1) {
+      // This indicates a problem state - log an error and return the newest active one as a fallback
+      console.error(`getWorkflowByThreadId: Found MULTIPLE ACTIVE workflows for thread ${threadId}. Returning the most recently created active one.`);
+      return activeWorkflows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    } else {
+      // No active workflows found
+      console.log(`getWorkflowByThreadId: No ACTIVE workflow found for thread ${threadId}. Returning null.`);
+      return null; // Let ChatService handle the case where no workflow is active
+    }
+  }
+
+  async getBaseWorkflowByThreadId(threadId: string): Promise<Workflow | null> {
+    const workflows = await this.dbService.getWorkflowsByThreadId(threadId);
+    const baseTemplate = await this.dbService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
+    // Added check for baseTemplate existence
+    if (!baseTemplate) {
+        console.error(`getBaseWorkflowByThreadId: Base template "${BASE_WORKFLOW_TEMPLATE.name}" not found in DB.`);
+        return null; 
+    }
+    return workflows.find((w: Workflow) => w.templateId === baseTemplate.id) || null;
+  }
+
+  async updateThreadTitle(threadId: string, title: string, subtitle: string): Promise<void> {
+    const baseWorkflow = await this.getBaseWorkflowByThreadId(threadId);
+    if (!baseWorkflow) {
+      throw new Error('Base workflow not found');
+    }
+
+    const titleStep = baseWorkflow.steps.find(s => s.name === 'Thread Title and Summary');
+    if (!titleStep) {
+      throw new Error('Title step not found');
+    }
+
+    await this.dbService.updateStep(titleStep.id, {
+      userInput: title,
+      aiSuggestion: subtitle,
+      status: StepStatus.COMPLETE
+    });
   }
 
   async updateStep(
@@ -188,109 +246,98 @@ export class WorkflowService {
    * Handle a user's response to a workflow step
    */
   async handleStepResponse(stepId: string, userInput: string): Promise<{
-    response: string;
-    nextStep?: any;
-    isComplete: boolean;
+    response: string; // Message indicating step/workflow status
+    nextStep?: any;   // Details of the next step, if any
+    isComplete: boolean; // Indicates if the *workflow* is now complete
   }> {
     try {
-      // Get the current step and workflow
+      // 1. Get the current step being processed
       const step = await this.dbService.getStep(stepId);
-      if (!step) throw new Error('Step not found');
+      if (!step) throw new Error(`Step not found: ${stepId}`);
+      const workflowId = step.workflowId;
 
-      const workflow = await this.dbService.getWorkflow(step.workflowId);
-      if (!workflow) throw new Error('Workflow not found');
-
-      // Sort steps by order to ensure proper sequence
-      const sortedSteps = workflow.steps.sort((a, b) => a.order - b.order);
-
-      // If this is the first step, set it as current
-      if (workflow.currentStepId === null && step.order === 0) {
-        await this.dbService.updateWorkflowCurrentStep(workflow.id, stepId);
-        await this.dbService.updateStep(stepId, { status: StepStatus.IN_PROGRESS });
-        workflow.currentStepId = stepId;
-      }
-
-      // Verify this is the current step
-      if (workflow.currentStepId !== stepId) {
-        throw new Error('Cannot process step: not the current step');
-      }
-
-      // Check dependencies
-      const incompleteDependencies = sortedSteps.filter(s => 
-        step.dependencies.includes(s.name) && s.status !== StepStatus.COMPLETE
-      );
-      if (incompleteDependencies.length > 0) {
-        throw new Error('Cannot process step: dependencies not complete');
-      }
-
-      // Get previous step responses for context, ensuring proper order
-      const previousSteps = sortedSteps
-        .filter(s => s.order < step.order && s.status === StepStatus.COMPLETE)
-        .map(s => ({
-          stepName: s.name,
-          response: s.userInput || '',
-          order: s.order
-        }));
-
-      // Generate AI response based on step type
-      let aiResponse;
-      if (step.stepType === 'user_input') {
-        aiResponse = await this.openAIService.generateStepResponse(
-          step,
-          userInput,
-          previousSteps
-        );
-      } else if (step.stepType === 'ai_suggestion') {
-        aiResponse = await this.openAIService.generateStepResponse(
-          step,
-          userInput,
-          previousSteps
-        );
-      } else {
-        aiResponse = step.prompt || 'Please provide the required information.';
-      }
-
-      // Update current step with user input and AI response
+      // 2. Update the current step: set userInput and mark as COMPLETE
       await this.dbService.updateStep(stepId, {
         userInput,
-        aiSuggestion: aiResponse,
         status: StepStatus.COMPLETE
       });
 
-      // Find the next step based on order and dependencies
-      const nextStep = sortedSteps
-        .filter(s => s.order > step.order && s.status === StepStatus.PENDING)
-        .find(s => 
-          s.dependencies.every(dep => 
-            sortedSteps.find(ws => ws.name === dep)?.status === StepStatus.COMPLETE
-          )
-        );
+      // 3. Re-fetch the entire workflow to get the most up-to-date state of all steps
+      const updatedWorkflow = await this.dbService.getWorkflow(workflowId);
+      if (!updatedWorkflow) throw new Error(`Workflow not found after update: ${workflowId}`);
 
-      const isComplete = !nextStep;
+      // 4. Find the next pending step whose dependencies are met
+      // Sort steps by order to ensure we find the correct next one
+      const sortedSteps = updatedWorkflow.steps.sort((a, b) => a.order - b.order);
+      const nextStep = sortedSteps.find(s =>
+        s.status === StepStatus.PENDING && // Must be pending
+        // Dependencies must be met (either no dependencies or all dependency steps are complete)
+        (!s.dependencies || s.dependencies.length === 0 ||
+          s.dependencies.every(depName => {
+            const depStep = updatedWorkflow.steps.find(dep => dep.name === depName);
+            return depStep?.status === StepStatus.COMPLETE;
+          })
+        )
+      );
 
+      // 5. If a next step is found
       if (nextStep) {
-        // Set the next step as current
-        await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
-        await this.dbService.updateStep(nextStep.id, { status: StepStatus.IN_PROGRESS });
-        
-        // Return the next step's prompt as part of the response
+        // Update the workflow's current step ID to the next step
+        await this.dbService.updateWorkflowCurrentStep(workflowId, nextStep.id);
+        // Mark the next step as IN_PROGRESS
+        await this.dbService.updateStep(nextStep.id, {
+          status: StepStatus.IN_PROGRESS
+        });
+
+        // --- Add Logging Here ---
+        const nextStepDetails = {
+          id: nextStep.id,
+          name: nextStep.name,
+          prompt: nextStep.prompt, // <<< Check this value
+          type: nextStep.stepType
+        };
+        console.log('handleStepResponse: Found next step. Returning details:', nextStepDetails); 
+        // --- End Logging ---
+
         return {
-          response: `${aiResponse}\n\n${nextStep.prompt || 'Please provide the required information.'}`,
-          nextStep,
-          isComplete
+          response: `Step "${step.name}" completed. Proceeding to step "${nextStep.name}".`,
+          nextStep: nextStepDetails, // Return the logged object
+          isComplete: false // Workflow is not complete
         };
       } else {
-        // No more steps, complete the workflow
-        await this.dbService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
-        return {
-          response: aiResponse,
-          isComplete: true
-        };
+        // 6. If NO next step is found, the workflow should be complete.
+        // Verify that all steps are indeed complete.
+        const allStepsNowComplete = updatedWorkflow.steps.every(s => s.status === StepStatus.COMPLETE);
+
+        if (allStepsNowComplete) {
+          // Mark the workflow as completed in the database
+          await this.dbService.updateWorkflowStatus(workflowId, WorkflowStatus.COMPLETED);
+          await this.dbService.updateWorkflowCurrentStep(workflowId, null); // No current step
+
+          console.log(`handleStepResponse: Workflow ${workflowId} completed.`); // Add log
+          return {
+            response: 'Workflow completed successfully.',
+            isComplete: true // Workflow IS complete
+          };
+        } else {
+          // This indicates a potential logic error or inconsistent state
+          console.error(`handleStepResponse: Workflow state inconsistency for ${workflowId}: No next step found, but not all steps are complete.`);
+          // Potentially return an error state or specific message?
+           return {
+               response: 'Error: Workflow is in an inconsistent state.',
+               isComplete: false // Workflow is not properly complete
+           };
+          // throw new Error('Workflow inconsistency detected: Cannot determine next step.');
+        }
       }
     } catch (error) {
       logger.error('Error handling step response:', error);
+      // Re-throw the error to be handled by the caller (e.g., ChatService)
       throw error;
     }
+    // Note: Because every path in the try block either returns or throws,
+    // and the catch block throws, this point is technically unreachable.
+    // The compiler should now be satisfied.
   }
 
   async updateWorkflowCurrentStep(workflowId: string, stepId: string | null): Promise<void> {
@@ -300,5 +347,14 @@ export class WorkflowService {
     }
 
     await this.dbService.updateWorkflowCurrentStep(workflowId, stepId);
+  }
+
+  async updateWorkflowStatus(workflowId: string, status: WorkflowStatus): Promise<void> {
+    const workflow = await this.getWorkflow(workflowId);
+    if (!workflow) {
+      throw new Error(`Workflow not found: ${workflowId}`);
+    }
+
+    await this.dbService.updateWorkflowStatus(workflowId, status);
   }
 } 
