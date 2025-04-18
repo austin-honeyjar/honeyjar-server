@@ -61,4 +61,10 @@ export class ClerkError extends AppError {
   constructor(message: string = 'Clerk authentication error', details?: string) {
     super(500, message, 'CLERK_ERROR', details);
   }
+}
+
+export class ForbiddenError extends AppError {
+  constructor(message: string = 'Forbidden', details?: string) {
+    super(403, message, 'FORBIDDEN', details);
+  }
 } 
