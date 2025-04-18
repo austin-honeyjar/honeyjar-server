@@ -3,6 +3,8 @@ import { validate } from '../middleware/validation.middleware';
 import { chatController } from '../controllers/chatController';
 import { createChatSchema, createThreadSchema, getThreadSchema, deleteThreadSchema } from '../validators/chat.validator';
 import logger from '../utils/logger';
+import { authMiddleware } from '../middleware/auth.middleware';
+import { requireOrgRole } from '../middleware/org.middleware';
 
 const router = Router();
 
@@ -19,12 +21,17 @@ router.use((req, res, next) => {
   next();
 });
 
+// Apply authentication middleware to all chat routes
+router.use(authMiddleware);
+
 /**
  * @swagger
  * /api/v1/chat/messages:
  *   post:
  *     summary: Create a new chat message
  *     tags: [Chat]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -59,12 +66,20 @@ router.use((req, res, next) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ChatMessage'
+ *       401:
+ *         description: Unauthorized - User not authenticated
+ *       403:
+ *         description: Forbidden - User does not have required organization role
  *       404:
  *         description: Thread not found
  *       500:
  *         description: Server error
  */
-router.post('/messages', validate(createChatSchema), chatController.create);
+router.post('/messages', 
+  requireOrgRole(['member']),
+  validate(createChatSchema), 
+  chatController.create
+);
 
 /**
  * @swagger
@@ -72,6 +87,8 @@ router.post('/messages', validate(createChatSchema), chatController.create);
  *   get:
  *     summary: Get all chat threads
  *     tags: [Chat]
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: List of chat threads
@@ -81,10 +98,17 @@ router.post('/messages', validate(createChatSchema), chatController.create);
  *               type: array
  *               items:
  *                 $ref: '#/components/schemas/ChatThread'
+ *       401:
+ *         description: Unauthorized - User not authenticated
+ *       403:
+ *         description: Forbidden - User does not have required organization role
  *       500:
  *         description: Server error
  */
-router.get('/threads', chatController.listThreads);
+router.get('/threads', 
+  requireOrgRole(['member']),
+  chatController.listThreads
+);
 
 /**
  * @swagger
@@ -92,6 +116,8 @@ router.get('/threads', chatController.listThreads);
  *   post:
  *     summary: Create a new chat thread
  *     tags: [Chat]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -114,10 +140,18 @@ router.get('/threads', chatController.listThreads);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ChatThread'
+ *       401:
+ *         description: Unauthorized - User not authenticated
+ *       403:
+ *         description: Forbidden - User does not have required organization role
  *       500:
  *         description: Server error
  */
-router.post('/threads', validate(createThreadSchema), chatController.createThread);
+router.post('/threads', 
+  requireOrgRole(['member']),
+  validate(createThreadSchema), 
+  chatController.createThread
+);
 
 /**
  * @swagger
@@ -125,6 +159,8 @@ router.post('/threads', validate(createThreadSchema), chatController.createThrea
  *   get:
  *     summary: Get a specific chat thread with its messages
  *     tags: [Chat]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: threadId
@@ -140,12 +176,20 @@ router.post('/threads', validate(createThreadSchema), chatController.createThrea
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ChatThread'
+ *       401:
+ *         description: Unauthorized - User not authenticated
+ *       403:
+ *         description: Forbidden - User does not have required organization role
  *       404:
  *         description: Thread not found
  *       500:
  *         description: Server error
  */
-router.get('/threads/:threadId', validate(getThreadSchema), chatController.getThread);
+router.get('/threads/:threadId', 
+  requireOrgRole(['member']),
+  validate(getThreadSchema), 
+  chatController.getThread
+);
 
 /**
  * @swagger
@@ -153,6 +197,8 @@ router.get('/threads/:threadId', validate(getThreadSchema), chatController.getTh
  *   delete:
  *     summary: Delete a chat thread and all its messages
  *     tags: [Chat]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: threadId
@@ -172,11 +218,19 @@ router.get('/threads/:threadId', validate(getThreadSchema), chatController.getTh
  *                 message:
  *                   type: string
  *                   example: Thread deleted successfully
+ *       401:
+ *         description: Unauthorized - User not authenticated
+ *       403:
+ *         description: Forbidden - User does not have required organization role
  *       404:
  *         description: Thread not found
  *       500:
  *         description: Server error
  */
-router.delete('/threads/:threadId', validate(deleteThreadSchema), chatController.deleteThread);
+router.delete('/threads/:threadId', 
+  requireOrgRole(['member']),
+  validate(deleteThreadSchema), 
+  chatController.deleteThread
+);
 
 export default router; 

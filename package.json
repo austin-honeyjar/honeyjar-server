@@ -15,7 +15,8 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "test:workflow": "tsx unit-test/workflow.test.ts",
     "test:base-workflow": "tsx unit-test/base-workflow.test.ts",
-    "test:base": "tsx unit-test/base.test.ts"
+    "test:base": "tsx unit-test/base.test.ts",
+    "test:auth": "tsx unit-test/auth.test.ts"
   },
   "dependencies": {
     "@clerk/backend": "^1.27.3",
