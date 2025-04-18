@@ -2,8 +2,9 @@ import { Router } from 'express';
 import { getAllTables, createTable, deleteTable } from '../controllers/csvController';
 import { validate } from '../middleware/validation.middleware';
 import { createTableSchema, deleteTableSchema } from '../validators/csv.validator';
+import { requirePermission } from '../middleware/permissions.middleware';
 import logger from '../utils/logger';
-
+import { requireOrgRole } from '../middleware/org.middleware';
 const router = Router();
 
 // Apply logging middleware to all routes
@@ -25,7 +26,9 @@ router.use((req, res, next) => {
  *   get:
  *     tags: [CSV]
  *     summary: Get all CSV tables
- *     description: Returns a list of all CSV tables with their data
+ *     description: Returns a list of all CSV tables with their data. Requires admin panel access.
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Success
@@ -35,8 +38,24 @@ router.use((req, res, next) => {
  *               type: array
  *               items:
  *                 $ref: '#/components/schemas/CSVTable'
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Forbidden - Admin access required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
-router.get('/tables', getAllTables);
+router.get('/tables', 
+  requirePermission('admin_panel'),
+  requireOrgRole(['admin']),
+  getAllTables
+);
 
 /**
  * @swagger
@@ -44,7 +63,9 @@ router.get('/tables', getAllTables);
  *   post:
  *     tags: [CSV]
  *     summary: Create a new CSV table
- *     description: Creates a new table from CSV data
+ *     description: Creates a new table from CSV data. Requires admin panel access.
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -78,14 +99,6 @@ router.get('/tables', getAllTables);
  *                 type: string
  *                 description: Name of the CSV file
  *                 example: 'users.csv'
- *           example:
- *             columns: ['id', 'name', 'age', 'email']
- *             data: [
- *               ['1', 'John Doe', '30', 'john@example.com'],
- *               ['2', 'Jane Smith', '25', 'jane@example.com'],
- *               ['3', 'Bob Johnson', '35', 'bob@example.com']
- *             ]
- *             fileName: 'users.csv'
  *     responses:
  *       200:
  *         description: Success
@@ -106,8 +119,22 @@ router.get('/tables', getAllTables);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Forbidden - Admin access required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.post('/tables', 
+  requirePermission('admin_panel'),
+  requireOrgRole(['admin']),
   validate(createTableSchema),
   createTable
 );
@@ -118,7 +145,9 @@ router.post('/tables',
  *   delete:
  *     tags: [CSV]
  *     summary: Delete a CSV table
- *     description: Deletes a CSV table and its metadata
+ *     description: Deletes a CSV table and its metadata. Requires admin panel access.
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: tableName
@@ -143,8 +172,22 @@ router.post('/tables',
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Forbidden - Admin access required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.delete('/tables', 
+  requirePermission('admin_panel'),
+  requireOrgRole(['admin']),
   validate(deleteTableSchema),
   deleteTable
 );
