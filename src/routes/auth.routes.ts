@@ -12,6 +12,9 @@ import {
   verifyEmailSchema
 } from '../validators/auth.validator';
 import logger from '../utils/logger';
+import { AuthService } from '../services/auth.service';
+import { AuthRequest } from '../types/request';
+import { ApiError } from '../utils/error';
 
 const router = Router();
 
@@ -30,53 +33,10 @@ router.use((req, res, next) => {
 
 /**
  * @swagger
- * /api/v1/auth/register:
- *   post:
- *     tags: [Auth]
- *     summary: Register a new user
- *     description: Creates a new user account
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *               - firstName
- *               - lastName
- *             properties:
- *               email:
- *                 type: string
- *                 format: email
- *               password:
- *                 type: string
- *                 format: password
- *               firstName:
- *                 type: string
- *               lastName:
- *                 type: string
- *     responses:
- *       201:
- *         description: User registered successfully
- *       400:
- *         description: Invalid input
- *       409:
- *         description: User already exists
- */
-router.post('/register', 
-  validate(registerSchema),
-  authController.register
-);
-
-/**
- * @swagger
  * /api/v1/auth/login:
  *   post:
+ *     summary: Login with Clerk session token
  *     tags: [Auth]
- *     summary: Login user
- *     description: Authenticates a user and returns access and refresh tokens
  *     requestBody:
  *       required: true
  *       content:
@@ -84,25 +44,90 @@ router.post('/register',
  *           schema:
  *             type: object
  *             required:
- *               - email
- *               - password
+ *               - token
  *             properties:
- *               email:
+ *               token:
  *                 type: string
- *                 format: email
- *               password:
- *                 type: string
- *                 format: password
+ *                 description: Clerk session token
  *     responses:
  *       200:
  *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 accessToken:
+ *                   type: string
+ *                   description: Access token for authentication
+ *                 refreshToken:
+ *                   type: string
+ *                   description: Refresh token for getting new access tokens
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                       description: User ID
+ *                     email:
+ *                       type: string
+ *                       description: User's email
+ *                     permissions:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *                       description: User's permissions
  *       401:
- *         description: Invalid credentials
+ *         description: Invalid token
+ *       500:
+ *         description: Server error
  */
-router.post('/login', 
-  validate(loginSchema),
-  authController.login
-);
+router.post('/login', async (req: AuthRequest, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Token is required'
+      });
+    }
+
+    const authService = AuthService.getInstance();
+    const session = await authService.verifySession(token);
+
+    if (!session) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Invalid token'
+      });
+    }
+
+    // Get user permissions
+    const permissions = await authService.getUserPermissions(session.userId);
+
+    logger.info('User logged in successfully', {
+      userId: session.userId,
+      permissions: permissions.permissions
+    });
+
+    res.json({
+      accessToken: token,
+      refreshToken: token, // Clerk handles refresh tokens internally
+      user: {
+        id: session.userId,
+        email: permissions.email,
+        permissions: permissions.permissions
+      }
+    });
+  } catch (error) {
+    logger.error('Login error:', { error });
+    res.status(401).json({
+      status: 'error',
+      message: 'Invalid token'
+    });
+  }
+});
 
 /**
  * @swagger
@@ -150,7 +175,20 @@ router.post('/refresh',
  */
 router.post('/logout', 
   authMiddleware,
-  authController.logout
+  async (req: AuthRequest, res) => {
+    try {
+      logger.info('User logged out', {
+        userId: req.user?.id
+      });
+      res.json({ status: 'success' });
+    } catch (error) {
+      logger.error('Logout error:', { error });
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to logout'
+      });
+    }
+  }
 );
 
 /**
@@ -295,12 +333,51 @@ router.post('/change-password',
  *     responses:
  *       200:
  *         description: User information
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                     permissions:
+ *                       type: array
+ *                       items:
+ *                         type: string
  *       401:
  *         description: Unauthorized
  */
-router.get('/me', 
+router.get('/me',
   authMiddleware,
-  authController.getCurrentUser
+  async (req: AuthRequest, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Unauthorized'
+        });
+      }
+
+      res.json({
+        user: {
+          id: req.user.id,
+          email: req.user.email,
+          permissions: req.user.permissions
+        }
+      });
+    } catch (error) {
+      logger.error('Error getting user info:', { error });
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to get user information'
+      });
+    }
+  }
 );
 
 /**
@@ -318,10 +395,33 @@ router.get('/me',
  *       401:
  *         description: Unauthorized
  */
-router.get('/permissions', 
-  authMiddleware,
-  authController.getUserPermissions
-);
+router.get('/permissions', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!req.user) {
+      logger.error('User not found in request');
+      return res.status(401).json({ 
+        status: 'error', 
+        message: 'User not authenticated' 
+      });
+    }
+
+    const authService = AuthService.getInstance();
+    const permissions = await authService.getUserPermissions(req.user.id);
+
+    logger.info('Returning user permissions:', {
+      userId: req.user.id,
+      permissions: permissions.permissions
+    });
+
+    res.json(permissions);
+  } catch (error) {
+    logger.error('Error getting user permissions:', error);
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to get user permissions' 
+    });
+  }
+});
 
 /**
  * @swagger

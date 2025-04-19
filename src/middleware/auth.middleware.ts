@@ -1,63 +1,66 @@
 import { Request, Response, NextFunction } from 'express';
-import { clerkClient } from '../config/clerk';
-import { UnauthorizedError, InvalidSessionError, SessionExpiredError, ClerkError } from '../errors/appError';
+import { AuthService } from '../services/auth.service';
 import logger from '../utils/logger';
-import { ClerkSession } from '../types/request';
-
-const isDev = process.env.NODE_ENV === 'devlocal';
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers.authorization;
     
     if (!authHeader) {
-      throw new UnauthorizedError('No authorization header');
+      logger.error('No authorization header');
+      return res.status(401).json({ 
+        status: 'error', 
+        message: 'No authorization header' 
+      });
     }
 
     const token = authHeader.split(' ')[1];
     if (!token) {
-      throw new UnauthorizedError('No token provided');
+      logger.error('No token provided');
+      return res.status(401).json({ 
+        status: 'error', 
+        message: 'No token provided' 
+      });
     }
 
+    logger.info('Auth middleware - Token received:', {
+      tokenLength: token.length,
+      tokenPrefix: token.substring(0, 10) + '...',
+      path: req.path,
+      method: req.method
+    });
+
     try {
-      // Verify the session token with Clerk
-      const session = await clerkClient.sessions.getSession(token);
+      // Get auth service instance
+      const authService = AuthService.getInstance();
+
+      // Verify session and get session details
+      const session = await authService.verifySession(token);
       
-      if (!session) {
-        throw new InvalidSessionError();
-      }
+      // Get user permissions
+      const permissions = await authService.getUserPermissions(session.userId);
 
-      // Convert Clerk session to our ClerkSession type
-      const clerkSession: ClerkSession = {
-        userId: session.userId,
-        sessionId: session.id,
-        status: session.status,
-        lastActiveAt: new Date(session.lastActiveAt).getTime(),
-        expireAt: new Date(session.expireAt).getTime(),
-        abandonAt: new Date(session.abandonAt).getTime(),
-        createdAt: new Date(session.createdAt).getTime(),
-        updatedAt: new Date(session.updatedAt).getTime()
-      };
-
-      // Check if session is expired
-      if (clerkSession.expireAt < Date.now()) {
-        throw new SessionExpiredError();
-      }
-
-      // Attach the session and user info to the request
-      req.session = clerkSession;
+      // Attach the session, user info, and permissions to the request
+      req.session = session;
       req.user = {
-        id: clerkSession.userId,
-        sessionId: clerkSession.sessionId
+        id: session.userId,
+        sessionId: session.sessionId,
+        permissions: permissions.permissions
       };
 
-      logger.info(`Authenticated user ${clerkSession.userId} with session ${clerkSession.sessionId}`);
+      logger.info(`Authenticated user ${session.userId} with session ${session.sessionId}`, {
+        permissions: permissions.permissions
+      });
       next();
     } catch (error) {
-      if (error instanceof UnauthorizedError) {
-        throw error;
-      }
-      throw new ClerkError(error instanceof Error ? error.message : 'Unknown Clerk error');
+      logger.error('Authentication error:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      return res.status(401).json({ 
+        status: 'error', 
+        message: 'Authentication failed' 
+      });
     }
   } catch (error) {
     logger.error('Authentication error:', { 
@@ -66,6 +69,9 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       method: req.method,
       ip: req.ip
     });
-    next(error);
+    return res.status(500).json({ 
+      status: 'error', 
+      message: 'Internal server error' 
+    });
   }
 }; 

@@ -9,17 +9,23 @@ const logDir = join(process.cwd(), 'logs');
 
 // Configure Winston
 const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
+  level: 'debug', // Always use debug level to see all logs
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.json()
   ),
   transports: [
-    // Write all logs to console
+    // Write all logs to console with detailed formatting
     new winston.transports.Console({
       format: winston.format.combine(
         winston.format.colorize(),
-        winston.format.simple()
+        winston.format.printf(({ level, message, timestamp, ...metadata }) => {
+          let msg = `${timestamp} [${level}] : ${message}`;
+          if (Object.keys(metadata).length > 0) {
+            msg += ` ${JSON.stringify(metadata, null, 2)}`;
+          }
+          return msg;
+        })
       )
     }),
     // Write all logs to combined.log

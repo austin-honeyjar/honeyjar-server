@@ -8,6 +8,13 @@
       "when": 1744513018053,
       "tag": "0000_warm_iron_fist",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1745045845502,
+      "tag": "0001_jittery_northstar",
+      "breakpoints": true
     }
   ]
 }

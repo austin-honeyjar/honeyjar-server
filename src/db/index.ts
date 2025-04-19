@@ -24,6 +24,10 @@ export * from './schema';
 // Function to ensure tables are created and migrations are run
 export const ensureTables = async () => {
   try {
+    // Enable UUID extension
+    await client`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+    console.log('UUID extension enabled');
+    
     // Run migrations from the project root's migrations folder
     await migrate(db, { migrationsFolder: join(process.cwd(), 'migrations') });
     console.log('Database migrations completed successfully');

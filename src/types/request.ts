@@ -13,15 +13,19 @@ export interface ClerkSession {
   updatedAt: number;
 }
 
+export interface User {
+  id: string;
+  sessionId: string;
+  email: string;
+  permissions: string[];
+}
+
 // Extend Express Request type
 declare global {
   namespace Express {
     interface Request {
-      user?: {
-        id: string;
-        sessionId: string;
-      };
       session?: ClerkSession;
+      user?: User;
       auth: {
         userId: string;
         token?: string;

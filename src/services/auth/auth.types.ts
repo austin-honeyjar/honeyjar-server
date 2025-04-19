@@ -8,7 +8,7 @@ export interface User {
 
 export interface UserPermissions {
   permissions: string[];
-  roles: string[];
+  roles?: string[];
 }
 
 export interface AuthResponse {
@@ -20,6 +20,11 @@ export interface AuthResponse {
 export interface TokenResponse {
   accessToken: string;
   refreshToken: string;
+  user: {
+    id: string;
+    email: string;
+    permissions: string[];
+  };
 }
 
 export interface AuthService {
