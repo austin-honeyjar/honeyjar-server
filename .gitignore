@@ -70,3 +70,11 @@ yarn-error.log*
 *.js
 !jest.config.js
 dist/
+
+# Docker related
+*.tar
+*.tar.gz
+.docker/
+docker-volumes/
+postgres_data/
+*.zip
