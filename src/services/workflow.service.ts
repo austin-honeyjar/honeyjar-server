@@ -121,7 +121,7 @@ export class WorkflowService {
     } else if (activeWorkflows.length > 1) {
       // This indicates a problem state - log an error and return the newest active one as a fallback
       console.error(`getWorkflowByThreadId: Found MULTIPLE ACTIVE workflows for thread ${threadId}. Returning the most recently created active one.`);
-      return activeWorkflows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+      return activeWorkflows.sort((a, b) => new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime())[0];
     } else {
       // No active workflows found
       console.log(`getWorkflowByThreadId: No ACTIVE workflow found for thread ${threadId}. Returning null.`);
