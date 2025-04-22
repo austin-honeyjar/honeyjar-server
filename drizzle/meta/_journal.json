@@ -15,6 +15,20 @@
       "when": 1745045845502,
       "tag": "0001_jittery_northstar",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1745100202151,
+      "tag": "0002_curly_vindicator",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1745100301018,
+      "tag": "0003_milky_pixie",
+      "breakpoints": true
     }
   ]
 }

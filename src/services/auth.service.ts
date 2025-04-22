@@ -332,4 +332,174 @@ export class AuthService {
       throw new ApiError(401, 'Invalid credentials');
     }
   }
+
+  /**
+   * Check if a user has a specific role in an organization
+   * @param userId The user's Clerk ID
+   * @param orgId The organization ID
+   * @param roles The roles to check, can be a single role or an array of roles
+   * @returns True if user has any of the specified roles
+   */
+  public async hasOrgRole(userId: string, orgId: string, roles: string[]): Promise<boolean> {
+    try {
+      logger.info('Checking organization role', { userId, orgId, roles });
+      
+      // First check if user has system-level permissions
+      let user;
+      try {
+        user = await this.clerk.users.getUser(userId);
+        logger.info('Retrieved user', { userId, hasMetadata: !!user.publicMetadata });
+      } catch (error) {
+        logger.error('Error getting user from Clerk:', { error, userId });
+        return false;
+      }
+      
+      const metadata = user.publicMetadata as Record<string, any>;
+      const hasSystemPermissions = metadata?.permissions?.includes('org:sys_memberships:manage') || 
+                               metadata?.permissions?.includes('org:sys_memberships:read');
+      
+      if (hasSystemPermissions) {
+        logger.info('User has system-level permissions, allowing access', { userId, orgId });
+        return true;
+      }
+
+      // If no system permissions, check organization role
+      try {
+        // Get the user's organization memberships
+        const { data: memberships } = await this.clerk.users.getOrganizationMembershipList({
+          userId,
+        });
+
+        logger.info('Retrieved organization memberships', { 
+          userId, 
+          orgId, 
+          membershipCount: memberships?.length 
+        });
+
+        // Find the membership for the specified organization
+        const membership = memberships.find((m: any) => m.organization.id === orgId);
+        
+        if (!membership) {
+          logger.info('User is not a member of the organization', { userId, orgId });
+          return false;
+        }
+
+        // Check if the user's role is in the allowed roles
+        // Clerk uses org: prefix for roles, so we need to check both with and without prefix
+        const userRole = membership.role;
+        // Convert roles to array if it's a string
+        const rolesArray = Array.isArray(roles) ? roles : [roles];
+        
+        const hasRole = rolesArray.some(role => 
+          role === userRole || 
+          role === userRole.replace('org:', '') || 
+          `org:${role}` === userRole
+        );
+
+        logger.info('Role check result', { userId, orgId, userRole, roles: rolesArray, hasRole });
+        return hasRole;
+      } catch (error) {
+        logger.error('Error checking organization role', { error, userId, orgId });
+        return false;
+      }
+    } catch (error) {
+      logger.error('Error in hasOrgRole', { error, userId, orgId });
+      return false;
+    }
+  }
+
+  /**
+   * Get user details
+   * @param userId The user's Clerk ID
+   * @returns User object with id, email, name, and permissions
+   */
+  public async getUser(userId: string): Promise<{ id: string; email: string; name: string; permissions: string[] }> {
+    try {
+      logger.info('Getting user details', { userId });
+      
+      let user;
+      try {
+        user = await this.clerk.users.getUser(userId);
+        logger.info('Got user from Clerk:', { userId: user?.id });
+      } catch (error) {
+        logger.error('Error getting user from Clerk:', { error, userId });
+        throw new Error('Failed to get user from Clerk');
+      }
+      
+      if (!user) {
+        logger.error('User not found in Clerk:', { userId });
+        throw new Error('User not found');
+      }
+      
+      // Get user email
+      const email = user.emailAddresses[0]?.emailAddress || '';
+      
+      // Get user name
+      const firstName = user.firstName || '';
+      const lastName = user.lastName || '';
+      const name = `${firstName} ${lastName}`.trim();
+      
+      // Get user permissions
+      const metadata = user.publicMetadata as Record<string, any>;
+      const permissions = metadata?.permissions || [];
+      
+      return {
+        id: user.id,
+        email,
+        name,
+        permissions
+      };
+    } catch (error) {
+      logger.error('Error in getUser:', { error, userId });
+      throw error;
+    }
+  }
+
+  /**
+   * Get all users with a specific role
+   * @param role The role to check for
+   * @returns Array of users with the role
+   */
+  public async getUsersWithRole(role: string): Promise<Array<{ id: string; email: string; name: string }>> {
+    try {
+      logger.info('Getting users with role', { role });
+      
+      const response = await this.clerk.users.getUserList();
+      const usersWithRole: Array<{ id: string; email: string; name: string }> = [];
+      
+      // Process each user in the response
+      for (const user of response.data) {
+        // Get the user's organization memberships to check roles
+        try {
+          const { data: memberships } = await this.clerk.users.getOrganizationMembershipList({
+            userId: user.id
+          });
+          
+          // Check if the user has the role in any organization
+          const hasRole = memberships.some(membership => 
+            membership.role === role || 
+            membership.role === `org:${role}` || 
+            membership.role.replace('org:', '') === role
+          );
+          
+          if (hasRole) {
+            usersWithRole.push({
+              id: user.id,
+              email: user.emailAddresses[0]?.emailAddress || '',
+              name: `${user.firstName || ''} ${user.lastName || ''}`.trim()
+            });
+          }
+        } catch (error) {
+          logger.error('Error getting organization memberships:', { error, userId: user.id });
+          // Skip this user
+          continue;
+        }
+      }
+      
+      return usersWithRole;
+    } catch (error) {
+      logger.error('Error getting users with role:', { error });
+      throw error;
+    }
+  }
 } 

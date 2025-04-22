@@ -51,11 +51,11 @@ export interface AuthService {
 
   getUser(userId: string): Promise<User>;
 
-  getUserPermissions(userId: string): Promise<UserPermissions>;
+  getUserPermissions(userId: string): Promise<string[]>;
 
   getUsersWithPermission(permission: string): Promise<User[]>;
 
   verifyToken(token: string): Promise<{ isValid: boolean; userId?: string }>;
 
-  hasOrgRole(userId: string, orgId: string, roles: string | string[]): Promise<boolean>;
+  hasOrgRole(userId: string, orgId: string, roles: string[]): Promise<boolean>;
 } 

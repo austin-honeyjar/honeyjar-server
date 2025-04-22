@@ -104,11 +104,31 @@ router.post('/login', async (req: AuthRequest, res) => {
     }
 
     // Get user permissions
-    const permissions = await authService.getUserPermissions(session.userId);
+    const userPermissions = await authService.getUserPermissions(session.userId);
+    
+    // Handle both the old and new format
+    let permissionsArray: string[] = [];
+    let userEmail = '';
+    
+    if (Array.isArray(userPermissions)) {
+      permissionsArray = userPermissions;
+      
+      // If we don't have the email from permissions, try to get it from the user
+      try {
+        const user = await authService.getUser(session.userId);
+        userEmail = user.email;
+      } catch (error) {
+        logger.warn('Could not get user email', { error });
+      }
+    } else {
+      // Old format
+      permissionsArray = userPermissions.permissions || [];
+      userEmail = userPermissions.email || '';
+    }
 
     logger.info('User logged in successfully', {
       userId: session.userId,
-      permissions: permissions.permissions
+      permissions: permissionsArray
     });
 
     res.json({
@@ -116,8 +136,8 @@ router.post('/login', async (req: AuthRequest, res) => {
       refreshToken: token, // Clerk handles refresh tokens internally
       user: {
         id: session.userId,
-        email: permissions.email,
-        permissions: permissions.permissions
+        email: userEmail,
+        permissions: permissionsArray
       }
     });
   } catch (error) {
@@ -386,42 +406,87 @@ router.get('/me',
  *   get:
  *     tags: [Auth]
  *     summary: Get user permissions
- *     description: Returns the current user's permissions
+ *     description: Returns the user's permissions
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: User permissions
+ *         description: User permissions retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 permissions:
+ *                   type: array
+ *                   items:
+ *                     type: string
  *       401:
  *         description: Unauthorized
  */
-router.get('/permissions', authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    if (!req.user) {
-      logger.error('User not found in request');
-      return res.status(401).json({ 
-        status: 'error', 
-        message: 'User not authenticated' 
+router.get('/permissions', 
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      if (!req.user?.id) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'User not authenticated'
+        });
+      }
+
+      try {
+        const authService = AuthService.getInstance();
+        const userPermissions = await authService.getUserPermissions(req.user.id);
+        
+        // Check if userPermissions is an array (new implementation) or an object (old implementation)
+        let permissionsArray: string[] = [];
+        
+        if (Array.isArray(userPermissions)) {
+          permissionsArray = userPermissions;
+        } else {
+          // Assume it's the old UserPermissions object format
+          permissionsArray = userPermissions.permissions || [];
+        }
+
+        // Check if user has admin role in any organization
+        const orgId = req.headers['x-organization-id'] as string;
+        if (orgId) {
+          try {
+            const hasAdminRole = await authService.hasOrgRole(req.user.id, orgId, ['admin']);
+            if (hasAdminRole) {
+              permissionsArray.push('org:feature:admin_panel');
+            }
+          } catch (error) {
+            logger.error('Error checking org role:', { error });
+            // Continue without admin role
+          }
+        }
+
+        logger.info('Retrieved user permissions', {
+          userId: req.user.id,
+          permissions: permissionsArray
+        });
+
+        res.json({
+          permissions: permissionsArray
+        });
+      } catch (error) {
+        logger.error('Error getting permissions:', { error });
+        res.status(500).json({
+          status: 'error',
+          message: 'Failed to get permissions'
+        });
+      }
+    } catch (error) {
+      logger.error('Error getting permissions:', { error });
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to get permissions'
       });
     }
-
-    const authService = AuthService.getInstance();
-    const permissions = await authService.getUserPermissions(req.user.id);
-
-    logger.info('Returning user permissions:', {
-      userId: req.user.id,
-      permissions: permissions.permissions
-    });
-
-    res.json(permissions);
-  } catch (error) {
-    logger.error('Error getting user permissions:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: 'Failed to get user permissions' 
-    });
   }
-});
+);
 
 /**
  * @swagger
@@ -451,6 +516,96 @@ router.get('/users',
   authMiddleware,
   requireOrgRole(['admin']),
   authController.getUsersWithPermission
+);
+
+/**
+ * @swagger
+ * /api/v1/auth/permissions/{userId}:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Get permissions for a specific user
+ *     description: Returns permissions for the specified user
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID of the user to get permissions for
+ *     responses:
+ *       200:
+ *         description: User permissions retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: User not found
+ */
+router.get('/permissions/:userId', 
+  authMiddleware,
+  async (req: AuthRequest, res) => {
+    try {
+      const userId = req.params.userId;
+      
+      if (!userId) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'User ID is required'
+        });
+      }
+
+      try {
+        const authService = AuthService.getInstance();
+        const userPermissions = await authService.getUserPermissions(userId);
+        
+        // Check if userPermissions is an array (new implementation) or an object (old implementation)
+        let permissionsArray: string[] = [];
+        
+        if (Array.isArray(userPermissions)) {
+          permissionsArray = userPermissions;
+        } else {
+          // Assume it's the old UserPermissions object format
+          permissionsArray = userPermissions.permissions || [];
+        }
+
+        // Check if user has admin role in any organization
+        const orgId = req.headers['x-organization-id'] as string;
+        if (orgId) {
+          try {
+            const hasAdminRole = await authService.hasOrgRole(userId, orgId, ['admin']);
+            if (hasAdminRole) {
+              permissionsArray.push('org:feature:admin_panel');
+            }
+          } catch (error) {
+            logger.error('Error checking org role:', { error });
+            // Continue without admin role
+          }
+        }
+
+        logger.info('Retrieved user permissions', {
+          userId,
+          permissions: permissionsArray
+        });
+
+        res.json({
+          permissions: permissionsArray
+        });
+      } catch (error) {
+        logger.error('Error getting permissions:', { error });
+        res.status(500).json({
+          status: 'error',
+          message: 'Failed to get permissions'
+        });
+      }
+    } catch (error) {
+      logger.error('Error getting permissions:', { error });
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to get permissions'
+      });
+    }
+  }
 );
 
 export default router; 

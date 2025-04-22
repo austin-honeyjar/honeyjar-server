@@ -3,28 +3,41 @@ import { db } from '../db';
 import { chatMessages, chatThreads } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import logger from '../utils/logger';
-import { CreateChatInput, CreateThreadInput } from '../validators/chat.validator';
-import { v4 as uuidv4 } from 'uuid';
+import { CreateChatInput } from '../validators/chat.validator';
 import { WorkflowService } from '../services/workflow.service';
 import { ChatService } from '../services/chat.service';
-
-// Temporary test user ID for development
-const TEST_USER_ID = 'test_user_123';
+import { v4 as uuidv4 } from 'uuid';
 
 export const chatController = {
-  
   // Create a new chat message
   create: async (req: Request, res: Response) => {
     try {
-      const { threadId, content, role } = req.body as CreateChatInput;
-      const userId = TEST_USER_ID;
+      const { content, role } = req.body as CreateChatInput;
+      const { threadId } = req.params;
+      const userId = req.user?.id;
+      const orgId = req.headers['x-organization-id'] as string;
 
-      // Verify thread exists and belongs to user
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      if (!orgId) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Organization ID is required'
+        });
+      }
+
+      // Verify thread exists and belongs to user and organization
       const thread = await db.select()
         .from(chatThreads)
         .where(and(
           eq(chatThreads.id, threadId),
-          eq(chatThreads.userId, userId)
+          eq(chatThreads.userId, userId),
+          eq(chatThreads.orgId, orgId)
         ))
         .limit(1);
 
@@ -78,13 +91,32 @@ export const chatController = {
   // List all threads for a user
   listThreads: async (req: Request, res: Response) => {
     try {
-      const userId = TEST_USER_ID;
+      const userId = req.user?.id;
+      const orgId = req.headers['x-organization-id'] as string;
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      if (!orgId) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Organization ID is required'
+        });
+      }
+
       const threads = await db.select()
         .from(chatThreads)
-        .where(eq(chatThreads.userId, userId))
+        .where(and(
+          eq(chatThreads.userId, userId),
+          eq(chatThreads.orgId, orgId)
+        ))
         .orderBy(chatThreads.createdAt);
 
-      logger.info('Retrieved chat threads', { userId, count: threads.length });
+      logger.info('Retrieved chat threads', { userId, orgId, count: threads.length });
       res.json(threads);
     } catch (error) {
       logger.error('Error listing chat threads:', error);
@@ -99,14 +131,30 @@ export const chatController = {
   getThread: async (req: Request, res: Response) => {
     try {
       const { threadId } = req.params;
-      const userId = TEST_USER_ID;
+      const userId = req.user?.id;
+      const orgId = req.headers['x-organization-id'] as string;
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      if (!orgId) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Organization ID is required'
+        });
+      }
 
       // Get thread
       const [thread] = await db.select()
         .from(chatThreads)
         .where(and(
           eq(chatThreads.id, threadId),
-          eq(chatThreads.userId, userId)
+          eq(chatThreads.userId, userId),
+          eq(chatThreads.orgId, orgId)
         ))
         .limit(1);
 
@@ -152,14 +200,30 @@ export const chatController = {
   createThread: async (req: Request, res: Response) => {
     try {
       const { title } = req.body as CreateThreadInput;
-      const userId = TEST_USER_ID;
+      const userId = req.user?.id;
+      const orgId = req.headers['x-organization-id'] as string;
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      if (!orgId) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Organization ID is required'
+        });
+      }
 
       // Create thread
       const [thread] = await db.insert(chatThreads)
         .values({
           id: uuidv4(),
           title,
-          userId
+          userId,
+          orgId
         })
         .returning();
 
@@ -211,14 +275,30 @@ export const chatController = {
   deleteThread: async (req: Request, res: Response) => {
     try {
       const { threadId } = req.params;
-      const userId = TEST_USER_ID;
+      const userId = req.user?.id;
+      const orgId = req.headers['x-organization-id'] as string;
 
-      // Verify thread exists and belongs to user
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      if (!orgId) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Organization ID is required'
+        });
+      }
+
+      // Verify thread exists and belongs to user and organization
       const [thread] = await db.select()
         .from(chatThreads)
         .where(and(
           eq(chatThreads.id, threadId),
-          eq(chatThreads.userId, userId)
+          eq(chatThreads.userId, userId),
+          eq(chatThreads.orgId, orgId)
         ))
         .limit(1);
 
@@ -245,7 +325,7 @@ export const chatController = {
       await db.delete(chatThreads)
         .where(eq(chatThreads.id, threadId));
 
-      logger.info('Deleted chat thread', { threadId, userId });
+      logger.info('Deleted chat thread', { threadId, userId, orgId });
       res.status(200).json({ message: 'Thread deleted successfully' });
     } catch (error) {
       logger.error('Error deleting chat thread:', error);
