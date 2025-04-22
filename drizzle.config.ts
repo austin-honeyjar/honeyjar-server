@@ -14,14 +14,15 @@ if (!process.env.PG_USER || !process.env.PG_HOST || !process.env.PG_DATABASE || 
 export default {
   schema: './src/db/schema.ts',
   out: './drizzle',
+  driver: 'pg',
   dbCredentials: {
     host: process.env.PG_HOST,
     port: parseInt(process.env.PG_PORT),
     user: process.env.PG_USER,
     password: process.env.PG_PASSWORD,
-    database: process.env.PG_DATABASE
+    database: process.env.PG_DATABASE,
+    ssl: false
   },
-  dialect: 'postgresql',
   verbose: true,
   strict: true,
 } satisfies Config; 

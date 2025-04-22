@@ -11,6 +11,7 @@ import { join } from 'path';
 import logger from './utils/logger';
 import csvRoutes from './routes/csv.routes';
 import chatRoutes from './routes/chat.routes';
+import threadsRoutes from './routes/threads.routes';
 import { WorkflowService } from './services/workflow.service';
 
 // Initialize express app
@@ -26,6 +27,7 @@ app.use(rateLimiter);
 app.use(config.server.apiPrefix + '/auth', authRoutes);
 app.use(config.server.apiPrefix + '/csv', csvRoutes);
 app.use(config.server.apiPrefix + '/chat', chatRoutes);
+app.use(config.server.apiPrefix + '/threads', threadsRoutes);
 
 // Health check routes (unversioned)
 app.use('/health', healthRoutes);

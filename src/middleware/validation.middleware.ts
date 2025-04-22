@@ -5,13 +5,8 @@ import { BadRequestError } from '../errors/appError';
 export const validate = (schema: AnyZodObject) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Validate both body and params
-      const data = {
-        body: req.body,
-        params: req.params,
-        query: req.query
-      };
-      await schema.parseAsync(data);
+      // Only validate the request body
+      await schema.parseAsync(req.body);
       return next();
     } catch (error) {
       if (error instanceof ZodError) {

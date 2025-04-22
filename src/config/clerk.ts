@@ -1,4 +1,5 @@
 import { createClerkClient } from '@clerk/backend';
+import logger from '../utils/logger';
 
 if (!process.env.CLERK_SECRET_KEY) {
   throw new Error('CLERK_SECRET_KEY is not defined in environment variables');
@@ -6,5 +7,13 @@ if (!process.env.CLERK_SECRET_KEY) {
 
 // Initialize Clerk client
 export const clerkClient = createClerkClient({
-  secretKey: process.env.CLERK_SECRET_KEY
+  secretKey: process.env.CLERK_SECRET_KEY,
+  // Add error handling
+  onError: (error) => {
+    logger.error('Clerk client error:', {
+      error,
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined
+    });
+  }
 }); 
