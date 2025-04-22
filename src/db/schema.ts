@@ -14,6 +14,7 @@ export const csvMetadata = pgTable('csv_metadata', {
 export const chatThreads = pgTable('chat_threads', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull(),
+  orgId: text('org_id'),
   title: text('title').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });

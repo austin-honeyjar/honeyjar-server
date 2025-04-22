@@ -8,7 +8,7 @@ export interface User {
 
 export interface UserPermissions {
   permissions: string[];
-  roles: string[];
+  roles?: string[];
 }
 
 export interface AuthResponse {
@@ -20,6 +20,11 @@ export interface AuthResponse {
 export interface TokenResponse {
   accessToken: string;
   refreshToken: string;
+  user: {
+    id: string;
+    email: string;
+    permissions: string[];
+  };
 }
 
 export interface AuthService {
@@ -46,11 +51,11 @@ export interface AuthService {
 
   getUser(userId: string): Promise<User>;
 
-  getUserPermissions(userId: string): Promise<UserPermissions>;
+  getUserPermissions(userId: string): Promise<string[]>;
 
   getUsersWithPermission(permission: string): Promise<User[]>;
 
   verifyToken(token: string): Promise<{ isValid: boolean; userId?: string }>;
 
-  hasOrgRole(userId: string, orgId: string, roles: string | string[]): Promise<boolean>;
+  hasOrgRole(userId: string, orgId: string, roles: string[]): Promise<boolean>;
 } 

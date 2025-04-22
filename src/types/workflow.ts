@@ -79,10 +79,10 @@ export interface Workflow {
   threadId: string;
   templateId: string;
   status: WorkflowStatus;
-  currentStepId?: string;
+  currentStepId: string | null;
   steps: WorkflowStep[];
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export interface WorkflowTemplate {
@@ -94,6 +94,7 @@ export interface WorkflowTemplate {
     name: string;
     description: string;
     prompt?: string;
+    order?: number;
     dependencies: string[];
     metadata?: Record<string, any>;
   }>;

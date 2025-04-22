@@ -2,11 +2,8 @@ import { z } from 'zod';
 
 // Schema for creating a chat message
 export const createChatSchema = z.object({
-  body: z.object({
-    threadId: z.string().min(1, 'Thread ID is required'),
-    content: z.string().min(1, 'Message content is required'),
-    role: z.enum(['user', 'assistant']).default('user')
-  })
+  content: z.string().min(1, 'Message content is required'),
+  role: z.enum(['user', 'assistant']).default('user'),
 });
 
 // Schema for creating a chat thread
@@ -31,7 +28,7 @@ export const deleteThreadSchema = z.object({
 });
 
 // Export types
-export type CreateChatInput = z.infer<typeof createChatSchema>['body'];
+export type CreateChatInput = z.infer<typeof createChatSchema>;
 export type CreateThreadInput = z.infer<typeof createThreadSchema>['body'];
 export type GetThreadInput = z.infer<typeof getThreadSchema>;
 export type DeleteThreadInput = z.infer<typeof deleteThreadSchema>; 

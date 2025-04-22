@@ -6,15 +6,12 @@ const options: swaggerJsdoc.Options = {
     info: {
       title: 'Honeyjar API',
       version: '1.0.0',
-      description: 'API documentation for the Honeyjar server',
-      contact: {
-        name: 'API Support',
-      },
+      description: 'API for Honeyjar application',
     },
     servers: [
       {
         url: 'http://localhost:3005',
-        description: 'Local development server',
+        description: 'Development server',
       },
     ],
     components: {
@@ -23,120 +20,66 @@ const options: swaggerJsdoc.Options = {
           type: 'http',
           scheme: 'bearer',
           bearerFormat: 'JWT',
-          description: 'Enter your Clerk session token in the format: Bearer <token>'
-        },
-        clerkAuth: {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-          description: 'Clerk authentication token',
         },
       },
       schemas: {
-        Error: {
-          type: 'object',
-          properties: {
-            status: {
-              type: 'string',
-              example: 'error',
-            },
-            message: {
-              type: 'string',
-              example: 'Error message',
-            },
-          },
-        },
-        HealthCheck: {
-          type: 'object',
-          properties: {
-            status: {
-              type: 'string',
-              example: 'ok',
-            },
-            timestamp: {
-              type: 'string',
-              format: 'date-time',
-            },
-            uptime: {
-              type: 'number',
-              description: 'Server uptime in seconds',
-            },
-          },
-        },
-        CSVTable: {
+        Thread: {
           type: 'object',
           properties: {
             id: {
-              type: 'number',
-              description: 'Table ID',
-            },
-            tableName: {
               type: 'string',
-              description: 'Name of the table',
+              format: 'uuid',
+              description: 'Unique identifier for the thread',
             },
-            fileName: {
+            userId: {
               type: 'string',
-              description: 'Original file name',
+              description: 'ID of the user who owns the thread',
             },
-            columnNames: {
-              type: 'array',
-              items: {
-                type: 'string',
-              },
-              description: 'Column names in the table',
+            title: {
+              type: 'string',
+              description: 'Title of the thread',
             },
             createdAt: {
               type: 'string',
               format: 'date-time',
-              description: 'Creation timestamp',
-            },
-            data: {
-              type: 'array',
-              items: {
-                type: 'object',
-                additionalProperties: true,
-              },
-              description: 'Table data',
+              description: 'When the thread was created',
             },
           },
+          required: ['id', 'userId', 'title', 'createdAt'],
         },
-        CreateTableRequest: {
+        Message: {
           type: 'object',
-          required: ['columns', 'data', 'fileName'],
           properties: {
-            columns: {
-              type: 'array',
-              items: {
-                type: 'string',
-              },
-              description: 'Column names',
-            },
-            data: {
-              type: 'array',
-              items: {
-                type: 'array',
-                items: {
-                  type: 'string',
-                },
-              },
-              description: 'Table data rows',
-            },
-            fileName: {
+            id: {
               type: 'string',
-              description: 'Original file name',
+              format: 'uuid',
+              description: 'Unique identifier for the message',
+            },
+            threadId: {
+              type: 'string',
+              format: 'uuid',
+              description: 'ID of the thread this message belongs to',
+            },
+            userId: {
+              type: 'string',
+              description: 'ID of the user who sent the message',
+            },
+            role: {
+              type: 'string',
+              enum: ['user', 'assistant'],
+              description: 'Role of the message sender',
+            },
+            content: {
+              type: 'string',
+              description: 'Content of the message',
+            },
+            createdAt: {
+              type: 'string',
+              format: 'date-time',
+              description: 'When the message was created',
             },
           },
-        },
-      },
-      parameters: {
-        version: {
-          in: 'header',
-          name: 'Accept',
-          description: 'API version',
-          schema: {
-            type: 'string',
-            default: 'application/json; version=v1',
-          },
+          required: ['id', 'threadId', 'userId', 'role', 'content', 'createdAt'],
         },
       },
     },
@@ -144,30 +87,9 @@ const options: swaggerJsdoc.Options = {
       {
         bearerAuth: [],
       },
-      {
-        clerkAuth: [],
-      },
-    ],
-    tags: [
-      {
-        name: 'Health',
-        description: 'Health check endpoints',
-      },
-      {
-        name: 'Auth',
-        description: 'Authentication related endpoints',
-      },
-      {
-        name: 'CSV',
-        description: 'CSV table management endpoints',
-      },
-      {
-        name: 'v1',
-        description: 'Version 1 of the API',
-      },
     ],
   },
-  apis: ['./src/routes/*.ts', './src/routes/**/*.ts'],
+  apis: ['./src/routes/*.ts'],
 };
 
 export const swaggerSpec = swaggerJsdoc(options);
