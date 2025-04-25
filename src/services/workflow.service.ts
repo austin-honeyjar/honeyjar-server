@@ -12,6 +12,10 @@ import logger from '../utils/logger';
 import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow';
 import { DUMMY_WORKFLOW_TEMPLATE } from "../templates/workflows/dummy-workflow";
 import { LAUNCH_ANNOUNCEMENT_TEMPLATE } from "../templates/workflows/launch-announcement";
+import { db } from "../db";
+import { chatThreads, chatMessages } from "../db/schema";
+import { eq } from "drizzle-orm";
+
 export class WorkflowService {
   private dbService: WorkflowDBService;
   private openAIService: OpenAIService;
@@ -243,6 +247,258 @@ export class WorkflowService {
   }
 
   /**
+   * Process workflow selection with OpenAI to match user input to a valid workflow type
+   */
+  async processWorkflowSelection(stepId: string, userInput: string): Promise<string> {
+    try {
+      const step = await this.dbService.getStep(stepId);
+      if (!step) {
+        throw new Error(`Step not found: ${stepId}`);
+      }
+
+      // Get the workflow to check for context
+      const workflow = await this.dbService.getWorkflow(step.workflowId);
+      if (!workflow) {
+        throw new Error(`Workflow not found for step: ${stepId}`);
+      }
+      
+      // Check if we're in the Launch Announcement workflow handling the announcement type selection
+      // This is a special case where we need to handle sub-types like "Product Launch"
+      const template = await this.dbService.getTemplate(workflow.templateId);
+      if (template && 
+          template.name === "Launch Announcement" && 
+          step.name === "Announcement Type Selection") {
+        
+        // This is within the Launch Announcement workflow, not the base workflow selection
+        logger.info('Processing announcement type selection within Launch Announcement workflow', {
+          stepId,
+          userInput
+        });
+        
+        // Add a direct message about the announcement type
+        await this.addDirectMessage(workflow.threadId, `Announcement type selected: ${userInput}`);
+        
+        // Process normally within the Launch Announcement workflow
+        // No need to set aiSuggestion as this is just a sub-type selection
+        return userInput;
+      }
+
+      // Normal base workflow selection processing
+      if (step.name !== "Workflow Selection" || !step.metadata?.options) {
+        throw new Error(`Invalid step for workflow selection processing: ${step.name}`);
+      }
+
+      const availableOptions = step.metadata.options as string[];
+      logger.info('Processing workflow selection', {
+        stepId,
+        userInput,
+        availableOptions
+      });
+
+      // Add a direct message to show we're processing the selection
+      await this.addDirectMessage(workflow.threadId, `Processing workflow selection: "${userInput}"`);
+
+      // If user input exactly matches one of the options, use it directly
+      const exactMatch = availableOptions.find(option => 
+        option.toLowerCase() === userInput.toLowerCase()
+      );
+      
+      if (exactMatch) {
+        logger.info('Found exact match for workflow selection', { userInput, match: exactMatch });
+        await this.dbService.updateStep(stepId, {
+          aiSuggestion: exactMatch
+        });
+        
+        // Add a direct message about the exact match
+        await this.addDirectMessage(workflow.threadId, `Selected workflow: ${exactMatch}`);
+        
+        return exactMatch;
+      }
+
+      // Check for partial matches before using OpenAI
+      const partialMatches = availableOptions.filter(option => 
+        option.toLowerCase().includes(userInput.toLowerCase()) || 
+        userInput.toLowerCase().includes(option.toLowerCase().split(' ')[0])
+      );
+      
+      if (partialMatches.length === 1) {
+        logger.info('Found partial match for workflow selection', { userInput, match: partialMatches[0] });
+        await this.dbService.updateStep(stepId, {
+          aiSuggestion: partialMatches[0]
+        });
+        
+        // Add a direct message about the partial match
+        await this.addDirectMessage(workflow.threadId, `Selected workflow: ${partialMatches[0]} (based on partial match)`);
+        
+        return partialMatches[0];
+      }
+
+      // Otherwise, use OpenAI to find the closest match
+      const openAIResult = await this.openAIService.generateStepResponse(step, userInput, []);
+      
+      // Store OpenAI prompt and response data
+      await this.dbService.updateStep(stepId, {
+        openAIPrompt: openAIResult.promptData,
+        openAIResponse: openAIResult.rawResponse
+      });
+      
+      // Validate the OpenAI response against available options
+      const matchedOption = availableOptions.find(option => 
+        openAIResult.responseText.includes(option)
+      );
+
+      if (matchedOption) {
+        logger.info('OpenAI matched workflow selection', { 
+          userInput, 
+          openAIResponse: openAIResult.responseText, 
+          matchedOption 
+        });
+        
+        // Update the step with the matched workflow type
+        await this.dbService.updateStep(stepId, {
+          aiSuggestion: matchedOption
+        });
+        
+        // Add a direct message about the AI match
+        await this.addDirectMessage(workflow.threadId, `Selected workflow: ${matchedOption} (based on AI matching)`);
+        
+        return matchedOption;
+      }
+
+      // If no match found yet, default to the most appropriate option
+      // For "launch" related inputs, use "Launch Announcement"
+      if (userInput.toLowerCase().includes('launch')) {
+        const defaultOption = availableOptions.find(opt => opt.includes('Launch')) || availableOptions[0];
+        logger.info('Using launch-related default option', { userInput, defaultOption });
+        await this.dbService.updateStep(stepId, {
+          aiSuggestion: defaultOption
+        });
+        
+        // Add a direct message about the default
+        await this.addDirectMessage(workflow.threadId, `Selected workflow: ${defaultOption} (based on keyword match)`);
+        
+        return defaultOption;
+      }
+
+      // If OpenAI doesn't return a valid match, default to the first option
+      logger.warn('No valid workflow match found, defaulting to first option', { 
+        userInput, 
+        openAIResponse: openAIResult.responseText, 
+        defaultOption: availableOptions[0] 
+      });
+      
+      await this.dbService.updateStep(stepId, {
+        aiSuggestion: availableOptions[0]
+      });
+      
+      // Add a direct message about the default
+      await this.addDirectMessage(workflow.threadId, `Selected workflow: ${availableOptions[0]} (default)`);
+      
+      return availableOptions[0];
+    } catch (error) {
+      logger.error('Error processing workflow selection', { error });
+      throw error;
+    }
+  }
+  
+  /**
+   * Process thread title to generate a subtitle
+   */
+  async processThreadTitle(stepId: string, userInput: string): Promise<string> {
+    try {
+      const step = await this.dbService.getStep(stepId);
+      if (!step) {
+        throw new Error(`Step not found: ${stepId}`);
+      }
+
+      if (step.name !== "Thread Title and Summary") {
+        throw new Error(`Invalid step for thread title processing: ${step.name}`);
+      }
+
+      // Get workflow and thread information
+      const workflow = await this.dbService.getWorkflow(step.workflowId);
+      if (!workflow) {
+        throw new Error(`Workflow not found for step: ${stepId}`);
+      }
+
+      console.log(`PROCESSING THREAD TITLE: '${userInput}' for thread ${workflow.threadId}`);
+      logger.info('Processing thread title', { stepId, userInput, threadId: workflow.threadId });
+      
+      // Add a direct message about processing the title
+      await this.addDirectMessage(workflow.threadId, `Processing thread title: "${userInput}"`);
+      
+      // Use OpenAI to generate a subtitle
+      const openAIResult = await this.openAIService.generateStepResponse(step, userInput, []);
+      console.log(`SUBTITLE GENERATED: '${openAIResult.responseText}'`);
+      
+      // Store OpenAI prompt and response data
+      await this.dbService.updateStep(stepId, {
+        openAIPrompt: openAIResult.promptData,
+        openAIResponse: openAIResult.rawResponse
+      });
+      
+      // Extract subtitle from response (format: "SUBTITLE: [subtitle text]")
+      let subtitle = openAIResult.responseText;
+      if (openAIResult.responseText.includes('SUBTITLE:')) {
+        subtitle = openAIResult.responseText.split('SUBTITLE:')[1].trim();
+      }
+      
+      logger.info('Generated thread subtitle', { userInput, subtitle });
+      console.log(`FINAL SUBTITLE: '${subtitle}'`);
+      
+      // Update the step with the generated subtitle
+      await this.dbService.updateStep(stepId, {
+        aiSuggestion: subtitle
+      });
+      
+      // Add a direct message with the title and subtitle
+      await this.addDirectMessage(
+        workflow.threadId, 
+        `Thread title set to: ${userInput}\nGenerated subtitle: ${subtitle.replace(/Thread Title:.*?Subtitle:/i, '')}`
+      );
+      
+      // Update the thread title in the database
+      await this.updateThreadTitleInDB(workflow.threadId, userInput, subtitle);
+      
+      return subtitle;
+    } catch (error) {
+      logger.error('Error processing thread title', { error });
+      console.error('ERROR PROCESSING TITLE:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update thread title in the database
+   */
+  async updateThreadTitleInDB(threadId: string, title: string, subtitle: string): Promise<void> {
+    try {
+      // Update the thread title in the database
+      const [updated] = await db.update(chatThreads)
+        .set({ 
+          title: title
+        })
+        .where(eq(chatThreads.id, threadId))
+        .returning();
+      
+      if (updated) {
+        console.log(`THREAD TITLE UPDATED: Thread ${threadId} title set to "${title}"`);
+        logger.info('Updated thread title in database', { threadId, title });
+        
+        // Add a system message to notify that the title was updated
+        // This will help with frontend refreshing
+        await this.addDirectMessage(threadId, `[System] Thread title updated to: ${title}`);
+      } else {
+        console.error(`Thread title update failed: Thread ${threadId} not found`);
+      }
+    } catch (error) {
+      logger.error('Error updating thread title in database', { threadId, title, error });
+      console.error(`Error updating thread title: ${error}`);
+      // Don't throw the error as this is not critical to workflow progress
+    }
+  }
+
+  /**
    * Handle a user's response to a workflow step
    */
   async handleStepResponse(stepId: string, userInput: string): Promise<{
@@ -255,6 +511,13 @@ export class WorkflowService {
       const step = await this.dbService.getStep(stepId);
       if (!step) throw new Error(`Step not found: ${stepId}`);
       const workflowId = step.workflowId;
+
+      // Process step with OpenAI if needed
+      if (step.name === "Workflow Selection") {
+        await this.processWorkflowSelection(stepId, userInput);
+      } else if (step.name === "Thread Title and Summary") {
+        await this.processThreadTitle(stepId, userInput);
+      }
 
       // 2. Update the current step: set userInput and mark as COMPLETE
       await this.dbService.updateStep(stepId, {
@@ -315,6 +578,14 @@ export class WorkflowService {
           await this.dbService.updateWorkflowCurrentStep(workflowId, null); // No current step
 
           console.log(`handleStepResponse: Workflow ${workflowId} completed.`); // Add log
+          
+          // Check if this is the base workflow
+          const template = await this.dbService.getTemplate(updatedWorkflow.templateId);
+          if (template && template.name === "Base Workflow") {
+            // Add a direct completion message for the base workflow
+            await this.addDirectMessage(updatedWorkflow.threadId, "Base workflow completed. Starting selected workflow...");
+          }
+          
           return {
             response: 'Workflow completed successfully.',
             isComplete: true // Workflow IS complete
@@ -356,5 +627,25 @@ export class WorkflowService {
     }
 
     await this.dbService.updateWorkflowStatus(workflowId, status);
+  }
+
+  /**
+   * Add a message directly to the chat thread
+   * This is a utility method for adding status updates
+   */
+  async addDirectMessage(threadId: string, content: string): Promise<void> {
+    try {
+      await db.insert(chatMessages)
+        .values({
+          threadId,
+          content,
+          role: "assistant",
+          userId: "system"
+        });
+      console.log(`DIRECT MESSAGE ADDED: '${content}' to thread ${threadId}`);
+    } catch (error) {
+      console.error(`Error adding direct message to thread ${threadId}:`, error);
+      // Don't throw error as this is non-critical functionality
+    }
   }
 } 

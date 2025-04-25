@@ -4,13 +4,13 @@ import logger from '../utils/logger';
 import { AuthRequest } from '../types/request';
 import { Thread } from '../types/thread';
 import { db } from '../db';
-import { chatThreads } from '../db/schema';
-import { chatMessages } from '../db/schema';
+import { chatThreads, chatMessages, workflows, workflowSteps } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import { validate } from '../middleware/validation.middleware';
 import { createChatSchema } from '../validators/chat.validator';
 import { chatController } from '../controllers/chatController';
 import { requireOrgRole } from '../middleware/org.middleware';
+import { WorkflowDBService } from '../services/workflowDB.service';
 
 const router = Router();
 
@@ -409,12 +409,31 @@ router.delete('/:id', async (req: AuthRequest, res) => {
       permissions: req.user.permissions
     });
 
-    // First delete all messages in the thread
+    try {
+      // 1. Get all workflows for this thread
+      const threadWorkflows = await db
+        .select()
+        .from(workflows)
+        .where(eq(workflows.threadId, threadId));
+      
+      logger.info(`Found ${threadWorkflows.length} workflows to delete for thread ${threadId}`);
+
+      // 2. Delete each workflow (this will also delete associated steps)
+      const workflowDbService = new WorkflowDBService();
+      for (const workflow of threadWorkflows) {
+        await workflowDbService.deleteWorkflow(workflow.id);
+      }
+    } catch (workflowError) {
+      logger.error('Error deleting associated workflows:', { workflowError });
+      // Continue with thread deletion even if workflow deletion fails
+    }
+
+    // 3. Next delete all messages in the thread
     await db
       .delete(chatMessages)
       .where(eq(chatMessages.threadId, threadId));
 
-    // Then delete the thread
+    // 4. Finally delete the thread itself
     const result = await db
       .delete(chatThreads)
       .where(

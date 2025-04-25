@@ -78,8 +78,18 @@ export class ChatService {
       return this.getNextPrompt(threadId, workflow.id);
     }
 
+    // Get the current step before processing
+    const currentStep = workflow.steps.find(step => step.id === currentStepId);
+    
     // Handle the step response using the current step ID
     const stepResponse = await this.workflowService.handleStepResponse(currentStepId, content);
+    
+    // Special handling for Announcement Type Selection
+    if (currentStep && currentStep.name === "Announcement Type Selection") {
+      // Add a plain message showing the selected announcement type
+      const announcementTypeMsg = `Announcement type: ${content}`;
+      await this.addMessage(threadId, announcementTypeMsg, false);
+    }
     
     // Add AI response to thread if provided by handleStepResponse
     if (stepResponse.response && stepResponse.response !== 'Workflow completed successfully.') { // Avoid duplicate completion message
@@ -102,11 +112,47 @@ export class ChatService {
             // Retrieve the completed Base Workflow details to find the selection
             const completedBaseWorkflow = await this.workflowService.getWorkflow(workflow.id); 
             const selectionStep = completedBaseWorkflow?.steps.find(s => s.name === "Workflow Selection");
-            const selectedWorkflowName = selectionStep?.userInput;
+            
+            // First try to use aiSuggestion (the matched workflow option), then fall back to userInput
+            // Also log this information for debugging purposes
+            const selectedWorkflowName = selectionStep?.aiSuggestion || selectionStep?.userInput;
+            console.log(`Workflow selection - aiSuggestion: "${selectionStep?.aiSuggestion}", userInput: "${selectionStep?.userInput}", final selection: "${selectedWorkflowName}"`);
 
             if (selectedWorkflowName) {
                 console.log(`User selected: ${selectedWorkflowName}`);
-                const nextTemplate = await this.workflowService.getTemplateByName(selectedWorkflowName);
+                
+                // Log available templates for debugging
+                const availableTemplates = await this.getAvailableTemplateNames();
+                console.log(`Available templates: ${JSON.stringify(availableTemplates)}`);
+                
+                // Try to find the template with a case-insensitive, trimmed comparison
+                let nextTemplate = null;
+                
+                // First try exact match
+                nextTemplate = await this.workflowService.getTemplateByName(selectedWorkflowName);
+                
+                // If not found, try case-insensitive match
+                if (!nextTemplate) {
+                    for (const templateName of availableTemplates) {
+                        if (templateName.toLowerCase().trim() === selectedWorkflowName.toLowerCase().trim()) {
+                            console.log(`Found case-insensitive match: "${templateName}" for "${selectedWorkflowName}"`);
+                            nextTemplate = await this.workflowService.getTemplateByName(templateName);
+                            break;
+                        }
+                    }
+                }
+                
+                // If still not found, try substring match
+                if (!nextTemplate) {
+                    for (const templateName of availableTemplates) {
+                        if (templateName.toLowerCase().includes(selectedWorkflowName.toLowerCase()) || 
+                            selectedWorkflowName.toLowerCase().includes(templateName.toLowerCase())) {
+                            console.log(`Found substring match: "${templateName}" for "${selectedWorkflowName}"`);
+                            nextTemplate = await this.workflowService.getTemplateByName(templateName);
+                            break;
+                        }
+                    }
+                }
                 
                 if (nextTemplate) {
                     console.log(`Found template for "${selectedWorkflowName}". Creating next workflow...`);
@@ -114,8 +160,13 @@ export class ChatService {
                         // Create the *new* selected workflow
                         const nextWorkflow = await this.workflowService.createWorkflow(threadId, nextTemplate.id);
                         console.log(`Created workflow ${nextWorkflow.id} for template ${nextTemplate.name}`);
+                        
+                        // Add a message to show which workflow was selected - use plain text
+                        const selectionMsg = `Workflow selected: ${selectedWorkflowName}`;
+                        await this.addMessage(threadId, selectionMsg, false);
+                        
                         // Get the *first prompt* of the NEW workflow
-                        return this.getNextPrompt(threadId, nextWorkflow.id); 
+                        return this.getNextPrompt(threadId, nextWorkflow.id);
                     } catch (creationError) {
                         console.error(`Error creating workflow for ${selectedWorkflowName}:`, creationError);
                         const errorMsg = `Sorry, I couldn't start the ${selectedWorkflowName} workflow.`;
@@ -124,7 +175,8 @@ export class ChatService {
                     }
                 } else {
                     console.warn(`Template not found for selection: ${selectedWorkflowName}`);
-                    const notFoundMsg = `Sorry, I couldn't find a workflow template named "${selectedWorkflowName}".`;
+                    const availableTemplates = await this.getAvailableTemplateNames();
+                    const notFoundMsg = `Sorry, I couldn't find a workflow template named "${selectedWorkflowName}". Available templates are: ${availableTemplates.join(', ')}`;
                     await this.addMessage(threadId, notFoundMsg, false);
                     return notFoundMsg;
                 }
@@ -226,7 +278,7 @@ export class ChatService {
       return prompt;
     }
 
-  // Helper to get the last message (you might need to implement this or similar)
+  // Helper to get the last message 
   private async getLastMessage(threadId: string) {
      const messages = await db.query.chatMessages.findMany({
         where: eq(chatMessages.threadId, threadId),
@@ -234,6 +286,21 @@ export class ChatService {
         limit: 1,
      });
      return messages[0] || null;
+  }
+  
+  // Helper to get all available template names
+  private async getAvailableTemplateNames(): Promise<string[]> {
+    // Using the BASE_WORKFLOW_TEMPLATE constant to get the list of options
+    const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
+    if (baseTemplate) {
+      const workflowSelectionStep = baseTemplate.steps.find(s => s.name === "Workflow Selection");
+      if (workflowSelectionStep && workflowSelectionStep.metadata?.options) {
+        return workflowSelectionStep.metadata.options as string[];
+      }
+    }
+    
+    // Fallback - return hardcoded list (avoid empty array)
+    return ["Launch Announcement", "Dummy Workflow"];
   }
 
   private async generateFinalResponse(workflow: any) {

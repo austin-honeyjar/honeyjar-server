@@ -88,6 +88,8 @@ export const workflowSteps = pgTable('workflow_steps', {
   metadata: jsonb('metadata'),
   aiSuggestion: text('ai_suggestion'),
   userInput: text('user_input'),
+  openAIPrompt: text('openai_prompt'),
+  openAIResponse: text('openai_response'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
