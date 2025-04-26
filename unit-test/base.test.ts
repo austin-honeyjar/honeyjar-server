@@ -8,6 +8,68 @@ import { sql } from 'drizzle-orm';
 import { BASE_WORKFLOW_TEMPLATE } from '../src/templates/workflows/base-workflow.js';
 import { StepStatus } from '../src/types/workflow.js';
 
+// Function to pretty-print JSON
+function prettyPrint(obj) {
+  try {
+    if (typeof obj === 'string') {
+      return JSON.stringify(JSON.parse(obj), null, 2);
+    } else {
+      return JSON.stringify(obj, null, 2);
+    }
+  } catch (e) {
+    return obj; // Not JSON, return as is
+  }
+}
+
+// Function to display OpenAI data from a step
+function displayOpenAIData(step) {
+  console.log('\n=== OpenAI Data for Step:', step.name, '===');
+  
+  if (step.openAIPrompt) {
+    console.log('\n--- OpenAI Prompt ---');
+    try {
+      const promptData = JSON.parse(step.openAIPrompt);
+      console.log('Model:', promptData.model);
+      console.log('User Input:', promptData.settings?.userInput);
+      
+      // Print just the first few messages for brevity
+      if (promptData.messages && promptData.messages.length > 0) {
+        console.log('\nMessages:');
+        promptData.messages.forEach((msg, i) => {
+          console.log(`[${msg.role}]: ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`);
+        });
+      }
+    } catch (e) {
+      console.log(step.openAIPrompt);
+    }
+  } else {
+    console.log('No OpenAI prompt data recorded');
+  }
+  
+  if (step.openAIResponse) {
+    console.log('\n--- OpenAI Response ---');
+    try {
+      const responseData = JSON.parse(step.openAIResponse);
+      console.log('Model:', responseData.model);
+      console.log('Completion Tokens:', responseData.usage?.completion_tokens);
+      console.log('Prompt Tokens:', responseData.usage?.prompt_tokens);
+      console.log('Total Tokens:', responseData.usage?.total_tokens);
+      
+      if (responseData.choices && responseData.choices.length > 0) {
+        console.log('\nResponse:');
+        console.log(`Content: ${responseData.choices[0].message.content}`);
+        console.log(`Finish Reason: ${responseData.choices[0].finish_reason}`);
+      }
+    } catch (e) {
+      console.log(step.openAIResponse);
+    }
+  } else {
+    console.log('No OpenAI response data recorded');
+  }
+  
+  console.log('\n=== End OpenAI Data ===\n');
+}
+
 async function setupTestDatabase() {
   console.log('Setting up test database...');
   const migrationClient = postgres(process.env.DATABASE_URL || 'postgresql://postgres:Password1@localhost:5432/client_db');
@@ -91,16 +153,21 @@ async function testBaseWorkflow() {
         name: s.name,
         status: s.status,
         order: s.order,
-        userInput: s.userInput
+        userInput: s.userInput,
+        aiSuggestion: s.aiSuggestion
       }))
     });
+    
+    // Display OpenAI data for the first step
+    const workflowSelectionStep = workflowAfterStep1?.steps.find(s => s.name === "Workflow Selection");
+    if (workflowSelectionStep) {
+      displayOpenAIData(workflowSelectionStep);
+    }
 
     // Process Step 2: Thread Title
     console.log('\n=== Step 2: Thread Title ===');
     const response2 = await chatService.handleUserMessage(thread.id, "My Test Workflow");
     console.log('Response 2:', response2);
-
-    // Verify Step 2 completion
 
     // Check final workflow state
     const finalWorkflow = await workflowService.getWorkflow(workflow.id);
@@ -113,9 +180,24 @@ async function testBaseWorkflow() {
         name: s.name,
         status: s.status,
         order: s.order,
-        userInput: s.userInput
+        userInput: s.userInput,
+        aiSuggestion: s.aiSuggestion
       }))
     });
+    
+    // Display OpenAI data for the second step
+    const threadTitleStep = finalWorkflow?.steps.find(s => s.name === "Thread Title and Summary");
+    if (threadTitleStep) {
+      displayOpenAIData(threadTitleStep);
+    }
+    
+    // Display a summary of all OpenAI interactions
+    console.log('\n=== OpenAI Interactions Summary ===');
+    for (const step of finalWorkflow?.steps || []) {
+      if (step.openAIPrompt || step.openAIResponse) {
+        console.log(`- Step "${step.name}": ${step.openAIPrompt ? 'Has prompt data' : 'No prompt data'}, ${step.openAIResponse ? 'Has response data' : 'No response data'}`);
+      }
+    }
 
     console.log('\n=== Test Completed Successfully ===\n');
   } catch (error) {

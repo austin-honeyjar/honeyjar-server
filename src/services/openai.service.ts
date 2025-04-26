@@ -18,12 +18,17 @@ export class OpenAIService {
    * @param step The current workflow step
    * @param userInput The user's input for this step
    * @param previousResponses Array of previous step responses for context
+   * @returns An object containing the response text and data for tracking
    */
   async generateStepResponse(
     step: WorkflowStep,
     userInput: string,
     previousResponses: { stepName: string; response: string }[] = []
-  ): Promise<string> {
+  ): Promise<{ 
+    responseText: string;
+    promptData: string;
+    rawResponse: string;
+  }> {
     try {
       logger.info('Generating OpenAI response', {
         stepId: step.id,
@@ -70,9 +75,24 @@ export class OpenAIService {
         messageCount: messages.length
       });
 
+      // Store the complete prompt for tracking
+      const promptData = JSON.stringify({
+        messages,
+        model: this.model,
+        settings: {
+          userInput,
+          stepId: step.id,
+          stepName: step.name,
+          stepType: step.stepType
+        }
+      }, null, 2);
+
       // Determine if we should limit the response length
       const isChatStep = step.stepType === 'user_input' || step.stepType === 'ai_suggestion';
-      const maxTokens = isChatStep ? 100 : 1000;
+      const isAssetGenerationStep = step.name === 'Asset Generation';
+      
+      // Higher token limit for asset generation, moderate for other non-chat steps, low for chat
+      const maxTokens = isAssetGenerationStep ? 4000 : (isChatStep ? 100 : 2000);
       const presencePenalty = isChatStep ? 0.5 : 0;
       const frequencyPenalty = isChatStep ? 0.5 : 0;
 
@@ -84,6 +104,9 @@ export class OpenAIService {
         presence_penalty: presencePenalty,
         frequency_penalty: frequencyPenalty,
       });
+
+      // Store the raw OpenAI response for tracking
+      const rawResponse = JSON.stringify(completion, null, 2);
 
       const response = completion.choices[0]?.message?.content;
       if (!response) {
@@ -100,6 +123,10 @@ export class OpenAIService {
         const sentences = response.split(/[.!?]+/).filter(s => s.trim().length > 0);
         finalResponse = sentences.slice(0, 2).join('. ').trim() + '.';
       }
+      // Don't truncate asset generation responses regardless of length
+      else if (step.name === 'Asset Generation') {
+        finalResponse = response;
+      }
 
       logger.info('Generated OpenAI response', {
         stepId: step.id,
@@ -110,7 +137,11 @@ export class OpenAIService {
         isChatStep
       });
 
-      return finalResponse;
+      return {
+        responseText: finalResponse,
+        promptData,
+        rawResponse
+      };
     } catch (error) {
       logger.error('Error generating OpenAI response:', {
         stepId: step.id,

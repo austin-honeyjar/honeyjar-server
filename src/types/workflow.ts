@@ -70,6 +70,8 @@ export interface WorkflowStep {
   metadata?: Record<string, any>;
   aiSuggestion?: string;
   userInput?: string;
+  openAIPrompt?: string;
+  openAIResponse?: string;
   createdAt: Date;
   updatedAt: Date;
 }
