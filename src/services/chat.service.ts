@@ -81,14 +81,75 @@ export class ChatService {
     // Get the current step before processing
     const currentStep = workflow.steps.find(step => step.id === currentStepId);
     
+    // Special handling for pre-processing Launch Announcement workflow specific steps
+    if (currentStep) {
+      // Handle Asset Selection step - if user asks about available assets
+      if (currentStep.name === "Asset Selection" && 
+          (content.toLowerCase().includes("what") || 
+           content.toLowerCase().includes("list") || 
+           content.toLowerCase().includes("options") ||
+           content.toLowerCase().includes("assets") ||
+           content.toLowerCase().includes("available"))) {
+        
+        console.log("User is asking about available assets. Providing recommendations.");
+        
+        // Find the announcement type from the previous step
+        const announcementTypeStep = workflow.steps.find(s => s.name === "Announcement Type Selection");
+        if (announcementTypeStep) {
+          const announcementType = announcementTypeStep.userInput || "Product Launch";
+          
+          // Generate asset recommendations for this announcement type
+          const assetRecommendations = await this.generateAssetRecommendations(currentStep, announcementType);
+          
+          // Send the recommendations to the user
+          await this.addMessage(threadId, assetRecommendations, false);
+          
+          // Don't process the step, just return the recommendations
+          return assetRecommendations;
+        }
+      }
+    }
+    
     // Handle the step response using the current step ID
     const stepResponse = await this.workflowService.handleStepResponse(currentStepId, content);
     
-    // Special handling for Announcement Type Selection
-    if (currentStep && currentStep.name === "Announcement Type Selection") {
-      // Add a plain message showing the selected announcement type
-      const announcementTypeMsg = `Announcement type: ${content}`;
-      await this.addMessage(threadId, announcementTypeMsg, false);
+    // Special handling for different step types
+    if (currentStep) {
+      // Special handling for Announcement Type Selection
+      if (currentStep.name === "Announcement Type Selection") {
+        // Add a plain message showing the selected announcement type
+        const announcementTypeMsg = `Announcement type: ${content}`;
+        await this.addMessage(threadId, announcementTypeMsg, false);
+      }
+      
+      // Special handling for Asset Selection step - process assets and show them
+      else if (currentStep.name === "Asset Selection" && stepResponse.nextStep?.name === "Asset Confirmation") {
+        // If we're moving to Asset Confirmation, make sure the user sees the recommended assets
+        const nextStep = workflow.steps.find(s => s.id === stepResponse.nextStep.id);
+        if (nextStep && nextStep.aiSuggestion) {
+          // Extract asset list from the aiSuggestion or create a default list
+          const assetList = nextStep.aiSuggestion || "Press Release, Media Pitch, Social Post";
+          const formattedAssets = "Recommended assets: " + assetList;
+          
+          // Add the asset list as a direct message
+          await this.addMessage(threadId, formattedAssets, false);
+        }
+      }
+      
+      // Special handling for Asset Review - ensure user feedback triggers regeneration
+      else if (currentStep.name === "Asset Review" && content.toLowerCase() !== "approved") {
+        // User provided feedback on the asset - mark it for regeneration
+        await this.workflowService.updateStep(currentStep.id, {
+          metadata: { 
+            ...currentStep.metadata,
+            needsRegeneration: true,
+            feedback: content
+          }
+        });
+        
+        // Add a message acknowledging the feedback
+        await this.addMessage(threadId, `Thank you for your feedback. I'll update the ${currentStep.metadata?.selectedAsset || "asset"} with your requested changes.`, false);
+      }
     }
     
     // Add AI response to thread if provided by handleStepResponse
@@ -331,5 +392,135 @@ Join us on this exciting journey!`;
 
     await this.addMessage(workflow.threadId, announcement, false);
     return announcement;
+  }
+
+  /**
+   * Generate asset recommendations for a specific announcement type
+   */
+  private async generateAssetRecommendations(step: any, announcementType: string): Promise<string> {
+    try {
+      // Default asset recommendations by announcement type
+      const assetRecommendations: Record<string, string[]> = {
+        "Product Launch": ["Press Release", "Media Pitch", "Social Post", "Blog Post", "FAQ Document"],
+        "Funding Round": ["Press Release", "Media Pitch", "Social Post", "Talking Points"],
+        "Partnership": ["Press Release", "Media Pitch", "Social Post", "Email Announcement"],
+        "Company Milestone": ["Press Release", "Social Post", "Blog Post", "Email Announcement"],
+        "Executive Hire": ["Press Release", "Media Pitch", "Social Post", "Talking Points"],
+        "Industry Award": ["Press Release", "Social Post", "Blog Post"]
+      };
+      
+      // Normalize the announcement type for matching
+      const normalizedType = Object.keys(assetRecommendations).find(
+        type => type.toLowerCase().includes(announcementType.toLowerCase()) ||
+               announcementType.toLowerCase().includes(type.toLowerCase())
+      ) || "Product Launch";
+      
+      // Get the appropriate asset list
+      const assets = assetRecommendations[normalizedType] || assetRecommendations["Product Launch"];
+      
+      // Format the response
+      let response = `For a ${normalizedType.toLowerCase()}, we recommend the following assets:\n\n`;
+      assets.forEach(asset => {
+        response += `- ${asset}\n`;
+      });
+      response += `\nWhich of these would you like to generate?`;
+      
+      return response;
+    } catch (error) {
+      console.error("Error generating asset recommendations:", error);
+      return "For your announcement type, I recommend creating a Press Release, Media Pitch, and Social Posts. Which of these would you like to generate?";
+    }
+  }
+
+  /**
+   * Create a custom prompt for Information Collection based on selected assets
+   */
+  private createInformationCollectionPrompt(selectedAssets: string[]): string {
+    // Default fields needed for all assets
+    const defaultFields = [
+      "Company Name",
+      "Announcement Date"
+    ];
+    
+    // Asset-specific fields
+    const assetFields: Record<string, string[]> = {
+      "Press Release": [
+        "Product/Service Name",
+        "Key Features (3-5)",
+        "CEO or Executive Name (for quote)",
+        "Unique Value Proposition",
+        "Target Market/Audience",
+        "Pricing Information (if applicable)",
+        "Availability Date"
+      ],
+      "Media Pitch": [
+        "Key Media Contacts/Publications",
+        "Newsworthy Angle",
+        "Industry Context/Trends",
+        "Available Spokesperson",
+        "PR Contact Information"
+      ],
+      "Social Post": [
+        "Brand Voice/Tone",
+        "Key Messaging Points",
+        "Call to Action",
+        "Relevant Hashtags",
+        "Visual Assets Available"
+      ],
+      "Blog Post": [
+        "Target Word Count",
+        "Key Messages",
+        "Technical Specifications",
+        "Customer Pain Points",
+        "Benefits/Solutions"
+      ],
+      "FAQ Document": [
+        "Common Questions (list at least 5)",
+        "Technical Specifications",
+        "Pricing Details",
+        "Competitor Comparisons"
+      ],
+      "Email Announcement": [
+        "Email Subject Line",
+        "Target Audience Segments",
+        "Call to Action",
+        "Special Offers (if applicable)"
+      ],
+      "Talking Points": [
+        "Key Messages (3-5)",
+        "Anticipated Questions",
+        "Industry Statistics/Data",
+        "Competitor Positioning"
+      ]
+    };
+    
+    // Normalize asset names to match our map keys
+    const normalizedAssets = selectedAssets.map(asset => {
+      const key = Object.keys(assetFields).find(k => 
+        k.toLowerCase().includes(asset.toLowerCase()) || 
+        asset.toLowerCase().includes(k.toLowerCase())
+      );
+      return key || asset;
+    }).filter(asset => asset); // Filter out undefined
+    
+    // Build the list of required fields based on selected assets
+    const requiredFields = new Set<string>(defaultFields);
+    
+    normalizedAssets.forEach(asset => {
+      if (assetFields[asset]) {
+        assetFields[asset].forEach(field => requiredFields.add(field));
+      }
+    });
+    
+    // Build the prompt
+    let prompt = `To generate your ${normalizedAssets.join(', ')}, please provide the following information:\n\n`;
+    
+    Array.from(requiredFields).forEach(field => {
+      prompt += `- ${field}\n`;
+    });
+    
+    prompt += "\nFeel free to provide any additional details that might be helpful.";
+    
+    return prompt;
   }
 } 

@@ -88,15 +88,6 @@ router.get('/', async (req: AuthRequest, res) => {
       )
       .orderBy(chatThreads.createdAt);
 
-    // If no threads found, try without org_id filter
-    if (threads.length === 0) {
-      threads = await db
-        .select()
-        .from(chatThreads)
-        .where(eq(chatThreads.userId, req.user.id))
-        .orderBy(chatThreads.createdAt);
-    }
-    
     logger.info('Returning threads:', { 
       userId: req.user.id,
       orgId,
@@ -205,20 +196,6 @@ router.get('/:id', async (req: AuthRequest, res) => {
       )
       .limit(1);
 
-    // If no thread found, try without org_id filter
-    if (thread.length === 0) {
-      thread = await db
-        .select()
-        .from(chatThreads)
-        .where(
-          and(
-            eq(chatThreads.id, threadId),
-            eq(chatThreads.userId, req.user.id)
-          )
-        )
-        .limit(1);
-    }
-    
     if (thread.length === 0) {
       return res.status(404).json({
         status: 'error',

@@ -298,42 +298,7 @@ export class WorkflowService {
       // Add a direct message to show we're processing the selection
       await this.addDirectMessage(workflow.threadId, `Processing workflow selection: "${userInput}"`);
 
-      // If user input exactly matches one of the options, use it directly
-      const exactMatch = availableOptions.find(option => 
-        option.toLowerCase() === userInput.toLowerCase()
-      );
-      
-      if (exactMatch) {
-        logger.info('Found exact match for workflow selection', { userInput, match: exactMatch });
-        await this.dbService.updateStep(stepId, {
-          aiSuggestion: exactMatch
-        });
-        
-        // Add a direct message about the exact match
-        await this.addDirectMessage(workflow.threadId, `Selected workflow: ${exactMatch}`);
-        
-        return exactMatch;
-      }
-
-      // Check for partial matches before using OpenAI
-      const partialMatches = availableOptions.filter(option => 
-        option.toLowerCase().includes(userInput.toLowerCase()) || 
-        userInput.toLowerCase().includes(option.toLowerCase().split(' ')[0])
-      );
-      
-      if (partialMatches.length === 1) {
-        logger.info('Found partial match for workflow selection', { userInput, match: partialMatches[0] });
-        await this.dbService.updateStep(stepId, {
-          aiSuggestion: partialMatches[0]
-        });
-        
-        // Add a direct message about the partial match
-        await this.addDirectMessage(workflow.threadId, `Selected workflow: ${partialMatches[0]} (based on partial match)`);
-        
-        return partialMatches[0];
-      }
-
-      // Otherwise, use OpenAI to find the closest match
+      // Use OpenAI to find the best match - this is now our ONLY matching method
       const openAIResult = await this.openAIService.generateStepResponse(step, userInput, []);
       
       // Store OpenAI prompt and response data
@@ -342,9 +307,39 @@ export class WorkflowService {
         openAIResponse: openAIResult.rawResponse
       });
       
-      // Validate the OpenAI response against available options
+      // Log the complete OpenAI response for debugging
+      logger.info('OpenAI response for workflow selection', {
+        userInput,
+        completeResponse: openAIResult.responseText
+      });
+      
+      // Check if OpenAI returned NO_MATCH
+      if (openAIResult.responseText.includes('NO_MATCH')) {
+        logger.info('OpenAI determined no good match for input', { 
+          userInput, 
+          openAIResponse: openAIResult.responseText
+        });
+        
+        // Add a direct message about the lack of match
+        await this.addDirectMessage(
+          workflow.threadId, 
+          `I couldn't determine which workflow you want. Please explicitly choose one of: ${availableOptions.join(', ')}.`
+        );
+        
+        // Don't update the aiSuggestion, don't complete the step
+        await this.dbService.updateStep(stepId, {
+          status: StepStatus.IN_PROGRESS // Keep the step in progress
+        });
+        
+        // Return empty string to indicate no valid selection was made
+        return '';
+      }
+      
+      // Check if OpenAI's response exactly matches one of our available options
+      // Normalize the response by trimming and converting to lowercase for comparison
+      const normalizedResponse = openAIResult.responseText.trim();
       const matchedOption = availableOptions.find(option => 
-        openAIResult.responseText.includes(option)
+        normalizedResponse === option || normalizedResponse.includes(option)
       );
 
       if (matchedOption) {
@@ -364,37 +359,28 @@ export class WorkflowService {
         
         return matchedOption;
       }
-
-      // If no match found yet, default to the most appropriate option
-      // For "launch" related inputs, use "Launch Announcement"
-      if (userInput.toLowerCase().includes('launch')) {
-        const defaultOption = availableOptions.find(opt => opt.includes('Launch')) || availableOptions[0];
-        logger.info('Using launch-related default option', { userInput, defaultOption });
-        await this.dbService.updateStep(stepId, {
-          aiSuggestion: defaultOption
-        });
-        
-        // Add a direct message about the default
-        await this.addDirectMessage(workflow.threadId, `Selected workflow: ${defaultOption} (based on keyword match)`);
-        
-        return defaultOption;
-      }
-
-      // If OpenAI doesn't return a valid match, default to the first option
-      logger.warn('No valid workflow match found, defaulting to first option', { 
-        userInput, 
-        openAIResponse: openAIResult.responseText, 
-        defaultOption: availableOptions[0] 
+      
+      // If we get here, OpenAI returned something, but it didn't match our options
+      // This shouldn't happen with proper prompting, but let's handle it
+      logger.warn('OpenAI returned unexpected response for workflow selection', {
+        userInput,
+        openAIResponse: openAIResult.responseText,
+        availableOptions
       });
       
+      // Add a direct message about the unexpected response
+      await this.addDirectMessage(
+        workflow.threadId, 
+        `I received an unexpected response. Please explicitly choose one of: ${availableOptions.join(', ')}.`
+      );
+      
+      // Keep the step in progress
       await this.dbService.updateStep(stepId, {
-        aiSuggestion: availableOptions[0]
+        status: StepStatus.IN_PROGRESS
       });
       
-      // Add a direct message about the default
-      await this.addDirectMessage(workflow.threadId, `Selected workflow: ${availableOptions[0]} (default)`);
-      
-      return availableOptions[0];
+      // Return empty string to indicate no valid selection was made
+      return '';
     } catch (error) {
       logger.error('Error processing workflow selection', { error });
       throw error;
@@ -514,9 +500,27 @@ export class WorkflowService {
 
       // Process step with OpenAI if needed
       if (step.name === "Workflow Selection") {
-        await this.processWorkflowSelection(stepId, userInput);
+        const workflowSelection = await this.processWorkflowSelection(stepId, userInput);
+        
+        // If empty string returned, it means no valid selection was made
+        // Skip the normal step completion process
+        if (workflowSelection === '') {
+          return {
+            response: `Please select a valid workflow type.`,
+            isComplete: false
+          };
+        }
       } else if (step.name === "Thread Title and Summary") {
         await this.processThreadTitle(stepId, userInput);
+      } else if (step.name === "Announcement Type Selection") {
+        // For Asset Selection step that follows this, we'll need to get the OpenAI recommendations
+        // Mark the current step to generate asset recommendations in the next step
+        logger.info('Announcement Type selected:', { type: userInput });
+        
+        // Store the announcement type in the step metadata for later reference
+        await this.dbService.updateStep(stepId, {
+          metadata: { ...step.metadata, selectedAnnouncementType: userInput }
+        });
       }
 
       // 2. Update the current step: set userInput and mark as COMPLETE
@@ -545,6 +549,355 @@ export class WorkflowService {
 
       // 5. If a next step is found
       if (nextStep) {
+        // Create nextStepDetails object for returning
+        const nextStepDetails = {
+          id: nextStep.id,
+          name: nextStep.name,
+          prompt: nextStep.prompt,
+          type: nextStep.stepType
+        };
+        
+        // Special handling for Asset Selection step to ensure prompt shows the right assets
+        if (nextStep.name === "Asset Selection") {
+          // Get the announcement type from the previous step
+          const announcementTypeStep = updatedWorkflow.steps.find(s => s.name === "Announcement Type Selection");
+          const announcementType = announcementTypeStep?.userInput || "Product Launch";
+          
+          // Customize the prompt based on announcement type
+          const customPrompt = this.getAssetSelectionPrompt(announcementType);
+          
+          // Update the next step with the customized prompt
+          await this.dbService.updateStep(nextStep.id, {
+            prompt: customPrompt
+          });
+          
+          // Update the nextStepDetails prompt
+          nextStepDetails.prompt = customPrompt;
+        }
+        
+        // Special handling for Asset Confirmation step
+        else if (nextStep.name === "Asset Confirmation") {
+          // Get the selected asset from the previous step
+          const assetSelectionStep = updatedWorkflow.steps.find(s => s.name === "Asset Selection");
+          const selectedAsset = assetSelectionStep?.userInput || "Press Release";
+          
+          // Customize the prompt to include the selected asset
+          const customPrompt = `You've selected to generate a ${selectedAsset}. Would you like to proceed with this selection? (Reply with 'yes' to confirm or 'no' to change your selection)`;
+          
+          // Update the next step with the customized prompt
+          await this.dbService.updateStep(nextStep.id, {
+            prompt: customPrompt,
+            metadata: { ...nextStep.metadata, selectedAsset }
+          });
+          
+          // Update the nextStepDetails prompt
+          nextStepDetails.prompt = customPrompt;
+        }
+        
+        // Special handling for Information Collection step
+        else if (nextStep.name === "Information Collection") {
+          // Get the selected asset from previous steps
+          const assetSelectionStep = updatedWorkflow.steps.find(s => s.name === "Asset Selection");
+          const selectedAsset = assetSelectionStep?.userInput || "Press Release";
+          
+          // Different prompts based on asset type
+          let customPrompt = "";
+          
+          // Press Release specific fields
+          if (selectedAsset.toLowerCase().includes("press release")) {
+            customPrompt = `To generate your ${selectedAsset}, I need the following specific information:
+
+- Company Name
+- Company Description (what your company does)
+- Product/Service Name
+- Product Description
+- Key Features (3-5 points)
+- Target Market/Audience
+- CEO Name and Title (for quote)
+- Quote from CEO or Executive
+- Launch/Announcement Date
+- Pricing Information
+- Availability Date/Location
+- Call to Action
+- PR Contact Name
+- PR Contact Email/Phone
+- Company Website
+
+Please provide as much of this information as possible in a single message. The more details you provide, the better the ${selectedAsset} will be.`;
+          } 
+          // Media Pitch specific fields
+          else if (selectedAsset.toLowerCase().includes("media pitch")) {
+            customPrompt = `To generate your ${selectedAsset}, I need the following specific information:
+
+- Company Name
+- Company Description
+- News/Announcement Summary
+- Why This Is Newsworthy
+- Target Media Outlets/Journalists
+- Spokesperson Name and Title
+- Key Media Hooks/Angles
+- Supporting Data/Statistics
+- Available Resources (interviews, demos, etc.)
+- Timeline/Embargo Information
+- PR Contact Information
+
+Please provide as much of this information as possible in a single message. The more details you provide, the better the ${selectedAsset} will be.`;
+          }
+          // Social Post specific fields
+          else if (selectedAsset.toLowerCase().includes("social")) {
+            customPrompt = `To generate your ${selectedAsset}, I need the following specific information:
+
+- Company Name
+- Brand Voice/Tone
+- Announcement Summary
+- Key Benefit to Highlight
+- Target Audience
+- Call to Action
+- Relevant Hashtags
+- Link to Include
+- Platforms (LinkedIn, Twitter, Facebook, Instagram)
+- Visual Assets Available
+
+Please provide as much of this information as possible in a single message. The more details you provide, the better the ${selectedAsset} will be.`;
+          }
+          // Default fields for other asset types
+          else {
+            customPrompt = `To generate your ${selectedAsset}, I need the following specific information:
+
+- Company Name
+- Product/Service Name
+- Key Information Points
+- Target Audience
+- Main Benefit or Value Proposition
+- Call to Action
+- Timeline or Important Dates
+- Contact Information
+
+Please provide as much of this information as possible in a single message. The more details you provide, the better the ${selectedAsset} will be.`;
+          }
+          
+          // Update the next step with the customized prompt
+          await this.dbService.updateStep(nextStep.id, {
+            prompt: customPrompt,
+            metadata: { ...nextStep.metadata, selectedAsset }
+          });
+          
+          // Update the nextStepDetails prompt
+          nextStepDetails.prompt = customPrompt;
+        }
+        
+        // Special handling for Asset Generation step
+        else if (nextStep.name === "Asset Generation") {
+          // Get the confirmed asset type from the previous steps
+          const assetSelectionStep = updatedWorkflow.steps.find(s => s.name === "Asset Selection");
+          const selectedAsset = assetSelectionStep?.userInput || "Press Release";
+          
+          // Get the information collection step to use the input for generation
+          const infoStep = updatedWorkflow.steps.find(s => s.name === "Information Collection");
+          
+          if (infoStep && infoStep.userInput && infoStep.userInput.trim().toLowerCase() !== "provide info") {
+            // Generate the asset immediately in this step
+            try {
+              // Find the appropriate template for the selected asset
+              const templateKey = selectedAsset.toLowerCase().replace(/\s+/g, '');
+              const templateMap: Record<string, string> = {
+                'pressrelease': 'pressRelease',
+                'mediapitch': 'mediaPitch',
+                'socialpost': 'socialPost',
+                'blogpost': 'blogPost',
+                'faqdocument': 'faqDocument'
+              };
+              
+              const templateName = templateMap[templateKey] || 'pressRelease';
+              const template = nextStep.metadata?.templates?.[templateName];
+              
+              if (template) {
+                logger.info('Generating asset', { selectedAsset, templateName });
+                
+                // Create a custom step with the template as instructions
+                const customStep = {
+                  ...nextStep,
+                  metadata: {
+                    ...nextStep.metadata,
+                    openai_instructions: template
+                  }
+                };
+                
+                // First, add a message that we're generating the asset
+                await this.addDirectMessage(updatedWorkflow.threadId, `Generating your ${selectedAsset}. This may take a moment...`);
+                
+                // Generate the asset using OpenAI
+                const openAIResult = await this.openAIService.generateStepResponse(
+                  customStep,
+                  infoStep.userInput,
+                  [] // No context needed
+                );
+                
+                // Store the generated asset
+                await this.dbService.updateStep(nextStep.id, {
+                  metadata: { 
+                    ...nextStep.metadata, 
+                    generatedAsset: openAIResult.responseText,
+                    selectedAsset
+                  }
+                });
+                
+                // Add the generated asset as a direct message to show the user
+                await this.addDirectMessage(updatedWorkflow.threadId, `Here's your generated ${selectedAsset}:\n\n${openAIResult.responseText}`);
+              }
+            } catch (error) {
+              logger.error('Error generating asset', { error });
+              // Add an error message to the thread
+              await this.addDirectMessage(updatedWorkflow.threadId, `There was an error generating your ${selectedAsset}. Please try again.`);
+            }
+          } else {
+            // The user just typed "provide info" without actual information
+            // Update the prompt to indicate we're waiting for their detailed information
+            const customPrompt = `I'm ready to generate your ${selectedAsset}. Please provide the requested information now.`;
+            
+            // Update the nextStepDetails to stay on the Information Collection step
+            // This should prevent the flow from advancing to Asset Generation
+            const infoStepId = infoStep?.id;
+            
+            if (infoStepId) {
+              // Update workflow to stay on Information Collection step
+              await this.dbService.updateWorkflowCurrentStep(workflowId, infoStepId);
+              
+              // Rollback the Information Collection step to IN_PROGRESS
+              await this.dbService.updateStep(infoStepId, {
+                status: StepStatus.IN_PROGRESS
+              });
+              
+              // Add a message to guide the user
+              await this.addDirectMessage(updatedWorkflow.threadId, 
+                `I need detailed information to generate your ${selectedAsset}. Please provide the information requested above.`);
+              
+              // This will cause the workflow to stay on the Information Collection step
+              return {
+                response: `Please provide the information needed for your ${selectedAsset}.`,
+                nextStep: {
+                  id: infoStepId,
+                  name: infoStep?.name,
+                  prompt: infoStep?.prompt,
+                  type: infoStep?.stepType
+                },
+                isComplete: false
+              };
+            }
+          }
+          
+          // Store the selected asset in the metadata for later use
+          await this.dbService.updateStep(nextStep.id, {
+            metadata: { ...nextStep.metadata, selectedAsset }
+          });
+        }
+        
+        // Special handling for Asset Review step
+        else if (nextStep.name === "Asset Review") {
+          // Get the selected asset type and generated asset
+          const assetGenerationStep = updatedWorkflow.steps.find(s => s.name === "Asset Generation");
+          const selectedAsset = assetGenerationStep?.metadata?.selectedAsset || "Press Release";
+          const generatedAsset = assetGenerationStep?.metadata?.generatedAsset || "";
+          
+          // Update the prompt to include the generated asset
+          if (generatedAsset) {
+            const customPrompt = `Here's your generated ${selectedAsset}:\n\n${generatedAsset}\n\nPlease review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply reply with 'approved'.`;
+            
+            // Update the next step with the customized prompt
+            await this.dbService.updateStep(nextStep.id, {
+              prompt: customPrompt,
+              metadata: { 
+                ...nextStep.metadata, 
+                generatedAsset,
+                selectedAsset
+              }
+            });
+            
+            // Update the nextStepDetails prompt
+            nextStepDetails.prompt = customPrompt;
+          }
+        }
+        
+        // Special handling for Post-Asset Tasks step - Process Asset Review feedback
+        else if (nextStep.name === "Post-Asset Tasks") {
+          // Check if the Asset Review step has feedback
+          const assetReviewStep = updatedWorkflow.steps.find(s => s.name === "Asset Review");
+          
+          if (assetReviewStep && assetReviewStep.userInput && 
+              assetReviewStep.userInput.toLowerCase() !== "approved" && 
+              !assetReviewStep.metadata?.regenerated) {
+            
+            try {
+              logger.info('Changes requested, regenerating asset');
+              
+              // Get the needed steps
+              const assetGenerationStep = updatedWorkflow.steps.find(s => s.name === "Asset Generation");
+              const infoStep = updatedWorkflow.steps.find(s => s.name === "Information Collection");
+              const selectedAsset = assetReviewStep.metadata?.selectedAsset || "Press Release";
+              const generatedAsset = assetReviewStep.metadata?.generatedAsset || "";
+              
+              // Get the user's feedback
+              const userFeedback = assetReviewStep.userInput;
+              
+              // Create the revised prompt
+              const revisedPrompt = `${infoStep?.userInput || ""}\n\nPlease make the following changes to the previous version:\n- ${userFeedback}`;
+              
+              // Find the appropriate template
+              const templateKey = selectedAsset.toLowerCase().replace(/\s+/g, '');
+              const templateMap: Record<string, string> = {
+                'pressrelease': 'pressRelease',
+                'mediapitch': 'mediaPitch',
+                'socialpost': 'socialPost',
+                'blogpost': 'blogPost',
+                'faqdocument': 'faqDocument'
+              };
+              
+              const templateName = templateMap[templateKey] || 'pressRelease';
+              const template = assetGenerationStep?.metadata?.templates?.[templateName];
+              
+              if (template) {
+                // First, add a message that we're regenerating the asset
+                await this.addDirectMessage(updatedWorkflow.threadId, `Regenerating your ${selectedAsset} with your requested changes. This may take a moment...`);
+                
+                // Create a custom step with the template as instructions
+                const customStep = {
+                  ...assetGenerationStep,
+                  metadata: {
+                    ...assetGenerationStep.metadata,
+                    openai_instructions: template
+                  }
+                };
+                
+                // Generate the revised asset
+                const openAIResult = await this.openAIService.generateStepResponse(
+                  customStep,
+                  revisedPrompt,
+                  [] // No context needed
+                );
+                
+                // Add the revised asset as a direct message
+                await this.addDirectMessage(
+                  updatedWorkflow.threadId, 
+                  `Here's your revised ${selectedAsset} with the requested changes:\n\n${openAIResult.responseText}`
+                );
+                
+                // Mark as regenerated to avoid duplicate regeneration
+                await this.dbService.updateStep(assetReviewStep.id, {
+                  metadata: { 
+                    ...assetReviewStep.metadata, 
+                    regenerated: true,
+                    revisedAsset: openAIResult.responseText
+                  }
+                });
+              }
+            } catch (error) {
+              logger.error('Error processing asset review feedback', { error });
+              // Add an error message
+              await this.addDirectMessage(updatedWorkflow.threadId, `There was an error regenerating your ${assetReviewStep.metadata?.selectedAsset || "asset"}. Your feedback has been recorded.`);
+            }
+          }
+        }
+        
         // Update the workflow's current step ID to the next step
         await this.dbService.updateWorkflowCurrentStep(workflowId, nextStep.id);
         // Mark the next step as IN_PROGRESS
@@ -553,12 +906,6 @@ export class WorkflowService {
         });
 
         // --- Add Logging Here ---
-        const nextStepDetails = {
-          id: nextStep.id,
-          name: nextStep.name,
-          prompt: nextStep.prompt, // <<< Check this value
-          type: nextStep.stepType
-        };
         console.log('handleStepResponse: Found next step. Returning details:', nextStepDetails); 
         // --- End Logging ---
 
@@ -647,5 +994,50 @@ export class WorkflowService {
       console.error(`Error adding direct message to thread ${threadId}:`, error);
       // Don't throw error as this is non-critical functionality
     }
+  }
+
+  // Helper method to get recommended assets for an announcement type
+  private getAssetSelectionPrompt(announcementType: string): string {
+    // Map of announcement types to their recommended assets
+    const assetsByType: Record<string, string[]> = {
+      "Product Launch": ["Press Release", "Media Pitch", "Social Post", "Blog Post", "FAQ Document"],
+      "Funding Round": ["Press Release", "Media Pitch", "Social Post", "Talking Points"],
+      "Partnership": ["Press Release", "Media Pitch", "Social Post", "Email Announcement"],
+      "Company Milestone": ["Press Release", "Social Post", "Blog Post", "Email Announcement"],
+      "Executive Hire": ["Press Release", "Media Pitch", "Social Post", "Talking Points"],
+      "Industry Award": ["Press Release", "Social Post", "Blog Post"]
+    };
+    
+    // Find the matching announcement type (case-insensitive)
+    const normalizedType = Object.keys(assetsByType).find(
+      type => type.toLowerCase().includes(announcementType.toLowerCase()) ||
+             announcementType.toLowerCase().includes(type.toLowerCase())
+    ) || "Product Launch";
+    
+    // Get the appropriate assets
+    const assets = assetsByType[normalizedType];
+    
+    // Asset descriptions
+    const assetDescriptions: Record<string, string> = {
+      "Press Release": "Official announcement document for media distribution",
+      "Media Pitch": "Personalized outreach to journalists/publications",
+      "Social Post": "Content for social media platforms",
+      "Blog Post": "Detailed article for company website/blog",
+      "FAQ Document": "Anticipated questions and prepared answers",
+      "Email Announcement": "Communication for customers/subscribers",
+      "Talking Points": "Key messages for spokespeople"
+    };
+    
+    // Build the prompt
+    let prompt = `Based on your ${normalizedType.toLowerCase()} announcement, we recommend the following assets:\n\n`;
+    
+    // Add each asset with its description
+    assets.forEach(asset => {
+      prompt += `- ${asset}: ${assetDescriptions[asset] || ""}\n`;
+    });
+    
+    prompt += `\nWhich of these would you like to generate?`;
+    
+    return prompt;
   }
 } 

@@ -89,7 +89,10 @@ export class OpenAIService {
 
       // Determine if we should limit the response length
       const isChatStep = step.stepType === 'user_input' || step.stepType === 'ai_suggestion';
-      const maxTokens = isChatStep ? 100 : 1000;
+      const isAssetGenerationStep = step.name === 'Asset Generation';
+      
+      // Higher token limit for asset generation, moderate for other non-chat steps, low for chat
+      const maxTokens = isAssetGenerationStep ? 4000 : (isChatStep ? 100 : 2000);
       const presencePenalty = isChatStep ? 0.5 : 0;
       const frequencyPenalty = isChatStep ? 0.5 : 0;
 
@@ -119,6 +122,10 @@ export class OpenAIService {
       if (isChatStep) {
         const sentences = response.split(/[.!?]+/).filter(s => s.trim().length > 0);
         finalResponse = sentences.slice(0, 2).join('. ').trim() + '.';
+      }
+      // Don't truncate asset generation responses regardless of length
+      else if (step.name === 'Asset Generation') {
+        finalResponse = response;
       }
 
       logger.info('Generated OpenAI response', {
