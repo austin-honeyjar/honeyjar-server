@@ -24,6 +24,81 @@ router.use(authMiddleware);
 
 /**
  * @swagger
+ * /api/v1/assets:
+ *   get:
+ *     summary: Get all assets for the current user
+ *     description: Returns a list of all assets created by the currently authenticated user
+ *     tags: [Assets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: x-organization-id
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional Organization ID
+ *     responses:
+ *       200:
+ *         description: List of assets for the user
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 assets:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Asset'
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+router.get('/assets', assetController.getUserAssets);
+
+/**
+ * @swagger
+ * /api/v1/organization/assets:
+ *   get:
+ *     summary: Get all assets for the organization
+ *     description: Returns a list of all assets within the specified organization (requires admin role)
+ *     tags: [Assets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: x-organization-id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Organization ID
+ *     responses:
+ *       200:
+ *         description: List of assets for the organization
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 assets:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Asset'
+ *       401:
+ *         description: Unauthorized
+ *       400:
+ *         description: Bad request - Missing organization ID
+ *       500:
+ *         description: Server error
+ */
+router.get('/organization/assets', 
+  requireOrgRole(['admin']), 
+  assetController.getOrganizationAssets
+);
+
+/**
+ * @swagger
  * /api/v1/threads/{threadId}/assets:
  *   get:
  *     summary: Get all assets for a thread
@@ -37,6 +112,12 @@ router.use(authMiddleware);
  *         schema:
  *           type: string
  *         description: Thread ID
+ *       - in: header
+ *         name: x-organization-id
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional Organization ID
  *     responses:
  *       200:
  *         description: List of assets for the thread
@@ -45,10 +126,7 @@ router.use(authMiddleware);
  *       500:
  *         description: Server error
  */
-router.get('/threads/:threadId/assets', 
-  requireOrgRole(['admin', 'member']), 
-  assetController.getThreadAssets
-);
+router.get('/threads/:threadId/assets', assetController.getThreadAssets);
 
 /**
  * @swagger
@@ -75,10 +153,7 @@ router.get('/threads/:threadId/assets',
  *       500:
  *         description: Server error
  */
-router.get('/assets/:assetId', 
-  requireOrgRole(['admin', 'member']), 
-  assetController.getAsset
-);
+router.get('/assets/:assetId', assetController.getAsset);
 
 /**
  * @swagger
@@ -95,6 +170,12 @@ router.get('/assets/:assetId',
  *         schema:
  *           type: string
  *         description: Thread ID
+ *       - in: header
+ *         name: x-organization-id
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional Organization ID
  *     requestBody:
  *       required: true
  *       content:
@@ -138,10 +219,7 @@ router.get('/assets/:assetId',
  *       500:
  *         description: Server error
  */
-router.post('/threads/:threadId/assets', 
-  requireOrgRole(['admin', 'member']), 
-  assetController.createAsset
-);
+router.post('/threads/:threadId/assets', assetController.createAsset);
 
 /**
  * @swagger
@@ -158,6 +236,12 @@ router.post('/threads/:threadId/assets',
  *         schema:
  *           type: string
  *         description: Asset ID
+ *       - in: header
+ *         name: x-organization-id
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional Organization ID
  *     requestBody:
  *       required: true
  *       content:
@@ -193,10 +277,7 @@ router.post('/threads/:threadId/assets',
  *       500:
  *         description: Server error
  */
-router.put('/assets/:assetId', 
-  requireOrgRole(['admin', 'member']), 
-  assetController.updateAsset
-);
+router.put('/assets/:assetId', assetController.updateAsset);
 
 /**
  * @swagger
@@ -213,6 +294,12 @@ router.put('/assets/:assetId',
  *         schema:
  *           type: string
  *         description: Asset ID
+ *       - in: header
+ *         name: x-organization-id
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Optional Organization ID
  *     responses:
  *       200:
  *         description: Asset deleted successfully
@@ -223,9 +310,6 @@ router.put('/assets/:assetId',
  *       500:
  *         description: Server error
  */
-router.delete('/assets/:assetId', 
-  requireOrgRole(['admin', 'member']), 
-  assetController.deleteAsset
-);
+router.delete('/assets/:assetId', assetController.deleteAsset);
 
 export default router; 

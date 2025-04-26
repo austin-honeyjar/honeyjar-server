@@ -7,10 +7,39 @@ import { AuthRequest } from '../types/request';
 const assetService = new AssetService();
 
 export const assetController = {
-  // Get all assets for a thread
-  getThreadAssets: async (req: AuthRequest, res: Response) => {
+  // Get all assets for a user
+  getUserAssets: async (req: AuthRequest, res: Response) => {
     try {
-      const { threadId } = req.params;
+      const userId = req.user?.id;
+      const orgId = req.headers['x-organization-id'] as string;
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      // Organization ID is now optional - just use userId if no orgId
+      // Get all assets for the user, with or without orgId
+      const assets = orgId 
+        ? await assetService.getUserAssets(userId, orgId)
+        : await assetService.getUserAssetsByUserId(userId);
+
+      logger.info('Retrieved user assets', { userId, assetCount: assets.length });
+      res.json({ assets });
+    } catch (error) {
+      logger.error('Error getting user assets:', error);
+      res.status(500).json({
+        error: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get user assets'
+      });
+    }
+  },
+
+  // Get all assets for an organization
+  getOrganizationAssets: async (req: AuthRequest, res: Response) => {
+    try {
       const userId = req.user?.id;
       const orgId = req.headers['x-organization-id'] as string;
 
@@ -27,6 +56,36 @@ export const assetController = {
           message: 'Organization ID is required'
         });
       }
+
+      // Get all assets for the organization
+      const assets = await assetService.getOrganizationAssets(orgId);
+
+      logger.info('Retrieved organization assets', { orgId, assetCount: assets.length });
+      res.json({ assets });
+    } catch (error) {
+      logger.error('Error getting organization assets:', error);
+      res.status(500).json({
+        error: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get organization assets'
+      });
+    }
+  },
+
+  // Get all assets for a thread
+  getThreadAssets: async (req: AuthRequest, res: Response) => {
+    try {
+      const { threadId } = req.params;
+      const userId = req.user?.id;
+      const orgId = req.headers['x-organization-id'] as string;
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      // Organization ID is now optional - removed requirement
 
       // Get assets for the thread
       const assets = await assetService.getThreadAssets(threadId);
@@ -91,12 +150,7 @@ export const assetController = {
         });
       }
 
-      if (!orgId) {
-        return res.status(400).json({
-          error: 'BAD_REQUEST',
-          message: 'Organization ID is required'
-        });
-      }
+      // Organization ID is now optional - removed requirement
 
       // Validate required fields
       if (!name || !type || !title || !content) {
@@ -180,29 +234,29 @@ export const assetController = {
     try {
       const { assetId } = req.params;
       const userId = req.user?.id;
-
+      
       if (!userId) {
         return res.status(401).json({
           error: 'UNAUTHORIZED',
           message: 'User ID not found in request'
         });
       }
-
-      // Get the asset to verify it exists
+      
+      // Get the asset to check if it exists
       const asset = await assetService.getAsset(assetId);
-
+      
       if (!asset) {
         return res.status(404).json({
           error: 'NOT_FOUND',
           message: 'Asset not found'
         });
       }
-
+      
       // Delete the asset
       await assetService.deleteAsset(assetId);
-
+      
       logger.info('Deleted asset', { assetId });
-      res.json({ message: 'Asset deleted successfully' });
+      res.json({ success: true, assetId });
     } catch (error) {
       logger.error('Error deleting asset:', error);
       res.status(500).json({

@@ -95,4 +95,42 @@ export class AssetDBService {
     
     logger.warn(`Deleted asset ${id}`);
   }
+  
+  // Get all assets for a user
+  async getAllAssets(userId: string, orgId: string): Promise<Asset[]> {
+    logger.info(`Getting all assets for user ${userId} in organization ${orgId}`);
+    
+    const userAssets = await db.query.assets.findMany({
+      where: eq(assets.author, userId),
+      orderBy: [desc(assets.createdAt)]
+    });
+    
+    logger.info(`Found ${userAssets.length} assets for user ${userId}`);
+    return userAssets as Asset[];
+  }
+  
+  // Get all assets for a user by userId without organization
+  async getAssetsByUserId(userId: string): Promise<Asset[]> {
+    logger.info(`Getting all assets for user ${userId} without organization filter`);
+    
+    const userAssets = await db.query.assets.findMany({
+      where: eq(assets.author, userId),
+      orderBy: [desc(assets.createdAt)]
+    });
+    
+    logger.info(`Found ${userAssets.length} assets for user ${userId}`);
+    return userAssets as Asset[];
+  }
+  
+  // Get all assets for an organization
+  async getAssetsByOrganization(orgId: string): Promise<Asset[]> {
+    logger.info(`Getting all assets for organization ID: ${orgId}`);
+    
+    const orgAssets = await db.query.assets.findMany({
+      orderBy: [desc(assets.createdAt)]
+    });
+    
+    logger.info(`Found ${orgAssets.length} assets for organization ${orgId}`);
+    return orgAssets as Asset[];
+  }
 } 

@@ -136,6 +136,30 @@ export class AssetService {
   }
   
   /**
+   * Get all assets for a user
+   */
+  async getUserAssets(userId: string, orgId: string): Promise<Asset[]> {
+    logger.info(`Getting all assets for user ${userId} in organization ${orgId}`);
+    return this.assetDBService.getAllAssets(userId, orgId);
+  }
+  
+  /**
+   * Get all assets for a user without requiring organization ID
+   */
+  async getUserAssetsByUserId(userId: string): Promise<Asset[]> {
+    logger.info(`Getting all assets for user ${userId} without organization filter`);
+    return this.assetDBService.getAssetsByUserId(userId);
+  }
+  
+  /**
+   * Get all assets for an organization
+   */
+  async getOrganizationAssets(orgId: string): Promise<Asset[]> {
+    logger.info(`Getting all assets for organization ${orgId}`);
+    return this.assetDBService.getAssetsByOrganization(orgId);
+  }
+  
+  /**
    * Get all assets for a thread
    */
   async getThreadAssets(threadId: string): Promise<Asset[]> {
