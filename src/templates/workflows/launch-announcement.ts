@@ -342,11 +342,21 @@ Use the provided company and announcement information to create platform-specifi
       }
     },
     {
+      type: StepType.ASSET_CREATION,
+      name: "Save Asset to Database",
+      description: "Save the generated asset to the database for future access",
+      prompt: "Saving your asset to your asset library...",
+      dependencies: ["Asset Generation"],
+      metadata: {
+        assetTypes: ["Press Release", "Media Pitch", "Social Post"]
+      }
+    },
+    {
       type: StepType.USER_INPUT,
       name: "Asset Review",
       description: "User reviews and provides feedback on generated assets",
       prompt: "Here's your generated Press Release. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply reply with 'approved'.",
-      dependencies: ["Asset Generation"],
+      dependencies: ["Asset Generation", "Save Asset to Database"],
       metadata: {
         openai_instructions: `You are a PR revision assistant. Your task is to analyze the user's feedback on the generated PR assets and determine if changes are needed.
 

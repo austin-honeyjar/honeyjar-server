@@ -13,11 +13,14 @@ export interface ClerkSession {
   updatedAt: number;
 }
 
+// User object from authentication middleware
 export interface User {
   id: string;
-  sessionId: string;
-  email: string;
-  permissions: string[];
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  sessionId?: string;
+  permissions?: string[];
 }
 
 // Extend Express Request type
@@ -40,11 +43,12 @@ export interface VersionedRequest extends Request {
   apiVersion?: string;
 }
 
+// Request with authenticated user
 export interface AuthRequest extends VersionedRequest {
-  auth: {
-    userId: string;
-    token?: string;
-    payload?: JwtPayload;
-    sessionId?: string;
-  };
+  user?: User;
+}
+
+// Request with file upload
+export interface FileRequest extends AuthRequest {
+  file?: any; // Simplified file type to avoid dependency issues
 } 
