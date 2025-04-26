@@ -51,7 +51,7 @@ export const workflowStatusEnum = pgEnum('workflow_status', ['active', 'complete
 export const stepStatusEnum = pgEnum('step_status', ['pending', 'in_progress', 'complete', 'failed']);
 
 // Workflow step type enum
-export const stepTypeEnum = pgEnum('step_type', ['ai_suggestion', 'user_input', 'api_call', 'data_transformation']);
+export const stepTypeEnum = pgEnum('step_type', ['ai_suggestion', 'user_input', 'api_call', 'data_transformation', 'asset_creation']);
 
 // Workflow templates table
 export const workflowTemplates = pgTable('workflow_templates', {
@@ -106,10 +106,27 @@ export const workflowHistory = pgTable('workflow_history', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Assets table for storing generated assets from workflows
+export const assets = pgTable('assets', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'no action' }), // Prevent deletion when thread is deleted
+  workflowId: uuid('workflow_id').references(() => workflows.id),
+  name: text('name').notNull(),
+  type: text('type').notNull(), // e.g., "Press Release", "Media Pitch", "Social Post"
+  title: text('title').notNull(),
+  subtitle: text('subtitle'),
+  content: text('content').notNull(),
+  author: text('author').notNull(), // User as author
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Define relations
 export const chatThreadsRelations = relations(chatThreads, ({ many }: { many: any }) => ({
   messages: many(chatMessages),
   workflows: many(workflows),
+  assets: many(assets),
 }));
 
 export const chatMessagesRelations = relations(chatMessages, ({ one }: { one: any }) => ({
@@ -134,6 +151,7 @@ export const workflowsRelations = relations(workflows, ({ one, many }: { one: an
   }),
   steps: many(workflowSteps),
   history: many(workflowHistory),
+  assets: many(assets),
 }));
 
 export const workflowStepsRelations = relations(workflowSteps, ({ one, many }: { one: any; many: any }) => ({
@@ -152,5 +170,16 @@ export const workflowHistoryRelations = relations(workflowHistory, ({ one }: { o
   step: one(workflowSteps, {
     fields: [workflowHistory.stepId],
     references: [workflowSteps.id],
+  }),
+}));
+
+export const assetsRelations = relations(assets, ({ one }: { one: any }) => ({
+  thread: one(chatThreads, {
+    fields: [assets.threadId],
+    references: [chatThreads.id],
+  }),
+  workflow: one(workflows, {
+    fields: [assets.workflowId],
+    references: [workflows.id],
   }),
 })); 

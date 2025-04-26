@@ -36,6 +36,13 @@
       "when": 1745614552108,
       "tag": "0004_sparkling_star_brand",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1745660687290,
+      "tag": "0005_loving_lady_deathstrike",
+      "breakpoints": true
     }
   ]
 }

@@ -47,6 +47,69 @@ const options: swaggerJsdoc.Options = {
           },
           required: ['id', 'userId', 'title', 'createdAt'],
         },
+        Asset: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              format: 'uuid',
+              description: 'Unique identifier for the asset',
+            },
+            threadId: {
+              type: 'string',
+              format: 'uuid',
+              description: 'ID of the thread this asset belongs to',
+            },
+            workflowId: {
+              type: 'string',
+              format: 'uuid',
+              description: 'ID of the workflow that created this asset (optional)',
+            },
+            organizationId: {
+              type: 'string',
+              description: 'ID of the organization this asset belongs to (optional)',
+            },
+            name: {
+              type: 'string',
+              description: 'Name of the asset',
+            },
+            type: {
+              type: 'string',
+              description: 'Type of asset (e.g., "Press Release", "Media Pitch")',
+            },
+            title: {
+              type: 'string',
+              description: 'Title of the asset',
+            },
+            subtitle: {
+              type: 'string',
+              description: 'Subtitle of the asset (optional)',
+            },
+            content: {
+              type: 'string',
+              description: 'Content of the asset',
+            },
+            author: {
+              type: 'string',
+              description: 'ID of the user who created the asset',
+            },
+            metadata: {
+              type: 'object',
+              description: 'Additional metadata for the asset (optional)',
+            },
+            createdAt: {
+              type: 'string',
+              format: 'date-time',
+              description: 'When the asset was created',
+            },
+            updatedAt: {
+              type: 'string',
+              format: 'date-time',
+              description: 'When the asset was last updated',
+            },
+          },
+          required: ['id', 'threadId', 'name', 'type', 'title', 'content', 'author', 'createdAt', 'updatedAt'],
+        },
         Message: {
           type: 'object',
           properties: {
