@@ -16,6 +16,7 @@ export enum StepType {
   USER_INPUT = "user_input",
   API_CALL = "api_call",
   DATA_TRANSFORMATION = "data_transformation",
+  ASSET_CREATION = "asset_creation",
 }
 
 export enum WorkflowAction {

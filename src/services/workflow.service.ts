@@ -8,6 +8,7 @@ import {
 } from "../types/workflow";
 import {WorkflowDBService} from "./workflowDB.service";
 import { OpenAIService } from './openai.service';
+import { AssetService } from './asset.service';
 import logger from '../utils/logger';
 import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow';
 import { DUMMY_WORKFLOW_TEMPLATE } from "../templates/workflows/dummy-workflow";
@@ -19,10 +20,12 @@ import { eq } from "drizzle-orm";
 export class WorkflowService {
   private dbService: WorkflowDBService;
   private openAIService: OpenAIService;
+  private assetService: AssetService;
 
   constructor() {
     this.dbService = new WorkflowDBService();
     this.openAIService = new OpenAIService();
+    this.assetService = new AssetService();
   }
 
   // Template Management
@@ -521,6 +524,51 @@ export class WorkflowService {
         await this.dbService.updateStep(stepId, {
           metadata: { ...step.metadata, selectedAnnouncementType: userInput }
         });
+      } else if (step.stepType === StepType.ASSET_CREATION) {
+        // Handle asset creation step type
+        logger.info('Processing asset creation step', { stepId, stepName: step.name });
+        
+        // Get the workflow to get the threadId
+        const workflow = await this.dbService.getWorkflow(workflowId);
+        if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+        
+        try {
+          // Generate and store the asset using our AssetService
+          const asset = await this.assetService.generateAssetFromStep(
+            workflowId,
+            workflow.threadId,
+            step,
+            "system" // Default user ID for system-generated assets
+          );
+          
+          // Store asset ID in step metadata
+          await this.dbService.updateStep(stepId, {
+            metadata: { 
+              ...step.metadata,
+              assetId: asset.id,
+              assetCreated: true
+            }
+          });
+          
+          // Add a message to the thread about the created asset
+          await this.addDirectMessage(
+            workflow.threadId,
+            `Created ${asset.type}: "${asset.title}"`
+          );
+          
+          logger.info('Asset created successfully', { 
+            assetId: asset.id, 
+            assetType: asset.type,
+            assetTitle: asset.title
+          });
+        } catch (error) {
+          logger.error('Error creating asset', { error });
+          // Add error message but allow workflow to continue
+          await this.addDirectMessage(
+            workflow.threadId,
+            `There was an error creating the asset: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
       }
 
       // 2. Update the current step: set userInput and mark as COMPLETE

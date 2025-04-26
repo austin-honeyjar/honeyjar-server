@@ -42,6 +42,48 @@ components:
         uptime:
           type: number
           description: Server uptime in seconds
+    Asset:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        threadId:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440001"
+        workflowId:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440002"
+        name:
+          type: string
+          example: "Launch Announcement"
+        type:
+          type: string
+          example: "Press Release"
+        title:
+          type: string
+          example: "Acme Inc. Launches Revolutionary New Product"
+        subtitle:
+          type: string
+          example: "Innovative solution set to disrupt the industry"
+        content:
+          type: string
+          example: "Full content of the press release..."
+        author:
+          type: string
+          example: "user_123456"
+        metadata:
+          type: object
+          example: { "version": "1.0", "category": "technology" }
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
 security:
   - bearerAuth: []
   - clerkAuth: []
@@ -50,6 +92,8 @@ tags:
     description: Health check endpoints
   - name: Auth
     description: Authentication related endpoints
+  - name: Assets
+    description: Asset management endpoints
 paths:
   /health:
     get:
@@ -85,6 +129,279 @@ paths:
                         example: user_123
         '401':
           description: Unauthorized - Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/threads/{threadId}/assets:
+    get:
+      summary: Get all assets for a thread
+      description: Returns all assets associated with a specific thread
+      tags: [Assets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: threadId
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID of the thread
+      responses:
+        '200':
+          description: List of assets for the thread
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Asset'
+        '401':
+          description: Unauthorized - Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: Create a new asset 
+      description: Creates a new asset for a specific thread
+      tags: [Assets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: threadId
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID of the thread
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - type
+                - title
+                - content
+              properties:
+                name:
+                  type: string
+                  description: Name of the asset
+                  example: "Launch Announcement"
+                type:
+                  type: string
+                  description: Type of asset
+                  example: "Press Release"
+                title:
+                  type: string
+                  description: Title of the asset
+                  example: "Acme Inc. Launches Revolutionary New Product"
+                subtitle:
+                  type: string
+                  description: Subtitle of the asset (optional)
+                  example: "Innovative solution set to disrupt the industry"
+                content:
+                  type: string
+                  description: Content of the asset
+                  example: "Full content of the press release..."
+                workflowId:
+                  type: string
+                  format: uuid
+                  description: ID of the associated workflow (optional)
+                metadata:
+                  type: object
+                  description: Additional metadata for the asset (optional)
+      responses:
+        '201':
+          description: Asset created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  asset:
+                    $ref: '#/components/schemas/Asset'
+        '400':
+          description: Bad request - Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized - Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/assets/{assetId}:
+    get:
+      summary: Get a specific asset by ID
+      description: Returns a specific asset by its ID
+      tags: [Assets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: assetId
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID of the asset
+      responses:
+        '200':
+          description: Asset details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  asset:
+                    $ref: '#/components/schemas/Asset'
+        '401':
+          description: Unauthorized - Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Asset not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Update an existing asset
+      description: Updates a specific asset by its ID
+      tags: [Assets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: assetId
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID of the asset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: Name of the asset
+                type:
+                  type: string
+                  description: Type of asset
+                title:
+                  type: string
+                  description: Title of the asset
+                subtitle:
+                  type: string
+                  description: Subtitle of the asset
+                content:
+                  type: string
+                  description: Content of the asset
+                metadata:
+                  type: object
+                  description: Additional metadata for the asset
+      responses:
+        '200':
+          description: Asset updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  asset:
+                    $ref: '#/components/schemas/Asset'
+        '401':
+          description: Unauthorized - Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Asset not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete an asset
+      description: Deletes a specific asset by its ID
+      tags: [Assets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: assetId
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: ID of the asset
+      responses:
+        '200':
+          description: Asset deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Asset deleted successfully"
+        '401':
+          description: Unauthorized - Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Asset not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
           content:
             application/json:
               schema:
