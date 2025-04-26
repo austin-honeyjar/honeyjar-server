@@ -29,6 +29,13 @@
       "when": 1745100301018,
       "tag": "0003_milky_pixie",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1745614552108,
+      "tag": "0004_sparkling_star_brand",
+      "breakpoints": true
     }
   ]
 }
