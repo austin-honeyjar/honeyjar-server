@@ -9,7 +9,7 @@ export const requirePermission = (permission: string) => {
         throw new ForbiddenError('User not authenticated');
       }
 
-      if (!req.user.permissions.includes(permission)) {
+      if (!req.user.permissions || !req.user.permissions.includes(permission)) {
         logger.warn('Permission denied:', {
           userId: req.user.id,
           requiredPermission: permission,

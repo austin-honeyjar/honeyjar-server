@@ -3,7 +3,7 @@ import { db } from '../db';
 import { chatMessages, chatThreads } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import logger from '../utils/logger';
-import { CreateChatInput } from '../validators/chat.validator';
+import { CreateChatInput, CreateThreadInput } from '../validators/chat.validator';
 import { WorkflowService } from '../services/workflow.service';
 import { ChatService } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';

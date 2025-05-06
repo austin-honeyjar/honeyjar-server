@@ -77,6 +77,15 @@ The database schema is automatically initialized when the PostgreSQL container s
 
 - **Data Management Tables**:
   - `csv_metadata`: Stores metadata about imported CSV files
+  
+- **Asset Management Tables**:
+  - `assets`: Stores content assets created during workflows
+
+The database schema incorporates all migrations from the Drizzle ORM migration files, ensuring:
+- Safe enum type creation with proper error handling
+- Proper foreign key relationships between tables
+- Support for asset creation workflow steps
+- OpenAI prompt and response tracking in workflow steps
 
 If you need to manually reinitialize the database:
 

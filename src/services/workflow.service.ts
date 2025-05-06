@@ -75,6 +75,7 @@ export class WorkflowService {
 
     // Create steps and set first step as IN_PROGRESS
     let firstStepId: string | null = null;
+    let firstStepPrompt: string | null = null;
     if (template.steps && template.steps.length > 0) {
       for (let i = 0; i < template.steps.length; i++) {
         const stepDefinition = template.steps[i];
@@ -97,12 +98,20 @@ export class WorkflowService {
 
         if (i === 0) {
           firstStepId = createdStep.id;
+          firstStepPrompt = stepDefinition.prompt;
         }
       }
 
       if (firstStepId) {
         await this.dbService.updateWorkflowCurrentStep(workflow.id, firstStepId);
         console.log(`Set currentStepId for workflow ${workflow.id} to ${firstStepId}`);
+        
+        // Send the first step's prompt as a message from the AI
+        if (firstStepPrompt) {
+          await this.addDirectMessage(threadId, firstStepPrompt);
+          console.log(`Sent first step prompt as message to thread ${threadId}`);
+        }
+        
         return this.dbService.getWorkflow(workflow.id) as Promise<Workflow>;
       }
     }

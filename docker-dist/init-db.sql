@@ -1,7 +1,21 @@
 -- Create enums
-CREATE TYPE workflow_status AS ENUM ('active', 'completed', 'failed');
-CREATE TYPE step_status AS ENUM ('pending', 'in_progress', 'complete', 'failed');
-CREATE TYPE step_type AS ENUM ('ai_suggestion', 'user_input', 'api_call', 'data_transformation');
+DO $$ BEGIN
+ CREATE TYPE "workflow_status" AS ENUM ('active', 'completed', 'failed');
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+ CREATE TYPE "step_status" AS ENUM ('pending', 'in_progress', 'complete', 'failed');
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+ CREATE TYPE "step_type" AS ENUM ('ai_suggestion', 'user_input', 'api_call', 'data_transformation', 'asset_creation');
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
 
 -- Create chat_threads table
 CREATE TABLE IF NOT EXISTS chat_threads (
@@ -44,7 +58,7 @@ CREATE TABLE IF NOT EXISTS workflow_templates (
 -- Create workflows table
 CREATE TABLE IF NOT EXISTS workflows (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  thread_id UUID NOT NULL,
+  thread_id UUID NOT NULL REFERENCES chat_threads(id),
   template_id UUID NOT NULL REFERENCES workflow_templates(id),
   status workflow_status NOT NULL DEFAULT 'active',
   current_step_id UUID,
@@ -66,6 +80,8 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
   metadata JSONB,
   ai_suggestion TEXT,
   user_input TEXT,
+  openai_prompt TEXT,
+  openai_response TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -80,4 +96,20 @@ CREATE TABLE IF NOT EXISTS workflow_history (
   new_state JSONB NOT NULL,
   metadata JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Create assets table
+CREATE TABLE IF NOT EXISTS assets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  thread_id UUID NOT NULL REFERENCES chat_threads(id),
+  workflow_id UUID REFERENCES workflows(id),
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  subtitle TEXT,
+  content TEXT NOT NULL,
+  author TEXT NOT NULL,
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 ); 

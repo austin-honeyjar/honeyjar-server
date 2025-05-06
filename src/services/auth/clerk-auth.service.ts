@@ -36,7 +36,7 @@ export class ClerkAuthService implements AuthService {
     }
   }
 
-  async getUserPermissions(userId: string): Promise<UserPermissions> {
+  async getUserPermissions(userId: string): Promise<string[]> {
     try {
       const user = await clerk.users.getUser(userId);
       
@@ -98,7 +98,7 @@ export class ClerkAuthService implements AuthService {
         roles: result.roles
       });
 
-      return result;
+      return result.permissions || [];
     } catch (error) {
       logger.error('Failed to get user permissions:', error);
       throw new Error('Failed to get user permissions');
@@ -140,7 +140,7 @@ export class ClerkAuthService implements AuthService {
           user: {
             id: user.id,
             email,
-            permissions: permissions.permissions
+            permissions: permissions
           }
         };
       }
@@ -194,8 +194,8 @@ export class ClerkAuthService implements AuthService {
         id: user.id,
         email: user.emailAddresses[0]?.emailAddress || '',
         name: `${user.firstName} ${user.lastName}`,
-        permissions: permissions.permissions,
-        roles: permissions.roles || []
+        permissions: permissions,
+        roles: permissions
       };
     } catch (error) {
       logger.error('Failed to get user:', error);
@@ -217,20 +217,20 @@ export class ClerkAuthService implements AuthService {
           logger.info('User permissions check:', {
             userId: user.id,
             email: user.emailAddresses[0]?.emailAddress,
-            hasPermission: permissions.permissions.includes(permission),
-            isAdmin: permissions.roles?.includes('org:admin'),
-            allPermissions: permissions.permissions
+            hasPermission: permissions.includes(permission),
+            isAdmin: permissions.includes('org:admin'),
+            allPermissions: permissions
           });
 
           // Check both direct permissions and role-based permissions
-          if (permissions.permissions.includes(permission) || 
-              (permission === 'org:feature:admin_panel' && permissions.roles?.includes('org:admin'))) {
+          if (permissions.includes(permission) || 
+              (permission === 'org:feature:admin_panel' && permissions.includes('org:admin'))) {
             usersWithPermission.push({
               id: user.id,
               email: user.emailAddresses[0]?.emailAddress || '',
               name: `${user.firstName} ${user.lastName}`,
-              permissions: permissions.permissions,
-              roles: permissions.roles || []
+              permissions: permissions,
+              roles: permissions
             });
           }
         } catch (error) {
