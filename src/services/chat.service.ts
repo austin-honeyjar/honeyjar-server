@@ -13,6 +13,7 @@ export class ChatService {
   }
 
   async createThread(userId: string, title: string) {
+    // Create the thread
     const [thread] = await db
       .insert(chatThreads)
       .values({
@@ -20,6 +21,22 @@ export class ChatService {
         title,
       })
       .returning();
+
+    // Immediately create and start the base workflow
+    try {
+      const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
+      if (!baseTemplate) {
+        throw new Error("Base workflow template not found");
+      }
+
+      // Create the workflow - this will automatically send the first message
+      await this.workflowService.createWorkflow(thread.id, baseTemplate.id);
+      console.log(`Base workflow created and initialized for thread ${thread.id}`);
+    } catch (error) {
+      console.error(`Error initializing base workflow for thread ${thread.id}:`, error);
+      // Don't throw the error as we still want to return the thread
+    }
+
     return thread;
   }
 
@@ -46,34 +63,21 @@ export class ChatService {
   async handleUserMessage(threadId: string, content: string) {
     await this.addMessage(threadId, content, true);
 
-    // Get the *most recently active* workflow, including potentially the Base workflow
-    // Let's adjust the logic slightly - maybe fetch all and determine active?
-    // Or, let's try fetching the Base first if applicable.
-    let workflow = await this.workflowService.getWorkflowByThreadId(threadId); // Tries to get non-base first
+    // Get the active workflow for this thread
+    let workflow = await this.workflowService.getWorkflowByThreadId(threadId);
     if (!workflow) {
-       // If no non-base workflow, check if Base exists and is active
-       const baseWorkflow = await this.workflowService.getBaseWorkflowByThreadId(threadId);
-       if (baseWorkflow && baseWorkflow.status === WorkflowStatus.ACTIVE) {
-           workflow = baseWorkflow;
-       }
-    }
-
-
-    // If still no workflow (neither non-base active nor base active), create the Base workflow
-    if (!workflow) {
+      // If no workflow exists at all, something went wrong during thread creation
+      // Create the base workflow as a fallback
+      console.warn(`No workflow found for thread ${threadId}. Creating base workflow as fallback.`);
       const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
       if (!baseTemplate) throw new Error("Base workflow template not found");
       
-      const newWorkflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id);
-      // Get the first prompt for the newly created Base workflow
-      return this.getNextPrompt(threadId, newWorkflow.id);
+      workflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id);
     }
 
     // If we have an active workflow, process the current step
     const currentStepId = workflow.currentStepId;
     if (!currentStepId) {
-      // This might happen if a workflow was somehow left without a current step
-      // Or potentially right after creation before the first prompt call?
       console.warn(`Workflow ${workflow.id} has no currentStepId. Attempting to get next prompt.`);
       return this.getNextPrompt(threadId, workflow.id);
     }

@@ -65,6 +65,7 @@ export class WorkflowService {
     }
     console.log(`Using template "${template.name}" with ${template.steps?.length || 0} steps defined.`);
 
+    // Create the workflow first
     const workflow = await this.dbService.createWorkflow({
       threadId,
       templateId,
@@ -75,10 +76,11 @@ export class WorkflowService {
 
     // Create steps and set first step as IN_PROGRESS
     let firstStepId: string | null = null;
-    let firstStepPrompt: string | null = null;
     if (template.steps && template.steps.length > 0) {
+      // Create all steps first
       for (let i = 0; i < template.steps.length; i++) {
         const stepDefinition = template.steps[i];
+        const isFirstStep = i === 0;
         
         // Log the definition being used for this iteration
         console.log(`Creating step ${i} from definition: ${JSON.stringify({name: stepDefinition.name, prompt: stepDefinition.prompt})}`);
@@ -89,34 +91,28 @@ export class WorkflowService {
           name: stepDefinition.name,
           description: stepDefinition.description,
           prompt: stepDefinition.prompt,
-          status: i === 0 ? StepStatus.IN_PROGRESS : StepStatus.PENDING,
+          status: isFirstStep ? StepStatus.IN_PROGRESS : StepStatus.PENDING,
           order: i,
           dependencies: stepDefinition.dependencies || [],
           metadata: stepDefinition.metadata || {}
         });
-        // dbService.createStep logging will confirm insertion details
 
-        if (i === 0) {
+        if (isFirstStep && stepDefinition.prompt) {
           firstStepId = createdStep.id;
-          firstStepPrompt = stepDefinition.prompt;
+          // Send the first step's prompt as a message from the AI
+          await this.addDirectMessage(threadId, stepDefinition.prompt);
+          console.log(`Sent first step prompt as message to thread ${threadId}: "${stepDefinition.prompt}"`);
         }
       }
 
       if (firstStepId) {
+        // Set the workflow's current step to the first step
         await this.dbService.updateWorkflowCurrentStep(workflow.id, firstStepId);
         console.log(`Set currentStepId for workflow ${workflow.id} to ${firstStepId}`);
-        
-        // Send the first step's prompt as a message from the AI
-        if (firstStepPrompt) {
-          await this.addDirectMessage(threadId, firstStepPrompt);
-          console.log(`Sent first step prompt as message to thread ${threadId}`);
-        }
-        
-        return this.dbService.getWorkflow(workflow.id) as Promise<Workflow>;
       }
     }
 
-    console.log(`Workflow ${workflow.id} created with no steps or first step ID not set.`);
+    // Return the complete workflow
     return this.dbService.getWorkflow(workflow.id) as Promise<Workflow>;
   }
 

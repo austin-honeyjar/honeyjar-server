@@ -6,7 +6,7 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
   description: "Initial workflow for selecting specific workflow type and setting thread title",
   steps: [
     {
-      type: StepType.USER_INPUT,
+      type: StepType.AI_SUGGESTION,
       name: "Workflow Selection",
       description: "Select the type of workflow you'd like to create",
       prompt: "What type of workflow would you like to create? Choose from: Launch Announcement, or Dummy Workflow.",
