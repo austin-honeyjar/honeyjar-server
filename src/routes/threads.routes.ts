@@ -11,6 +11,8 @@ import { createChatSchema } from '../validators/chat.validator';
 import { chatController } from '../controllers/chatController';
 import { requireOrgRole } from '../middleware/org.middleware';
 import { WorkflowDBService } from '../services/workflowDB.service';
+import { ChatService } from '../services/chat.service';
+import { WorkflowService } from '../services/workflow.service';
 
 const router = Router();
 
@@ -305,6 +307,7 @@ router.post('/', async (req: AuthRequest, res) => {
       permissions: req.user.permissions
     });
     
+    // Create the thread in the database
     const [thread] = await db
       .insert(chatThreads)
       .values({
@@ -314,7 +317,24 @@ router.post('/', async (req: AuthRequest, res) => {
       })
       .returning();
     
-    logger.info('Thread created:', { 
+    // Initialize the base workflow
+    const workflowService = new WorkflowService();
+    const chatService = new ChatService();
+    
+    // Get the base workflow template
+    const baseTemplate = await workflowService.getTemplateByName('Base Workflow');
+    if (!baseTemplate) {
+      logger.error('Base workflow template not found');
+      return res.status(500).json({ 
+        status: 'error', 
+        message: 'Failed to initialize workflow - template not found' 
+      });
+    }
+    
+    // Create the base workflow - this sends the initial AI message
+    await workflowService.createWorkflow(thread.id, baseTemplate.id);
+    
+    logger.info('Thread created with base workflow:', { 
       userId: req.user.id,
       orgId,
       threadId: thread.id
