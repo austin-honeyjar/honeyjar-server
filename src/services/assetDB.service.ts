@@ -65,10 +65,41 @@ export class AssetDBService {
   ): Promise<Asset> {
     logger.info(`Updating asset ${id}`);
     
-    const updateData = {
+    // First, get the current state of the asset
+    const currentAsset = await this.getAsset(id);
+    if (!currentAsset) {
+      logger.error(`Failed to update asset ${id}. Asset not found.`);
+      throw new Error(`Asset ${id} not found`);
+    }
+    
+    // If content is being updated, store the previous version in metadata
+    const updateData: any = {
       ...data,
       updatedAt: new Date()
     };
+    
+    if (data.content && data.content !== currentAsset.content) {
+      // Initialize metadata object if it doesn't exist
+      if (!updateData.metadata) {
+        updateData.metadata = currentAsset.metadata || {};
+      }
+      
+      // Create or update the editHistory array
+      if (!updateData.metadata.editHistory) {
+        updateData.metadata.editHistory = [];
+      }
+      
+      // Store the previous state including timestamp
+      updateData.metadata.previousState = {
+        content: currentAsset.content,
+        timestamp: new Date().toISOString(),
+        version: updateData.metadata.currentVersion || 1
+      };
+      
+      // Increment version number
+      updateData.metadata.currentVersion = 
+        (currentAsset.metadata?.currentVersion || 1) + 1;
+    }
     
     const [updatedAsset] = await db
       .update(assets)
@@ -77,7 +108,7 @@ export class AssetDBService {
       .returning();
     
     if (!updatedAsset) {
-      logger.error(`Failed to update asset ${id}. Asset not found or update failed.`);
+      logger.error(`Failed to update asset ${id}. Update operation failed.`);
       throw new Error(`Failed to update asset ${id}`);
     }
     
@@ -132,5 +163,69 @@ export class AssetDBService {
     
     logger.info(`Found ${orgAssets.length} assets for organization ${orgId}`);
     return orgAssets as Asset[];
+  }
+  
+  // Undo the last edit to an asset
+  async undoLastEdit(id: string): Promise<Asset> {
+    logger.info(`Undoing last edit for asset ${id}`);
+    
+    // Get current asset state
+    const asset = await this.getAsset(id);
+    if (!asset) {
+      logger.error(`Cannot undo edit: Asset ${id} not found`);
+      throw new Error(`Asset ${id} not found`);
+    }
+    
+    // Check if there's a previous state to restore
+    if (!asset.metadata?.previousState?.content) {
+      logger.warn(`No previous state found for asset ${id}`);
+      throw new Error(`No previous edit state found for asset ${id}`);
+    }
+    
+    // Get the previous content
+    const previousContent = asset.metadata.previousState.content;
+    const previousVersion = asset.metadata.previousState.version;
+    
+    // Initialize update data
+    const updateData: any = {
+      content: previousContent,
+      updatedAt: new Date(),
+      metadata: {
+        ...asset.metadata,
+        currentVersion: previousVersion,
+        undoPerformed: true,
+        undoTimestamp: new Date().toISOString()
+      }
+    };
+    
+    // Remove the previous state we're restoring from
+    delete updateData.metadata.previousState;
+    
+    // Add undo record to edit history
+    if (!updateData.metadata.editHistory) {
+      updateData.metadata.editHistory = [];
+    }
+    
+    updateData.metadata.editHistory.push({
+      type: 'undo',
+      timestamp: new Date().toISOString(),
+      fromVersion: asset.metadata.currentVersion || 1,
+      toVersion: previousVersion
+    });
+    
+    // Perform the update
+    const [updatedAsset] = await db
+      .update(assets)
+      .set(updateData)
+      .where(eq(assets.id, id))
+      .returning();
+    
+    if (!updatedAsset) {
+      logger.error(`Failed to undo edit for asset ${id}`);
+      throw new Error(`Failed to undo edit for asset ${id}`);
+    }
+    
+    logger.info(`Successfully undid last edit for asset ${id}`);
+    return updatedAsset as Asset;
   }
 } 

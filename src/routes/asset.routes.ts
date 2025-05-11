@@ -312,4 +312,92 @@ router.put('/assets/:assetId', assetController.updateAsset);
  */
 router.delete('/assets/:assetId', assetController.deleteAsset);
 
+/**
+ * @swagger
+ * /api/v1/assets/{assetId}/edit:
+ *   post:
+ *     summary: Edit text in an asset with AI assistance
+ *     tags: [Assets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: assetId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Asset ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - selectedText
+ *               - instruction
+ *             properties:
+ *               selectedText:
+ *                 type: string
+ *                 description: The text selection to be edited
+ *               instruction:
+ *                 type: string
+ *                 description: Instructions for how to edit the selected text
+ *     responses:
+ *       200:
+ *         description: Asset text edited successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 asset:
+ *                   $ref: '#/components/schemas/Asset'
+ *       400:
+ *         description: Bad request
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Asset not found
+ *       500:
+ *         description: Server error
+ */
+router.post('/assets/:assetId/edit', assetController.editAssetText);
+
+/**
+ * @swagger
+ * /api/v1/assets/{assetId}/undo-edit:
+ *   post:
+ *     summary: Undo the last text edit in an asset
+ *     tags: [Assets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: assetId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Asset ID
+ *     responses:
+ *       200:
+ *         description: Last edit undone successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 asset:
+ *                   $ref: '#/components/schemas/Asset'
+ *       400:
+ *         description: Bad request
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Asset not found or no edit to undo
+ *       500:
+ *         description: Server error
+ */
+router.post('/assets/:assetId/undo-edit', assetController.undoLastEdit);
+
 export default router; 

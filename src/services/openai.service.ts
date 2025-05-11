@@ -236,4 +236,68 @@ export class OpenAIService {
 
     return systemMessage;
   }
+
+  /**
+   * Generate an edited version of text based on instruction
+   * Used specifically for asset text editing
+   */
+  async generateEditedText(
+    originalText: string,
+    instruction: string
+  ): Promise<string> {
+    try {
+      logger.info('Generating edited text with OpenAI', {
+        originalTextLength: originalText.length,
+        instructionLength: instruction.length
+      });
+
+      const prompt = `Below is a portion of text that needs to be edited:
+      
+ORIGINAL TEXT:
+"""
+${originalText}
+"""
+
+INSTRUCTIONS:
+${instruction}
+
+Please provide ONLY the edited version of the text, with no additional comments or explanations.`;
+
+      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { 
+          role: 'system', 
+          content: 'You are an expert editor who follows instructions precisely. Provide only the edited version of the text.' 
+        },
+        { role: 'user', content: prompt }
+      ];
+
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        temperature: 0.3, // Lower temperature for more precise edits
+        max_tokens: 2000,
+        presence_penalty: 0,
+        frequency_penalty: 0,
+      });
+
+      const response = completion.choices[0]?.message?.content;
+      if (!response) {
+        logger.error('No response generated from OpenAI for text edit');
+        throw new Error('No response generated from OpenAI');
+      }
+
+      logger.info('Generated edited text', {
+        responseLength: response.length,
+        usage: completion.usage
+      });
+
+      return response;
+    } catch (error) {
+      logger.error('Error generating edited text:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      throw error;
+    }
+  }
 } 

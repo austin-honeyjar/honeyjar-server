@@ -264,5 +264,138 @@ export const assetController = {
         message: 'Failed to delete asset'
       });
     }
+  },
+
+  // Edit asset text with AI assistance
+  editAssetText: async (req: AuthRequest, res: Response) => {
+    try {
+      const { assetId } = req.params;
+      const userId = req.user?.id;
+      const { selectedText, instruction } = req.body;
+
+      logger.info('Received edit request', { 
+        assetId,
+        userId,
+        selectedTextLength: selectedText?.length,
+        instructionLength: instruction?.length
+      });
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      if (!assetId) {
+        logger.warn('Missing assetId in request params');
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Asset ID is required'
+        });
+      }
+
+      if (!selectedText || !instruction) {
+        logger.warn('Missing required fields', { 
+          hasSelectedText: !!selectedText, 
+          hasInstruction: !!instruction 
+        });
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Selected text and instruction are required'
+        });
+      }
+
+      // Get the existing asset to verify it exists
+      const existingAsset = await assetService.getAsset(assetId);
+
+      if (!existingAsset) {
+        logger.warn(`Asset not found: ${assetId}`);
+        return res.status(404).json({
+          error: 'NOT_FOUND',
+          message: 'Asset not found'
+        });
+      }
+
+      // Process the edit request and get updated asset
+      logger.info('Processing edit request', { assetId });
+      const asset = await assetService.editAssetText(assetId, {
+        selectedText,
+        instruction,
+        userId
+      });
+
+      logger.info('Updated asset text with AI assistance', { 
+        assetId, 
+        instructionLength: instruction.length,
+        selectedTextLength: selectedText.length
+      });
+      
+      res.json({ asset });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      logger.error('Error editing asset text:', { error: errorMessage });
+      res.status(500).json({
+        error: 'INTERNAL_SERVER_ERROR',
+        message: `Failed to edit asset text: ${errorMessage}`
+      });
+    }
+  },
+  
+  // Undo the last text edit for an asset
+  undoLastEdit: async (req: AuthRequest, res: Response) => {
+    try {
+      const { assetId } = req.params;
+      const userId = req.user?.id;
+
+      logger.info('Received undo edit request', { 
+        assetId,
+        userId
+      });
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      if (!assetId) {
+        logger.warn('Missing assetId in request params');
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Asset ID is required'
+        });
+      }
+
+      // Get the existing asset to verify it exists
+      const existingAsset = await assetService.getAsset(assetId);
+
+      if (!existingAsset) {
+        logger.warn(`Asset not found: ${assetId}`);
+        return res.status(404).json({
+          error: 'NOT_FOUND',
+          message: 'Asset not found'
+        });
+      }
+
+      // Process the undo request
+      logger.info('Processing undo request', { assetId });
+      const asset = await assetService.undoLastEdit(assetId, userId);
+
+      logger.info('Undid last edit for asset', { 
+        assetId,
+        restoredVersion: asset.metadata?.currentVersion || 1
+      });
+      
+      res.json({ asset });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      logger.error('Error undoing asset edit:', { error: errorMessage });
+      res.status(500).json({
+        error: 'INTERNAL_SERVER_ERROR',
+        message: `Failed to undo edit: ${errorMessage}`
+      });
+    }
   }
 }; 
