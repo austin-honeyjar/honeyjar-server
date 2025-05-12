@@ -394,11 +394,110 @@ Response: NEED_CLARIFICATION`
       }
     },
     {
+      type: StepType.API_CALL,
+      name: "Asset Revision",
+      description: "Revise the asset based on user feedback",
+      prompt: "Revising your asset based on your feedback. This may take a moment...",
+      dependencies: ["Asset Review", "Asset Revision"],
+      metadata: {
+        loopUntilApproved: true,
+        templates: {
+          pressRelease: `You are a PR writing assistant specializing in press release revisions. Your task is to revise a press release based on user feedback.
+
+INSTRUCTIONS:
+1. Read the existing press release carefully
+2. Understand the specific changes requested by the user
+3. Apply those changes while maintaining the overall structure and professionalism
+4. Present the revised press release in full
+
+WRITING STYLE:
+- Maintain professional and factual tone with high-impact language
+- Keep third-person perspective throughout
+- Avoid hyperbole or excessive adjectives
+- Use active voice, present tense for quotes, past tense for events
+- Ensure short paragraphs (2-4 sentences each)
+- Aim for total length: 300-500 words
+
+PRESS RELEASE STRUCTURE TO MAINTAIN:
+1. Headline: Clear, attention-grabbing title that conveys the main news
+2. Dateline: City, State — Date
+3. Lead Paragraph: The most important information
+4. Body Paragraphs: Supporting details and context
+5. Quote(s): From company leadership or partners
+6. Availability/Pricing/Timeline Information
+7. Boilerplate: Standard company description
+8. Contact Information: Media contact details
+
+RESPONSE FORMAT:
+Begin with "Here's your revised Press Release with the requested changes:" followed by the full press release text.
+
+EXAMPLE RESPONSE:
+"Here's your revised Press Release with the requested changes: 
+
+**FOR IMMEDIATE RELEASE**
+
+**[Headline]**
+
+**[Dateline]**
+
+[Lead paragraph]
+
+[Body paragraphs]
+
+[Quote]
+
+[Availability]
+
+**About [Company]:**
+[Boilerplate]
+
+**Contact Information:**
+[Contact details]"`
+        },
+        openai_instructions: `You are a PR revision assistant. Your task is to analyze the user's feedback on the revised PR assets and determine if additional changes are needed or if they approve the current version.
+
+TASK:
+1. Determine if the user has approved the asset now or wants more changes
+2. If they request more changes, identify the specific changes needed
+3. If they approve, we can move to the next step
+4. If their response is unclear, ask for clarification
+
+RESPONSE FORMAT:
+If the user approves (any variation of "approved", "looks good", "satisfied", "no more changes", etc.), respond with EXACTLY: "APPROVED"
+
+If the user requests more changes, respond with a JSON structure like this:
+{
+  "approved": false,
+  "changes": [
+    "Make it shorter",
+    "Add more specifics about the product features",
+    "Change the tone to be more enthusiastic"
+  ]
+}
+
+If you need clarification, respond with EXACTLY: "NEED_CLARIFICATION"
+
+EXAMPLES:
+
+User: "This looks good now, approved"
+Response: APPROVED
+
+User: "I'd like it to be even shorter"
+Response: {"approved":false,"changes":["Make it even shorter"]}
+
+User: "No more changes needed"
+Response: APPROVED
+
+User: "I'm not sure about this"
+Response: NEED_CLARIFICATION`
+      }
+    },
+    {
       type: StepType.AI_SUGGESTION,
       name: "Post-Asset Tasks",
       description: "Suggest next steps for asset distribution and publishing",
-      prompt: "Now that we have your assets ready, would you like help with: 1) Creating a media list, 2) Planning a publishing strategy, 3) Scheduling distribution, or 4) Something else?",
-      dependencies: ["Asset Review"],
+      prompt: "Now that we have your final approved assets ready, would you like help with: 1) Creating a media list, 2) Planning a publishing strategy, 3) Scheduling distribution, or 4) Something else?",
+      dependencies: ["Asset Review", "Asset Revision"],
       metadata: {
         openai_instructions: `You are a PR distribution strategy assistant. Your task is to recommend next steps for the user's announcement assets and provide tailored guidance based on their needs.
 

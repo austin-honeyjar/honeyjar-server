@@ -54,12 +54,44 @@ export class WorkflowService {
     console.log('Template initialization complete');
   }
 
+  async getTemplate(templateId: string): Promise<WorkflowTemplate | null> {
+    console.log(`Proceeding to get template with id: ${templateId}`);
+    
+    // First check database to map ID to name
+    const templateFromDb = await this.dbService.getTemplate(templateId);
+    if (!templateFromDb) {
+      console.log(`Template ID not found in database: ${templateId}`);
+      return null;
+    }
+    
+    // Use template name to get most up-to-date version from code
+    const name = templateFromDb.name;
+    const codeTemplates: Record<string, any> = {
+      "Base Workflow": BASE_WORKFLOW_TEMPLATE,
+      "Dummy Workflow": DUMMY_WORKFLOW_TEMPLATE,
+      "Launch Announcement": LAUNCH_ANNOUNCEMENT_TEMPLATE
+    };
+    
+    // If template exists in code, use that version with DB ID
+    if (codeTemplates[name]) {
+      console.log(`Using in-code template for ID ${templateId} (${name})`);
+      const templateWithId = {
+        ...codeTemplates[name],
+        id: templateId
+      };
+      return templateWithId;
+    }
+    
+    // Return database version if not found in code
+    return templateFromDb;
+  }
+
   // Workflow Management
   async createWorkflow(threadId: string, templateId: string): Promise<Workflow> {
     console.log(`Proceeding to create workflow with templateId: ${templateId} for threadId: ${threadId}`);
 
     // Ensure the template exists before creating workflow record
-    const template = await this.dbService.getTemplate(templateId);
+    const template = await this.getTemplate(templateId);
     if (!template) {
       throw new Error(`Template not found: ${templateId}`);
     }
@@ -574,13 +606,169 @@ export class WorkflowService {
             `There was an error creating the asset: ${error instanceof Error ? error.message : String(error)}`
           );
         }
+      } else if (step.name === "Asset Review") {
+        // Check if this is approval or revision
+        const isApproved = 
+          userInput.toLowerCase().includes('approved') || 
+          userInput.toLowerCase() === 'approve' || 
+          userInput.toLowerCase() === 'yes' ||
+          userInput.toLowerCase().includes('no more') ||
+          userInput.toLowerCase().includes('looks good') ||
+          userInput.toLowerCase().includes('this is good');
+        
+        if (isApproved) {
+          // Handle approval - mark step as complete
+          await this.dbService.updateStep(stepId, {
+            userInput,
+            status: StepStatus.COMPLETE,
+            metadata: { 
+              ...step.metadata,
+              approved: true,
+              needsRevision: false
+            }
+          });
+          
+          console.log(`Asset explicitly approved with: "${userInput}"`);
+          
+          // Get the workflow to find the Asset Revision step (which we'll skip)
+          const workflow = await this.dbService.getWorkflow(workflowId);
+          if (workflow) {
+            const assetRevisionStep = workflow.steps.find(s => s.name === "Asset Revision");
+            if (assetRevisionStep) {
+              // Mark Asset Revision as COMPLETE (skipped)
+              await this.dbService.updateStep(assetRevisionStep.id, {
+                status: StepStatus.COMPLETE,
+                userInput: "Asset approved - revision skipped"
+              });
+              
+              // Add message about approval
+              await this.addDirectMessage(workflow.threadId, `Asset approved. Proceeding to Post-Asset Tasks.`);
+            }
+          }
+          
+          // Normal flow will take it to Post-Asset Tasks
+        } else {
+          // This is a revision request - mark as in progress
+          await this.dbService.updateStep(stepId, {
+            userInput,
+            status: StepStatus.IN_PROGRESS,
+            metadata: { 
+              ...step.metadata,
+              approved: false,
+              needsRevision: true
+            }
+          });
+          
+          // Get the workflow to handle revisions
+          const workflow = await this.dbService.getWorkflow(workflowId);
+          if (workflow) {
+            // Get necessary data from previous steps
+            const assetGenerationStep = workflow.steps.find(s => s.name === "Asset Generation");
+            const infoStep = workflow.steps.find(s => s.name === "Information Collection");
+            
+            // Determine asset type
+            const selectedAsset = step.metadata?.selectedAsset || 
+                               assetGenerationStep?.metadata?.selectedAsset || 
+                               "Press Release";
+            
+            // Acknowledge feedback
+            await this.addDirectMessage(workflow.threadId, `Thank you for your feedback. I'll update the asset with your requested changes.`);
+            
+            try {
+              // Get right template for the asset type
+              const templateKey = selectedAsset.toLowerCase().replace(/\s+/g, '');
+              const templateMap: Record<string, string> = {
+                'pressrelease': 'pressRelease',
+                'mediapitch': 'mediaPitch',
+                'socialpost': 'socialPost',
+                'blogpost': 'blogPost',
+                'faqdocument': 'faqDocument'
+              };
+              
+              const templateName = templateMap[templateKey] || 'pressRelease';
+              const template = assetGenerationStep?.metadata?.templates?.[templateName];
+              
+              if (template) {
+                // Message about regenerating
+                await this.addDirectMessage(workflow.threadId, `Regenerating your ${selectedAsset} with your requested changes. This may take a moment...`);
+                
+                // Create custom step for OpenAI
+                const customStep = {
+                  ...assetGenerationStep,
+                  metadata: {
+                    ...assetGenerationStep?.metadata,
+                    openai_instructions: template
+                  }
+                };
+                
+                // Create prompt with feedback
+                const revisionPrompt = `${infoStep?.userInput || ""}\n\nPlease make the following changes to the previous version:\n- ${userInput}`;
+                
+                // Generate revised asset
+                const result = await this.openAIService.generateStepResponse(
+                  customStep,
+                  revisionPrompt,
+                  []
+                );
+                
+                // Add message with revised asset
+                await this.addDirectMessage(
+                  workflow.threadId, 
+                  `Here's your revised ${selectedAsset} with the requested changes:\n\n${result.responseText}`
+                );
+                
+                // Store revised asset
+                await this.dbService.updateStep(stepId, {
+                  metadata: { 
+                    ...step.metadata,
+                    revisedAsset: result.responseText
+                  }
+                });
+                
+                // Update prompt for next review
+                const revisedPrompt = `Here's your revised ${selectedAsset}. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply reply with 'approved'.`;
+                
+                // Update step with new prompt
+                await this.dbService.updateStep(stepId, {
+                  prompt: revisedPrompt
+                });
+                
+                // Return to the same step for another review
+                return {
+                  response: `Your ${selectedAsset} has been revised. Please review the changes.`,
+                  nextStep: {
+                    id: stepId,
+                    name: step.name,
+                    prompt: revisedPrompt,
+                    type: step.stepType
+                  },
+                  isComplete: false
+                };
+              }
+            } catch (error) {
+              logger.error('Error regenerating asset', { error });
+              await this.addDirectMessage(workflow.threadId, `There was an error regenerating your ${selectedAsset}. Please try again with different feedback.`);
+            }
+          }
+        }
       }
 
       // 2. Update the current step: set userInput and mark as COMPLETE
-      await this.dbService.updateStep(stepId, {
-        userInput,
-        status: StepStatus.COMPLETE
-      });
+      // Only skip for specific cases where we handled it differently
+      const skipCompletingAssetReview = 
+        step.name === "Asset Review" && 
+        !userInput.toLowerCase().includes('approved') &&
+        !userInput.toLowerCase().includes('approve') &&
+        !userInput.toLowerCase().includes('looks good') &&
+        !userInput.toLowerCase().includes('good') &&
+        !userInput.toLowerCase().includes('yes');
+        
+      if (!skipCompletingAssetReview) {
+        await this.dbService.updateStep(stepId, {
+          userInput,
+          status: StepStatus.COMPLETE
+        });
+      }
 
       // 3. Re-fetch the entire workflow to get the most up-to-date state of all steps
       const updatedWorkflow = await this.dbService.getWorkflow(workflowId);
@@ -862,12 +1050,75 @@ Please provide as much of this information as possible in a single message. The 
               metadata: { 
                 ...nextStep.metadata, 
                 generatedAsset,
-                selectedAsset
+                selectedAsset,
+                // Add flags to track approval status - initially false
+                approved: false,
+                needsRevision: false
               }
             });
             
             // Update the nextStepDetails prompt
             nextStepDetails.prompt = customPrompt;
+          }
+        }
+        
+        // Special handling for Asset Revision step - check if we need to process revisions
+        else if (nextStep.name === "Asset Revision") {
+          // Get the Asset Review step to check its approval status
+          const assetReviewStep = updatedWorkflow.steps.find(s => s.name === "Asset Review");
+          
+          if (assetReviewStep && assetReviewStep.userInput) {
+            // Check if the asset was approved - expanded pattern matching for approval
+            const isApproved = 
+              assetReviewStep.userInput.toLowerCase().includes('approved') || 
+              assetReviewStep.userInput.toLowerCase() === 'approve' || 
+              assetReviewStep.userInput.toLowerCase() === 'yes' ||
+              assetReviewStep.userInput.toLowerCase().includes('no more') ||
+              assetReviewStep.userInput.toLowerCase().includes('looks good') ||
+              assetReviewStep.userInput.toLowerCase().includes('this is good');
+            
+            console.log(`Asset Revision step checking approval status: "${assetReviewStep.userInput}" => isApproved: ${isApproved}`);
+            
+            if (isApproved) {
+              // If approved, mark the Asset Review step metadata
+              await this.dbService.updateStep(assetReviewStep.id, {
+                metadata: { ...assetReviewStep.metadata, approved: true, needsRevision: false }
+              });
+              
+              // Skip the Asset Revision step and go directly to Post-Asset Tasks
+              const postAssetTaskStep = updatedWorkflow.steps.find(s => s.name === "Post-Asset Tasks");
+              
+              if (postAssetTaskStep) {
+                // Update the Asset Revision step to COMPLETE (skipped)
+                await this.dbService.updateStep(nextStep.id, {
+                  status: StepStatus.COMPLETE,
+                  userInput: "Asset approved - revision skipped"
+                });
+                
+                // Update workflow to point to Post-Asset Tasks
+                await this.dbService.updateWorkflowCurrentStep(workflowId, postAssetTaskStep.id);
+                
+                // Update Post-Asset Tasks step to IN_PROGRESS
+                await this.dbService.updateStep(postAssetTaskStep.id, {
+                  status: StepStatus.IN_PROGRESS
+                });
+                
+                // Add a message that we're proceeding to Post-Asset Tasks
+                await this.addDirectMessage(updatedWorkflow.threadId, `Asset approved. Proceeding to Post-Asset Tasks.`);
+                
+                // Return Post-Asset Tasks as the next step
+                return {
+                  response: `Step "${step.name}" completed. Proceeding to step "Post-Asset Tasks".`,
+                  nextStep: {
+                    id: postAssetTaskStep.id,
+                    name: postAssetTaskStep.name,
+                    prompt: postAssetTaskStep.prompt,
+                    type: postAssetTaskStep.stepType
+                  },
+                  isComplete: false
+                };
+              }
+            }
           }
         }
         
@@ -942,11 +1193,64 @@ Please provide as much of this information as possible in a single message. The 
                     revisedAsset: openAIResult.responseText
                   }
                 });
+                
+                // Find the Asset Revision step
+                const assetRevisionStep = updatedWorkflow.steps.find(s => s.name === "Asset Revision");
+                
+                if (assetRevisionStep) {
+                  // Set the Asset Revision step as COMPLETE to allow another review
+                  await this.dbService.updateStep(assetRevisionStep.id, {
+                    status: StepStatus.COMPLETE,
+                    userInput: "Revision completed"
+                  });
+                  
+                  // Reset the Asset Review step to IN_PROGRESS to allow another round of feedback
+                  await this.dbService.updateStep(assetReviewStep.id, {
+                    status: StepStatus.IN_PROGRESS,
+                    // Clear the userInput to allow new feedback
+                    userInput: ""
+                  });
+                  
+                  // Change workflow to point back to the Asset Review step instead of proceeding
+                  await this.dbService.updateWorkflowCurrentStep(workflowId, assetReviewStep.id);
+                  
+                  // Create a custom prompt for the Asset Review step that includes the revised asset
+                  const revisedAssetReviewPrompt = `Here's your revised ${selectedAsset}. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply reply with 'approved'.`;
+                  
+                  // Update the Asset Review step with the new prompt
+                  await this.dbService.updateStep(assetReviewStep.id, {
+                    prompt: revisedAssetReviewPrompt
+                  });
+                  
+                  // Return early with Asset Review as the next step
+                  return {
+                    response: `Your ${selectedAsset} has been revised. Please review the changes.`,
+                    nextStep: {
+                      id: assetReviewStep.id,
+                      name: assetReviewStep.name,
+                      prompt: revisedAssetReviewPrompt,
+                      type: assetReviewStep.stepType
+                    },
+                    isComplete: false
+                  };
+                }
               }
             } catch (error) {
               logger.error('Error processing asset review feedback', { error });
               // Add an error message
-              await this.addDirectMessage(updatedWorkflow.threadId, `There was an error regenerating your ${assetReviewStep.metadata?.selectedAsset || "asset"}. Your feedback has been recorded.`);
+              await this.addDirectMessage(updatedWorkflow.threadId, `There was an error regenerating your ${assetReviewStep.metadata?.selectedAsset || "asset"}. Please try again.`);
+              
+              // Return to Asset Review step to try again
+              return {
+                response: 'There was a problem with your revision. Please try again.',
+                nextStep: {
+                  id: assetReviewStep.id,
+                  name: assetReviewStep.name,
+                  prompt: assetReviewStep.prompt, 
+                  type: assetReviewStep.stepType
+                },
+                isComplete: false
+              };
             }
           }
         }
@@ -957,10 +1261,6 @@ Please provide as much of this information as possible in a single message. The 
         await this.dbService.updateStep(nextStep.id, {
           status: StepStatus.IN_PROGRESS
         });
-
-        // --- Add Logging Here ---
-        console.log('handleStepResponse: Found next step. Returning details:', nextStepDetails); 
-        // --- End Logging ---
 
         return {
           response: `Step "${step.name}" completed. Proceeding to step "${nextStep.name}".`,
@@ -998,7 +1298,6 @@ Please provide as much of this information as possible in a single message. The 
                response: 'Error: Workflow is in an inconsistent state.',
                isComplete: false // Workflow is not properly complete
            };
-          // throw new Error('Workflow inconsistency detected: Cannot determine next step.');
         }
       }
     } catch (error) {
@@ -1006,9 +1305,6 @@ Please provide as much of this information as possible in a single message. The 
       // Re-throw the error to be handled by the caller (e.g., ChatService)
       throw error;
     }
-    // Note: Because every path in the try block either returns or throws,
-    // and the catch block throws, this point is technically unreachable.
-    // The compiler should now be satisfied.
   }
 
   async updateWorkflowCurrentStep(workflowId: string, stepId: string | null): Promise<void> {
@@ -1093,4 +1389,4 @@ Please provide as much of this information as possible in a single message. The 
     
     return prompt;
   }
-} 
+}
