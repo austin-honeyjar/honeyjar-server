@@ -175,6 +175,21 @@ export const chatController = {
       const workflowService = new WorkflowService();
       const workflow = await workflowService.getWorkflowByThreadId(threadId);
 
+      // Get current step information including step type
+      let currentStepInfo = null;
+      if (workflow?.currentStepId) {
+        const currentStep = workflow.steps.find(s => s.id === workflow.currentStepId);
+        if (currentStep) {
+          currentStepInfo = {
+            id: currentStep.id,
+            name: currentStep.name,
+            status: currentStep.status,
+            stepType: currentStep.stepType,
+            order: currentStep.order
+          };
+        }
+      }
+
       // Log workflow state
       logger.info('Retrieved workflow state', {
         threadId,
@@ -186,7 +201,12 @@ export const chatController = {
       });
 
       logger.info('Retrieved chat thread', { threadId, messageCount: messages.length });
-      res.json({ ...thread, messages, workflow });
+      res.json({ 
+        ...thread, 
+        messages, 
+        workflow,
+        currentStepInfo 
+      });
     } catch (error) {
       logger.error('Error getting chat thread:', error);
       res.status(500).json({
