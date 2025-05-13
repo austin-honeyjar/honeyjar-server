@@ -48,7 +48,7 @@ export const chatController = {
         });
       }
 
-      // Create message
+      // Create message - doing this explicitly here so we have the exact message object to return to the client
       const [message] = await db.insert(chatMessages)
         .values({
           threadId,
@@ -61,7 +61,10 @@ export const chatController = {
       // Handle the message in the workflow
       const workflowService = new WorkflowService();
       const chatService = new ChatService();
-      const response = await chatService.handleUserMessage(threadId, content);
+      
+      // Pass a flag to chatService indicating that we've already created the user message
+      // to avoid duplicate message creation
+      const response = await chatService.handleUserMessageNoCreate(threadId, content);
 
       // Log workflow state change
       const workflow = await workflowService.getWorkflowByThreadId(threadId);
@@ -265,6 +268,8 @@ export const chatController = {
         throw new Error("Failed to get workflow with steps");
       }
 
+      // Instead of creating a message and then processing it, let chatService handle it directly
+      // No need to create the user message here since chatService.handleUserMessage will do it
       const nextPrompt = await chatService.handleUserMessage(thread.id, "I want to create a launch announcement");
 
       // Log workflow initialization

@@ -32,6 +32,10 @@ export class ChatService {
       // Create the workflow - this will automatically send the first message
       await this.workflowService.createWorkflow(thread.id, baseTemplate.id);
       console.log(`Base workflow created and initialized for thread ${thread.id}`);
+      
+      // Add a welcome message as the first message
+      await this.addSystemMessage(thread.id, "Welcome to Honeyjar! I'm here to help you create professional PR assets. Let's get started!");
+      
     } catch (error) {
       console.error(`Error initializing base workflow for thread ${thread.id}:`, error);
       // Don't throw the error as we still want to return the thread
@@ -41,13 +45,54 @@ export class ChatService {
   }
 
   async addMessage(threadId: string, content: string, isUser: boolean) {
+    // First check for duplicates - this is especially important for assistant messages
+    if (!isUser) {  // Only check for assistant duplicates to avoid filtering legitimate user duplicates
+      const recentMessages = await db.query.chatMessages.findMany({
+        where: eq(chatMessages.threadId, threadId),
+        orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+        limit: 5, // Check the 5 most recent messages
+      });
+      
+      // Check if the exact same message exists - focus on announcement type prompt
+      const isDuplicate = recentMessages.some(msg => 
+        msg.role === "assistant" && 
+        msg.content === content
+      );
+      
+      // Special check for the Announcement Type question which commonly gets duplicated
+      const isAnnouncementTypeQuestion = 
+        content.includes("announcement types") && 
+        content.includes("Which type best fits");
+        
+      const hasAnnouncementTypeQuestion = recentMessages.some(msg => 
+        msg.role === "assistant" &&
+        msg.content.includes("announcement types") && 
+        msg.content.includes("Which type best fits")
+      );
+      
+      // Skip adding the message if it's a duplicate or if it's the announcement type question and we already have one
+      if (isDuplicate || (isAnnouncementTypeQuestion && hasAnnouncementTypeQuestion)) {
+        console.log(`ChatService: Skipping duplicate assistant message: "${content.substring(0, 50)}..."`);
+        // Return the existing message
+        const existingMsg = recentMessages.find(msg => 
+          msg.role === "assistant" && 
+          (msg.content === content || 
+           (isAnnouncementTypeQuestion && 
+            msg.content.includes("announcement types") && 
+            msg.content.includes("Which type best fits")))
+        );
+        return existingMsg || null;
+      }
+    }
+    
+    // Add the message if it's not a duplicate or it's from the user
     const [message] = await db
       .insert(chatMessages)
       .values({
         threadId,
         content,
         role: isUser ? "user" : "assistant",
-        userId: "system", // This should be replaced with actual user ID in production
+        userId: isUser ? threadId : "system",
       })
       .returning();
     return message;
@@ -61,7 +106,26 @@ export class ChatService {
   }
 
   async handleUserMessage(threadId: string, content: string) {
-    await this.addMessage(threadId, content, true);
+    // Check if this message already exists in the database
+    const recentMessages = await db.query.chatMessages.findMany({
+      where: eq(chatMessages.threadId, threadId),
+      orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+      limit: 5, // Get the 5 most recent messages
+    });
+    
+    // Check if there's already a user message with this content
+    const duplicateMessage = recentMessages.find(msg => 
+      msg.role === "user" && 
+      msg.content === content
+    );
+    
+    // Only add the message if it doesn't already exist
+    if (!duplicateMessage) {
+      console.log(`Adding new user message to thread ${threadId}: "${content.substring(0, 30)}..."`);
+      await this.addMessage(threadId, content, true);
+    } else {
+      console.log(`Skipping duplicate user message in thread ${threadId}: "${content.substring(0, 30)}..."`);
+    }
 
     // Get the active workflow for this thread
     let workflow = await this.workflowService.getWorkflowByThreadId(threadId);
@@ -123,7 +187,7 @@ export class ChatService {
       if (currentStep.name === "Announcement Type Selection") {
         // Add a plain message showing the selected announcement type
         const announcementTypeMsg = `Announcement type: ${content}`;
-        await this.addMessage(threadId, announcementTypeMsg, false);
+        await this.addWorkflowStatusMessage(threadId, announcementTypeMsg);
       }
       
       // Special handling for Asset Selection step - process assets and show them
@@ -152,7 +216,7 @@ export class ChatService {
         });
         
         // Add a message acknowledging the feedback
-        await this.addMessage(threadId, `Thank you for your feedback. I'll update the ${currentStep.metadata?.selectedAsset || "asset"} with your requested changes.`, false);
+        await this.addSystemMessage(threadId, `Thank you for your feedback. I'll update the ${currentStep.metadata?.selectedAsset || "asset"} with your requested changes.`);
       }
     }
     
@@ -228,21 +292,21 @@ export class ChatService {
                         
                         // Add a message to show which workflow was selected - use plain text
                         const selectionMsg = `Workflow selected: ${selectedWorkflowName}`;
-                        await this.addMessage(threadId, selectionMsg, false);
+                        await this.addWorkflowStatusMessage(threadId, selectionMsg);
                         
                         // Get the *first prompt* of the NEW workflow
                         return this.getNextPrompt(threadId, nextWorkflow.id);
                     } catch (creationError) {
                         console.error(`Error creating workflow for ${selectedWorkflowName}:`, creationError);
                         const errorMsg = `Sorry, I couldn't start the ${selectedWorkflowName} workflow.`;
-                        await this.addMessage(threadId, errorMsg, false);
+                        await this.addSystemMessage(threadId, errorMsg);
                         return errorMsg;
                     }
                 } else {
                     console.warn(`Template not found for selection: ${selectedWorkflowName}`);
                     const availableTemplates = await this.getAvailableTemplateNames();
                     const notFoundMsg = `Sorry, I couldn't find a workflow template named "${selectedWorkflowName}". Available templates are: ${availableTemplates.join(', ')}`;
-                    await this.addMessage(threadId, notFoundMsg, false);
+                    await this.addSystemMessage(threadId, notFoundMsg);
                     return notFoundMsg;
                 }
             } else {
@@ -256,7 +320,7 @@ export class ChatService {
         // Ensure completion message wasn't already added by handleStepResponse if its response was used
          const lastMessage = await this.getLastMessage(threadId);
          if (lastMessage?.content !== completionMsg) {
-             await this.addMessage(threadId, completionMsg, false);
+             await this.addWorkflowStatusMessage(threadId, completionMsg);
          }
         return completionMsg;
 
@@ -265,10 +329,34 @@ export class ChatService {
     } else if (stepResponse.nextStep) {
       // If the workflow is not complete, but there's a specific next step prompt from handleStepResponse
        const nextPrompt = stepResponse.nextStep.prompt || "Please provide the required information.";
-       // Add the prompt message if it's not the same as the stepResponse message already added
-        if (stepResponse.response !== nextPrompt) {
-           await this.addMessage(threadId, nextPrompt, false);
-        }
+       
+       // Get the next step information to check if it's already been sent
+       const nextStepInfo = workflow.steps.find(step => step.id === stepResponse.nextStep?.id);
+       
+       // Check if the initial prompt has already been sent or if this is a duplicate we should avoid
+       const isInitialPromptAlreadySent = nextStepInfo?.metadata?.initialPromptSent === true;
+       
+       // Skip adding the message if it's a duplicate announcement type prompt
+       // or if the initial prompt has already been marked as sent
+       if (isInitialPromptAlreadySent) {
+         console.log(`Skipping duplicate prompt message - initialPromptSent flag is true`);
+         return nextPrompt;
+       }
+       
+       // For all other cases - Add the prompt message if it's not the same as the stepResponse message already added
+       if (stepResponse.response !== nextPrompt) {
+         // Update the next step to mark that we've sent this prompt
+         if (nextStepInfo) {
+           await this.workflowService.updateStep(nextStepInfo.id, {
+             metadata: { 
+               ...nextStepInfo.metadata,
+               initialPromptSent: true 
+             }
+           });
+         }
+         
+         await this.addMessage(threadId, nextPrompt, false);
+       }
        return nextPrompt; 
     } else {
        // If the step isn't complete and handleStepResponse didn't provide a specific next step/prompt,
@@ -318,11 +406,11 @@ export class ChatService {
        if(allStepsComplete && workflow.status !== WorkflowStatus.COMPLETED) {
            await this.workflowService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
            const workflowCompleteMsg = `${workflow.templateId || 'Workflow'} completed.`;
-            await this.addMessage(threadId, workflowCompleteMsg, false);
+            await this.addWorkflowStatusMessage(threadId, workflowCompleteMsg);
            return workflowCompleteMsg;
        } else {
           const noStepsMsg = "No further steps available or dependencies not met.";
-          await this.addMessage(threadId, noStepsMsg, false);
+          await this.addSystemMessage(threadId, noStepsMsg);
           return noStepsMsg;
        }
     }
@@ -340,8 +428,8 @@ export class ChatService {
     if (lastMessage?.content !== prompt || lastMessage?.role !== 'assistant') {
       await this.addMessage(threadId, prompt, false);
     }
-      return prompt;
-    }
+    return prompt;
+  }
 
   // Helper to get the last message 
   private async getLastMessage(threadId: string) {
@@ -526,5 +614,259 @@ Join us on this exciting journey!`;
     prompt += "\nFeel free to provide any additional details that might be helpful.";
     
     return prompt;
+  }
+
+  // Helper to add a system message (workflow status messages)
+  private async addSystemMessage(threadId: string, content: string) {
+    // System messages are specially tagged to help frontend filtering
+    const formattedContent = `[System] ${content}`; // Add a prefix to make filtering easier
+    return this.addMessage(threadId, formattedContent, false);
+  }
+  
+  // Helper to add a workflow status message
+  private async addWorkflowStatusMessage(threadId: string, content: string) {
+    // Status messages are specially tagged for frontend filtering
+    const formattedContent = `[Workflow Status] ${content}`; // Add a prefix to make filtering easier
+    return this.addMessage(threadId, formattedContent, false);
+  }
+
+  // Handle user message when the message has already been created elsewhere
+  async handleUserMessageNoCreate(threadId: string, content: string) {
+    // This method skips message creation and just handles the workflow logic
+    // It's used when the controller has already created the message
+
+    // Get the active workflow for this thread
+    let workflow = await this.workflowService.getWorkflowByThreadId(threadId);
+    if (!workflow) {
+      // If no workflow exists at all, something went wrong during thread creation
+      // Create the base workflow as a fallback
+      console.warn(`No workflow found for thread ${threadId}. Creating base workflow as fallback.`);
+      const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
+      if (!baseTemplate) throw new Error("Base workflow template not found");
+      
+      workflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id);
+    }
+
+    // If we have an active workflow, process the current step
+    const currentStepId = workflow.currentStepId;
+    if (!currentStepId) {
+      console.warn(`Workflow ${workflow.id} has no currentStepId. Attempting to get next prompt.`);
+      return this.getNextPrompt(threadId, workflow.id);
+    }
+
+    // Get the current step before processing
+    const currentStep = workflow.steps.find(step => step.id === currentStepId);
+    
+    // Special handling for pre-processing Launch Announcement workflow specific steps
+    if (currentStep) {
+      // Handle Asset Selection step - if user asks about available assets
+      if (currentStep.name === "Asset Selection" && 
+          (content.toLowerCase().includes("what") || 
+           content.toLowerCase().includes("list") || 
+           content.toLowerCase().includes("options") ||
+           content.toLowerCase().includes("assets") ||
+           content.toLowerCase().includes("available"))) {
+        
+        console.log("User is asking about available assets. Providing recommendations.");
+        
+        // Find the announcement type from the previous step
+        const announcementTypeStep = workflow.steps.find(s => s.name === "Announcement Type Selection");
+        if (announcementTypeStep) {
+          const announcementType = announcementTypeStep.userInput || "Product Launch";
+          
+          // Generate asset recommendations for this announcement type
+          const assetRecommendations = await this.generateAssetRecommendations(currentStep, announcementType);
+          
+          // Send the recommendations to the user
+          await this.addMessage(threadId, assetRecommendations, false);
+          
+          // Don't process the step, just return the recommendations
+          return assetRecommendations;
+        }
+      }
+    }
+    
+    // Handle the step response using the current step ID
+    const stepResponse = await this.workflowService.handleStepResponse(currentStepId, content);
+    
+    // Special handling for different step types
+    if (currentStep) {
+      // Special handling for Announcement Type Selection
+      if (currentStep.name === "Announcement Type Selection") {
+        // Add a plain message showing the selected announcement type
+        const announcementTypeMsg = `Announcement type: ${content}`;
+        await this.addWorkflowStatusMessage(threadId, announcementTypeMsg);
+      }
+      
+      // Special handling for Asset Selection step - process assets and show them
+      else if (currentStep.name === "Asset Selection" && stepResponse.nextStep?.name === "Asset Confirmation") {
+        // If we're moving to Asset Confirmation, make sure the user sees the recommended assets
+        const nextStep = workflow.steps.find(s => s.id === stepResponse.nextStep.id);
+        if (nextStep && nextStep.aiSuggestion) {
+          // Extract asset list from the aiSuggestion or create a default list
+          const assetList = nextStep.aiSuggestion || "Press Release, Media Pitch, Social Post";
+          const formattedAssets = "Recommended assets: " + assetList;
+          
+          // Add the asset list as a direct message
+          await this.addMessage(threadId, formattedAssets, false);
+        }
+      }
+      
+      // Special handling for Asset Review - ensure user feedback triggers regeneration
+      else if (currentStep.name === "Asset Review" && content.toLowerCase() !== "approved") {
+        // User provided feedback on the asset - mark it for regeneration
+        await this.workflowService.updateStep(currentStep.id, {
+          metadata: { 
+            ...currentStep.metadata,
+            needsRegeneration: true,
+            feedback: content
+          }
+        });
+        
+        // Add a message acknowledging the feedback
+        await this.addSystemMessage(threadId, `Thank you for your feedback. I'll update the ${currentStep.metadata?.selectedAsset || "asset"} with your requested changes.`);
+      }
+    }
+    
+    // Add AI response to thread if provided by handleStepResponse
+    if (stepResponse.response && stepResponse.response !== 'Workflow completed successfully.') { // Avoid duplicate completion message
+      await this.addMessage(threadId, stepResponse.response, false);
+    }
+
+    // Rest of the method is identical to handleUserMessage
+    if (stepResponse.isComplete) {
+        // --- START: Workflow Transition Logic ---
+        
+        // Check if the completed workflow was the Base Workflow
+        const baseTemplateFromDB = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
+
+        // Check if the completed workflow's template ID matches the base template ID from DB
+        if (workflow.templateId === baseTemplateFromDB?.id) { // Compare IDs
+            console.log('Base workflow completed. Checking for next workflow selection...');
+            // Retrieve the completed Base Workflow details to find the selection
+            const completedBaseWorkflow = await this.workflowService.getWorkflow(workflow.id); 
+            const selectionStep = completedBaseWorkflow?.steps.find(s => s.name === "Workflow Selection");
+            
+            // First try to use aiSuggestion (the matched workflow option), then fall back to userInput
+            const selectedWorkflowName = selectionStep?.aiSuggestion || selectionStep?.userInput;
+            console.log(`Workflow selection - aiSuggestion: "${selectionStep?.aiSuggestion}", userInput: "${selectionStep?.userInput}", final selection: "${selectedWorkflowName}"`);
+
+            if (selectedWorkflowName) {
+                console.log(`User selected: ${selectedWorkflowName}`);
+                
+                // Log available templates for debugging
+                const availableTemplates = await this.getAvailableTemplateNames();
+                console.log(`Available templates: ${JSON.stringify(availableTemplates)}`);
+                
+                // Try to find the template with a case-insensitive, trimmed comparison
+                let nextTemplate = null;
+                
+                // First try exact match
+                nextTemplate = await this.workflowService.getTemplateByName(selectedWorkflowName);
+                
+                // If not found, try case-insensitive match
+                if (!nextTemplate) {
+                    for (const templateName of availableTemplates) {
+                        if (templateName.toLowerCase().trim() === selectedWorkflowName.toLowerCase().trim()) {
+                            console.log(`Found case-insensitive match: "${templateName}" for "${selectedWorkflowName}"`);
+                            nextTemplate = await this.workflowService.getTemplateByName(templateName);
+                            break;
+                        }
+                    }
+                }
+                
+                // If still not found, try substring match
+                if (!nextTemplate) {
+                    for (const templateName of availableTemplates) {
+                        if (templateName.toLowerCase().includes(selectedWorkflowName.toLowerCase()) || 
+                            selectedWorkflowName.toLowerCase().includes(templateName.toLowerCase())) {
+                            console.log(`Found substring match: "${templateName}" for "${selectedWorkflowName}"`);
+                            nextTemplate = await this.workflowService.getTemplateByName(templateName);
+                            break;
+                        }
+                    }
+                }
+                
+                if (nextTemplate) {
+                    console.log(`Found template for "${selectedWorkflowName}". Creating next workflow...`);
+                    try {
+                        // Create the *new* selected workflow
+                        const nextWorkflow = await this.workflowService.createWorkflow(threadId, nextTemplate.id);
+                        console.log(`Created workflow ${nextWorkflow.id} for template ${nextTemplate.name}`);
+                        
+                        // Add a message to show which workflow was selected - use plain text
+                        const selectionMsg = `Workflow selected: ${selectedWorkflowName}`;
+                        await this.addWorkflowStatusMessage(threadId, selectionMsg);
+                        
+                        // Get the *first prompt* of the NEW workflow
+                        return this.getNextPrompt(threadId, nextWorkflow.id);
+                    } catch (creationError) {
+                        console.error(`Error creating workflow for ${selectedWorkflowName}:`, creationError);
+                        const errorMsg = `Sorry, I couldn't start the ${selectedWorkflowName} workflow.`;
+                        await this.addSystemMessage(threadId, errorMsg);
+                        return errorMsg;
+                    }
+                } else {
+                    console.warn(`Template not found for selection: ${selectedWorkflowName}`);
+                    const availableTemplates = await this.getAvailableTemplateNames();
+                    const notFoundMsg = `Sorry, I couldn't find a workflow template named "${selectedWorkflowName}". Available templates are: ${availableTemplates.join(', ')}`;
+                    await this.addSystemMessage(threadId, notFoundMsg);
+                    return notFoundMsg;
+                }
+            } else {
+                console.warn('Could not determine next workflow from Base Workflow selection step.');
+                // Fall through to generic completion message if selection wasn't found
+            }
+        }
+        
+        // If it wasn't the base workflow, or if base completed without valid selection, just confirm completion.
+        const completionMsg = `${workflow.templateId || 'Workflow'} completed successfully.`; // Use template name if possible
+        // Ensure completion message wasn't already added by handleStepResponse if its response was used
+         const lastMessage = await this.getLastMessage(threadId);
+         if (lastMessage?.content !== completionMsg) {
+             await this.addWorkflowStatusMessage(threadId, completionMsg);
+         }
+        return completionMsg;
+
+        // --- END: Workflow Transition Logic ---
+
+    } else if (stepResponse.nextStep) {
+      // If the workflow is not complete, but there's a specific next step prompt from handleStepResponse
+       const nextPrompt = stepResponse.nextStep.prompt || "Please provide the required information.";
+       
+       // Get the next step information to check if it's already been sent
+       const nextStepInfo = workflow.steps.find(step => step.id === stepResponse.nextStep?.id);
+       
+       // Check if the initial prompt has already been sent or if this is a duplicate we should avoid
+       const isInitialPromptAlreadySent = nextStepInfo?.metadata?.initialPromptSent === true;
+       
+       // Skip adding the message if it's a duplicate announcement type prompt
+       // or if the initial prompt has already been marked as sent
+       if (isInitialPromptAlreadySent) {
+         console.log(`Skipping duplicate prompt message - initialPromptSent flag is true`);
+         return nextPrompt;
+       }
+       
+       // For all other cases - Add the prompt message if it's not the same as the stepResponse message already added
+       if (stepResponse.response !== nextPrompt) {
+         // Update the next step to mark that we've sent this prompt
+         if (nextStepInfo) {
+           await this.workflowService.updateStep(nextStepInfo.id, {
+             metadata: { 
+               ...nextStepInfo.metadata,
+               initialPromptSent: true 
+             }
+           });
+         }
+         
+         await this.addMessage(threadId, nextPrompt, false);
+       }
+       return nextPrompt; 
+    } else {
+       // If the step isn't complete and handleStepResponse didn't provide a specific next step/prompt,
+       // rely on getNextPrompt to figure out what to do (e.g., re-prompt for current step if needed)
+       console.warn(`Step ${currentStepId} processed, workflow not complete, but handleStepResponse provided no next step. Calling getNextPrompt.`);
+       return this.getNextPrompt(threadId, workflow.id);
+    }
   }
 } 

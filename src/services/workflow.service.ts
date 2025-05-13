@@ -126,7 +126,11 @@ export class WorkflowService {
           status: isFirstStep ? StepStatus.IN_PROGRESS : StepStatus.PENDING,
           order: i,
           dependencies: stepDefinition.dependencies || [],
-          metadata: stepDefinition.metadata || {}
+          metadata: {
+            ...stepDefinition.metadata || {},
+            // Mark that the initial prompt has been sent to avoid duplicates
+            initialPromptSent: isFirstStep && stepDefinition.prompt ? true : false
+          }
         });
 
         if (isFirstStep && stepDefinition.prompt) {
@@ -1331,14 +1335,68 @@ Please provide as much of this information as possible in a single message. The 
    */
   async addDirectMessage(threadId: string, content: string): Promise<void> {
     try {
+      // Check if this is a status message that should be prefixed
+      let messageContent = content;
+      
+      // Automatically prefix workflow status messages
+      if (content.includes("Step \"") || 
+          content.includes("Proceeding to step") || 
+          content.includes("completed") || 
+          content.startsWith("Processing workflow") ||
+          content.startsWith("Selected workflow") ||
+          content.startsWith("Workflow selected") ||
+          content.startsWith("Announcement type")) {
+        messageContent = `[Workflow Status] ${content}`;
+      }
+      // Add [System] prefix to various system messages
+      else if (content.includes("generating") || 
+               content.includes("thank you for your feedback") ||
+               content.includes("regenerating") ||
+               content.includes("revising") ||
+               content.includes("creating") ||
+               content.includes("this may take a moment") ||
+               content.includes("processing")) {
+        messageContent = `[System] ${content}`;
+      }
+      
+      // Check for duplicate messages - search for messages with the same content
+      // This is especially important for the first step of the Launch Announcement workflow
+      const recentMessages = await db.query.chatMessages.findMany({
+        where: eq(chatMessages.threadId, threadId),
+        orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+        limit: 5, // Check the 5 most recent messages
+      });
+      
+      // Check if this exact message content already exists in the recent messages
+      const isDuplicate = recentMessages.some(msg => 
+        msg.content === messageContent
+      );
+      
+      // Also check for the first step of Launch Announcement to prevent duplicates
+      const isAnnouncementTypeQuestion = 
+        content.includes("announcement types") && 
+        content.includes("Which type best fits");
+        
+      const hasAnnouncementTypeQuestion = recentMessages.some(msg => 
+        msg.content.includes("announcement types") && 
+        msg.content.includes("Which type best fits")
+      );
+      
+      // Skip adding the message if it's a duplicate or if it's the announcement type question and we already have one
+      if (isDuplicate || (isAnnouncementTypeQuestion && hasAnnouncementTypeQuestion)) {
+        console.log(`Skipping duplicate message: "${messageContent.substring(0, 50)}..."`);
+        return;
+      }
+      
+      // Add the message if it's not a duplicate
       await db.insert(chatMessages)
         .values({
           threadId,
-          content,
+          content: messageContent,
           role: "assistant",
           userId: "system"
         });
-      console.log(`DIRECT MESSAGE ADDED: '${content}' to thread ${threadId}`);
+      console.log(`DIRECT MESSAGE ADDED: '${messageContent.substring(0, 50)}...' to thread ${threadId}`);
     } catch (error) {
       console.error(`Error adding direct message to thread ${threadId}:`, error);
       // Don't throw error as this is non-critical functionality
