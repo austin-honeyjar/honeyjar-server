@@ -8,7 +8,7 @@ if (!process.env.DATABASE_URL) {
   // Fall back to individual PG_* variables if DATABASE_URL not available
   if (!process.env.PG_USER || !process.env.PG_HOST || !process.env.PG_DATABASE || !process.env.PG_PASSWORD || !process.env.PG_PORT) {
     throw new Error('Either DATABASE_URL or all required PG_* environment variables must be defined');
-  }
+}
 }
 
 export default {
@@ -23,8 +23,8 @@ export default {
         user: process.env.PG_USER!,
         password: process.env.PG_PASSWORD!,
         database: process.env.PG_DATABASE!,
-        ssl: false
-      },
+    ssl: false
+  },
   verbose: true,
   strict: true,
 } satisfies Config; 

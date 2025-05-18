@@ -35,8 +35,17 @@ export const securityHeaders = helmet({
 // Rate limiting
 export const rateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // Limit each IP to 100 requests per window
+  max: 200, // Limit each IP to 200 requests per window
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
   message: 'Too many requests from this IP, please try again later',
+  // Skip validation in Cloud Run environment
+  validate: { trustProxy: false, xForwardedForHeader: false },
+  // Use IP detection appropriate for Cloud Run
+  keyGenerator: (req, _res) => {
+    // In Cloud Run, the X-Forwarded-For header contains the real client IP
+    const xForwardedFor = req.headers['x-forwarded-for'] as string;
+    const ip = xForwardedFor ? xForwardedFor.split(',')[0].trim() : req.ip || 'unknown-ip';
+    return ip;
+  }
 }); 

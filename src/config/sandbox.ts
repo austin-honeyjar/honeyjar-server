@@ -5,28 +5,31 @@ export const sandboxConfig: AppConfig = {
   ...defaultConfig,
   server: {
     ...defaultConfig.server,
+    port: parseInt(process.env.PORT || '3005'),
     env: 'sandbox',
-    port: 3002,
+    apiPrefix: '/api/v1',
     autoDeploy: true,
-    branch: process.env.FEATURE_BRANCH,
   },
   database: {
     ...defaultConfig.database,
-    url: process.env.DATABASE_URL || 'postgres://localhost:5432/honeyjar_sandbox',
+    url: process.env.DATABASE_URL || defaultConfig.database.url,
+    maxConnections: 20,
+    idleTimeoutMs: 60000,
   },
   security: {
     ...defaultConfig.security,
     cors: {
       ...defaultConfig.security.cors,
-      origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
+      origin: '*', // Update with specific domains for production
+      credentials: true,
     },
     rateLimit: {
-      ...defaultConfig.security.rateLimit,
-      max: 50,
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 200, // Limit each IP to 200 requests per window
     },
   },
   logging: {
-    ...defaultConfig.logging,
-    level: 'debug',
+    level: 'info',
+    format: 'json',
   },
 }; 

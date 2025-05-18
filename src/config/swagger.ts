@@ -13,6 +13,10 @@ const options: swaggerJsdoc.Options = {
         url: 'http://localhost:3005',
         description: 'Development server',
       },
+      {
+        url: 'https://honeyjar-server-sandbox-734191217628.us-central1.run.app',
+        description: 'Sandbox Cloud Run server',
+      },
     ],
     components: {
       securitySchemes: {

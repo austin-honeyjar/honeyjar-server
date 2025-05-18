@@ -2,10 +2,10 @@
   "name": "honeyjar-server",
   "version": "1.0.0",
   "description": "API server for Honeyjar application",
-  "main": "dist/server.ts",
+  "main": "dist/server.js",
   "type": "module",
   "scripts": {
-    "start": "node dist/server.ts",
+    "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "db:generate": "drizzle-kit generate:pg",
