@@ -17,10 +17,17 @@ export class WorkflowDBService {
     // Destructure the template to exclude the 'id' if it exists
     const { id, ...templateData } = template as any; 
 
+    // Generate a random UUID for the template
+    // Use the randomUUID function from the crypto module
+    // This is just a type definition to inform TypeScript
+    const crypto = await import('crypto');
+    const templateId = crypto.randomUUID();
+
     const [newTemplate] = await db
       .insert(workflowTemplates)
       .values({
-        ...templateData, // Use the rest of the data without the id
+        id: templateId, // Explicitly provide a UUID
+        ...templateData, // Use the rest of the data 
         steps: JSON.stringify(templateData.steps), 
       })
       .returning();

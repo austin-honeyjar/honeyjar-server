@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   server:
-    image: honeyjar-server-image:latest
+    image: honeyjar-server:latest
     ports:
       - "3005:3005"
     environment:
@@ -21,7 +21,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: npm run dev
+    command: sh -c "npm run db:generate && npm run db:push && npm run db:migrate && npm start"
 
   db:
     image: postgres:15-alpine

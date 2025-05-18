@@ -57,7 +57,24 @@ export class WorkflowService {
   async getTemplate(templateId: string): Promise<WorkflowTemplate | null> {
     console.log(`Proceeding to get template with id: ${templateId}`);
     
-    // First check database to map ID to name
+    // Special handling for template ID "1" - check for special UUID equivalent
+    if (templateId === "1") {
+      const specialUuid = '00000000-0000-0000-0000-000000000001';
+      
+      // First try to get template by special UUID
+      const templateFromDb = await this.dbService.getTemplate(specialUuid);
+      
+      if (templateFromDb) {
+        console.log(`Found template using special UUID for ID ${templateId}`);
+        const templateWithId = {
+          ...BASE_WORKFLOW_TEMPLATE,
+          id: templateId
+        };
+        return templateWithId;
+      }
+    }
+    
+    // For other cases, check database as usual
     const templateFromDb = await this.dbService.getTemplate(templateId);
     if (!templateFromDb) {
       console.log(`Template ID not found in database: ${templateId}`);

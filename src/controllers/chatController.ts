@@ -254,39 +254,44 @@ export const chatController = {
       const workflowService = new WorkflowService();
       const chatService = new ChatService();
 
-      // Start a new workflow
-      const template = await workflowService.getTemplateByName("Launch Announcement");
-      if (!template) {
-        throw new Error("Template not found");
+      try {
+        // Start a new workflow with template ID 1 (Base Workflow)
+        // Here we use the numeric ID directly since the database uses integers
+        const workflow = await workflowService.createWorkflow(thread.id, "1");
+        
+        // Get the workflow with steps
+        const workflowWithSteps = await workflowService.getWorkflow(workflow.id);
+        if (!workflowWithSteps) {
+          throw new Error("Failed to get workflow with steps");
+        }
+
+        // Instead of creating a message and then processing it, let chatService handle it directly
+        // No need to create the user message here since chatService.handleUserMessage will do it
+        const nextPrompt = await chatService.handleUserMessage(thread.id, "I want to create a launch announcement");
+
+        // Log workflow initialization
+        logger.info('Workflow initialized', {
+          threadId: thread.id,
+          workflowId: workflow.id,
+          templateId: "1", // Using numeric ID
+          initialStep: workflow.currentStepId,
+          totalSteps: workflowWithSteps.steps.length
+        });
+
+        logger.info('Created chat thread and workflow', { threadId: thread.id, workflowId: workflow.id });
+        res.status(201).json({
+          thread,
+          workflow: workflowWithSteps,
+          nextPrompt
+        });
+      } catch (error) {
+        // If workflow creation fails, still return the thread
+        logger.error('Error creating workflow:', error);
+        res.status(201).json({
+          thread,
+          error: 'Failed to create workflow, but thread was created successfully'
+        });
       }
-
-      const workflow = await workflowService.createWorkflow(thread.id, template.id);
-      
-      // Get the workflow with steps
-      const workflowWithSteps = await workflowService.getWorkflow(workflow.id);
-      if (!workflowWithSteps) {
-        throw new Error("Failed to get workflow with steps");
-      }
-
-      // Instead of creating a message and then processing it, let chatService handle it directly
-      // No need to create the user message here since chatService.handleUserMessage will do it
-      const nextPrompt = await chatService.handleUserMessage(thread.id, "I want to create a launch announcement");
-
-      // Log workflow initialization
-      logger.info('Workflow initialized', {
-        threadId: thread.id,
-        workflowId: workflow.id,
-        templateId: template.id,
-        initialStep: workflow.currentStepId,
-        totalSteps: workflowWithSteps.steps.length
-      });
-
-      logger.info('Created chat thread and workflow', { threadId: thread.id, workflowId: workflow.id });
-      res.status(201).json({
-        thread,
-        workflow: workflowWithSteps,
-        nextPrompt
-      });
     } catch (error) {
       logger.error('Error creating chat thread:', error);
       res.status(500).json({

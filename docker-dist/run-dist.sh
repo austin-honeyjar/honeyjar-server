@@ -4,7 +4,7 @@
 echo "Starting Honeyjar Server and PostgreSQL..."
 
 # Check if the image is already loaded
-if [[ -z $(docker images -q honeyjar-server-image:latest) ]]; then
+if [[ -z $(docker images -q honeyjar-server:latest) ]]; then
   # If image doesn't exist, try to load it
   echo "Loading Docker image from tar file..."
   if [[ -f "honeyjar-server-image.tar" ]]; then
