@@ -21,7 +21,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: sh -c "npm run db:generate && npm run db:push && npm run db:migrate && npm start"
+    command: sh -c "npm run db:generate && npx drizzle-kit push:pg --force && npm run db:migrate && npm start"
 
   db:
     image: postgres:15-alpine
@@ -34,7 +34,6 @@ services:
       - TZ=UTC
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
