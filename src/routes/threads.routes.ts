@@ -5,7 +5,7 @@ import { AuthRequest } from '../types/request';
 import { Thread } from '../types/thread';
 import { db } from '../db';
 import { chatThreads, chatMessages, workflows, workflowSteps } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { validate } from '../middleware/validation.middleware';
 import { createChatSchema } from '../validators/chat.validator';
 import { chatController } from '../controllers/chatController';
@@ -205,11 +205,15 @@ router.get('/:id', async (req: AuthRequest, res) => {
       });
     }
     
-    const messages = await db
+    let messages = await db
       .select()
       .from(chatMessages)
       .where(eq(chatMessages.threadId, threadId))
-      .orderBy(chatMessages.createdAt);
+      .orderBy(desc(chatMessages.createdAt))
+      .limit(50);
+    
+    // Reverse to chronological order for UI
+    messages = messages.reverse();
     
     logger.info('Returning thread:', { 
       userId: req.user.id,

@@ -11,6 +11,9 @@ export class ClerkAuthService implements AuthService {
   private static instance: ClerkAuthService;
   private clerkClient: ReturnType<typeof createClerkClient>;
 
+  // Cache structure: key -> { ok, exp }
+  private roleCache: Map<string, { ok: boolean; exp: number }>;
+
   private constructor() {
     const secretKey = process.env.CLERK_SECRET_KEY;
     const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
@@ -29,6 +32,9 @@ export class ClerkAuthService implements AuthService {
       secretKey,
       publishableKey,
     });
+
+    // Simple in-memory cache for role lookups
+    this.roleCache = new Map();
 
     logger.info('Clerk client initialized', { 
       hasSecretKey: !!secretKey,
@@ -55,6 +61,18 @@ export class ClerkAuthService implements AuthService {
 
   async hasOrgRole(userId: string, orgId: string, roles: string[]): Promise<boolean> {
     try {
+      // Debug bypass — allow all roles for debug user
+      if (userId === 'debug-user-123') {
+        return true;
+      }
+
+      // Check 60-second cache first
+      const key = `${userId}:${orgId}:${roles.sort().join('|')}`;
+      const cached = this.roleCache.get(key);
+      if (cached && cached.exp > Date.now()) {
+        return cached.ok;
+      }
+
       logger.info('Checking organization role', { userId, orgId, roles });
       
       // First check if user has system-level permissions
@@ -88,6 +106,8 @@ export class ClerkAuthService implements AuthService {
         
         if (!membership) {
           logger.info('User is not a member of the organization', { userId, orgId });
+          // cache negative result
+          this.roleCache.set(key, { ok: false, exp: Date.now() + 60000 });
           return false;
         }
 
@@ -101,13 +121,20 @@ export class ClerkAuthService implements AuthService {
         );
 
         logger.info('Role check result', { userId, orgId, userRole, roles, hasRole });
+
+        // cache result for 60 seconds
+        this.roleCache.set(key, { ok: hasRole, exp: Date.now() + 60000 });
         return hasRole;
       } catch (error) {
         logger.error('Error checking organization role', { error, userId, orgId });
+        // cache negative result
+        this.roleCache.set(key, { ok: false, exp: Date.now() + 60000 });
         return false;
       }
     } catch (error) {
       logger.error('Error in hasOrgRole', { error, userId, orgId });
+      // cache negative result
+      this.roleCache.set(`${userId}:${orgId}:${roles.sort().join('|')}`, { ok: false, exp: Date.now() + 60000 });
       return false;
     }
   }

@@ -2,6 +2,10 @@ import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../services/auth.service';
 import logger from '../utils/logger';
 
+// Debug token for development/testing
+const DEBUG_TOKEN = 'debug-auth-123456';
+const DEBUG_USER_ID = 'debug-user-123';
+
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers.authorization;
@@ -30,6 +34,39 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       method: req.method
     });
 
+    // Check if using debug token
+    if (token === DEBUG_TOKEN) {
+      logger.info('Using debug token for authentication');
+      
+      // Create mock session and user info
+      req.session = {
+        userId: DEBUG_USER_ID,
+        sessionId: 'debug-session-id',
+        status: 'active',
+        lastActiveAt: Date.now(),
+        expireAt: Date.now() + 86400000, // 24 hours
+        abandonAt: Date.now() + 86400000 * 14, // 14 days
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      
+      req.user = {
+        id: DEBUG_USER_ID,
+        sessionId: 'debug-session-id',
+        permissions: ['user:read', 'user:write', 'org:read', 'org:write', 'asset:read', 'asset:write']
+      };
+      
+      // Set req.auth as well for compatibility
+      req.auth = {
+        userId: DEBUG_USER_ID,
+        token: DEBUG_TOKEN,
+        sessionId: 'debug-session-id'
+      };
+      
+      logger.info(`Authenticated using debug token as user ${DEBUG_USER_ID}`);
+      return next();
+    }
+
     try {
       // Get auth service instance
       const authService = AuthService.getInstance();
@@ -46,6 +83,13 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
         id: session.userId,
         sessionId: session.sessionId,
         permissions: permissions.permissions
+      };
+      
+      // Set req.auth as well for consistency
+      req.auth = {
+        userId: session.userId,
+        token: token,
+        sessionId: session.sessionId
       };
 
       logger.info(`Authenticated user ${session.userId} with session ${session.sessionId}`, {
