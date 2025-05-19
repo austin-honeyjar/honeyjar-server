@@ -7,6 +7,7 @@ import { CreateChatInput, CreateThreadInput } from '../validators/chat.validator
 import { WorkflowService } from '../services/workflow.service';
 import { ChatService } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';
+import { simpleCache } from '../utils/simpleCache';
 
 export const chatController = {
   // Create a new chat message
@@ -78,6 +79,10 @@ export const chatController = {
       });
 
       logger.info('Created chat message', { messageId: message.id, threadId });
+
+      // Invalidate thread cache
+      simpleCache.del(`thread:${threadId}`);
+
       res.status(201).json({
         message,
         response
@@ -284,6 +289,9 @@ export const chatController = {
           workflow: workflowWithSteps,
           nextPrompt
         });
+
+        // Invalidate thread list cache for user/org
+        simpleCache.del(`threads:${userId}:${orgId}`);
       } catch (error) {
         // If workflow creation fails, still return the thread
         logger.error('Error creating workflow:', error);
@@ -356,6 +364,11 @@ export const chatController = {
         .where(eq(chatThreads.id, threadId));
 
       logger.info('Deleted chat thread', { threadId, userId, orgId });
+
+      // Invalidate caches
+      simpleCache.del(`thread:${threadId}`);
+      simpleCache.del(`threads:${userId}:${orgId}`);
+
       res.status(200).json({ message: 'Thread deleted successfully' });
     } catch (error) {
       logger.error('Error deleting chat thread:', error);

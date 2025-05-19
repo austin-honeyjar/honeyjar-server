@@ -13,8 +13,11 @@ import { requireOrgRole } from '../middleware/org.middleware';
 import { WorkflowDBService } from '../services/workflowDB.service';
 import { ChatService } from '../services/chat.service';
 import { WorkflowService } from '../services/workflow.service';
+import { simpleCache } from '../utils/simpleCache';
 
 const router = Router();
+
+const CACHE_TTL = 300000; // 5 minutes
 
 // Apply auth middleware to all thread routes
 router.use(authMiddleware);
@@ -71,12 +74,22 @@ router.get('/', async (req: AuthRequest, res) => {
       });
     }
 
+    const wallStart = Date.now();
+
     logger.info('Getting threads for user:', { 
       userId: req.user.id,
       orgId,
       sessionId: req.user.sessionId,
       permissions: req.user.permissions
     });
+    
+    const cacheKey = `threads:${req.user.id}:${orgId}`;
+    const cached = simpleCache.get<any[]>(cacheKey);
+    if (cached) {
+      logger.info('Returning threads from cache', { count: cached.length });
+      logger.info(`[perf] GET /threads finished in ${Date.now() - wallStart} ms`);
+      return res.json({ threads: cached });
+    }
     
     // Try to get threads with org_id first
     let threads = await db
@@ -89,6 +102,9 @@ router.get('/', async (req: AuthRequest, res) => {
         )
       )
       .orderBy(chatThreads.createdAt);
+    
+    // Cache for 30 seconds
+    simpleCache.set(cacheKey, threads, CACHE_TTL);
 
     logger.info('Returning threads:', { 
       userId: req.user.id,
@@ -96,6 +112,7 @@ router.get('/', async (req: AuthRequest, res) => {
       count: threads.length
     });
     
+    logger.info(`[perf] GET /threads finished in ${Date.now() - wallStart} ms`);
     res.json({ threads });
   } catch (error) {
     logger.error('Error getting threads:', { error });
@@ -177,6 +194,8 @@ router.get('/:id', async (req: AuthRequest, res) => {
       });
     }
 
+    const wallStart = Date.now();
+
     logger.info('Getting thread:', { 
       userId: req.user.id,
       threadId,
@@ -184,6 +203,14 @@ router.get('/:id', async (req: AuthRequest, res) => {
       sessionId: req.user.sessionId,
       permissions: req.user.permissions
     });
+    
+    const threadCacheKey = `thread:${threadId}`;
+    const cachedThread = simpleCache.get<any>(threadCacheKey);
+    if (cachedThread) {
+      logger.info('Returning thread from cache');
+      logger.info(`[perf] GET /threads/:id finished in ${Date.now() - wallStart} ms`);
+      return res.json(cachedThread);
+    }
     
     // Try to get thread with org_id first
     let thread = await db
@@ -221,7 +248,11 @@ router.get('/:id', async (req: AuthRequest, res) => {
       orgId
     });
     
-    res.json({ thread: thread[0], messages });
+    const responsePayload = { thread: thread[0], messages };
+    simpleCache.set(threadCacheKey, responsePayload, CACHE_TTL);
+
+    logger.info(`[perf] GET /threads/:id finished in ${Date.now() - wallStart} ms`);
+    res.json(responsePayload);
   } catch (error) {
     logger.error('Error getting thread:', { error });
     res.status(500).json({ 
