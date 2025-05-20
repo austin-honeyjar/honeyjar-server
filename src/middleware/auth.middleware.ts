@@ -1,10 +1,47 @@
 import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../services/auth.service';
 import logger from '../utils/logger';
+import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import path from 'path';
 
-// Debug token for development/testing
-const DEBUG_TOKEN = 'debug-auth-123456';
-const DEBUG_USER_ID = 'debug-user-123';
+// Format the PEM key properly for verification
+function formatPemKey(key: string): string {
+  if (!key) return '';
+  
+  // Replace literal \n with actual newlines if needed
+  let formattedKey = key.replace(/\\n/g, '\n');
+  
+  // Remove any enclosing quotes
+  formattedKey = formattedKey.replace(/^["'](.*)["']$/s, '$1');
+  
+  // Handle single-line keys by adding proper line breaks
+  if (!formattedKey.includes('\n')) {
+    formattedKey = formattedKey
+      .replace('-----BEGIN PUBLIC KEY-----', '-----BEGIN PUBLIC KEY-----\n')
+      .replace('-----END PUBLIC KEY-----', '\n-----END PUBLIC KEY-----');
+      
+    // Insert line breaks every 64 characters in the base64 part
+    const matches = formattedKey.match(/-----BEGIN PUBLIC KEY-----\n(.*)\n-----END PUBLIC KEY-----/s);
+    if (matches && matches[1]) {
+      const formatted = matches[1].replace(/(.{64})/g, '$1\n');
+      formattedKey = `-----BEGIN PUBLIC KEY-----\n${formatted}\n-----END PUBLIC KEY-----`;
+    }
+  }
+  
+  return formattedKey;
+}
+
+// Get PEM key from environment variables
+const rawPemKey = process.env.CLERK_PEM_PUBLIC_KEY || '';
+const CLERK_PEM_PUBLIC_KEY = formatPemKey(rawPemKey);
+const CLERK_JWT_ISSUER = process.env.CLERK_JWT_ISSUER;
+const NODE_ENV = process.env.NODE_ENV || 'production';
+
+// Log key information without exposing the actual key
+logger.info(`PEM key available: ${!!CLERK_PEM_PUBLIC_KEY}, Length: ${CLERK_PEM_PUBLIC_KEY.length}`);
+logger.info(`Using JWT issuer: ${CLERK_JWT_ISSUER || 'none (issuer validation disabled)'}`);
+logger.info(`Environment: ${NODE_ENV}`);
 
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -34,14 +71,46 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
       method: req.method
     });
 
-    // Check if using debug token
-    if (token === DEBUG_TOKEN) {
-      logger.info('Using debug token for authentication');
+    try {
+      logger.info(`Attempting JWT verification with key of length ${CLERK_PEM_PUBLIC_KEY.length}`);
       
-      // Create mock session and user info
-      req.session = {
-        userId: DEBUG_USER_ID,
-        sessionId: 'debug-session-id',
+      // Create verification options
+      const verifyOptions: jwt.VerifyOptions = {
+        algorithms: ['RS256']
+      };
+      
+      // Only add issuer validation if we have a valid issuer
+      if (CLERK_JWT_ISSUER) {
+        verifyOptions.issuer = CLERK_JWT_ISSUER;
+      }
+      
+      // Manual JWT verification for Clerk
+      const jwtVerification = jwt.verify(token, CLERK_PEM_PUBLIC_KEY, verifyOptions) as jwt.JwtPayload;
+      
+      if (!jwtVerification || !jwtVerification.sub) {
+        logger.error('Invalid token or missing subject');
+        return res.status(401).json({ 
+          status: 'error', 
+          message: 'Invalid token' 
+        });
+      }
+      
+      // Log successful verification
+      logger.info(`JWT verified successfully - Issuer: ${jwtVerification.iss}`);
+      
+      const userId = jwtVerification.sub;
+      
+      // Get auth service instance
+      const authService = AuthService.getInstance();
+      
+      // Get user permissions
+      const permissions = await authService.getUserPermissions(userId);
+      
+      // Create session object
+      const sessionId = jwtVerification.sid || `clerk-${Date.now()}`;
+      const session = {
+        userId,
+        sessionId,
         status: 'active',
         lastActiveAt: Date.now(),
         expireAt: Date.now() + 86400000, // 24 hours
@@ -49,50 +118,23 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
-      
-      req.user = {
-        id: DEBUG_USER_ID,
-        sessionId: 'debug-session-id',
-        permissions: ['user:read', 'user:write', 'org:read', 'org:write', 'asset:read', 'asset:write']
-      };
-      
-      // Set req.auth as well for compatibility
-      req.auth = {
-        userId: DEBUG_USER_ID,
-        token: DEBUG_TOKEN,
-        sessionId: 'debug-session-id'
-      };
-      
-      logger.info(`Authenticated using debug token as user ${DEBUG_USER_ID}`);
-      return next();
-    }
-
-    try {
-      // Get auth service instance
-      const authService = AuthService.getInstance();
-
-      // Verify session and get session details
-      const session = await authService.verifySession(token);
-      
-      // Get user permissions
-      const permissions = await authService.getUserPermissions(session.userId);
 
       // Attach the session, user info, and permissions to the request
       req.session = session;
       req.user = {
-        id: session.userId,
-        sessionId: session.sessionId,
+        id: userId,
+        sessionId,
         permissions: permissions.permissions
       };
       
       // Set req.auth as well for consistency
       req.auth = {
-        userId: session.userId,
-        token: token,
-        sessionId: session.sessionId
+        userId,
+        token,
+        sessionId
       };
 
-      logger.info(`Authenticated user ${session.userId} with session ${session.sessionId}`, {
+      logger.info(`Authenticated user ${userId} with session ${sessionId}`, {
         permissions: permissions.permissions
       });
       next();
@@ -101,6 +143,13 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined
       });
+      
+      // Special handling for issuer errors
+      if (error instanceof Error && error.message.includes('jwt issuer invalid')) {
+        logger.error(`JWT issuer mismatch. Expected: ${CLERK_JWT_ISSUER}, but token has a different issuer.`);
+        logger.error('Update CLERK_JWT_ISSUER environment variable to match, or remove it to disable issuer validation.');
+      }
+      
       return res.status(401).json({ 
         status: 'error', 
         message: 'Authentication failed' 

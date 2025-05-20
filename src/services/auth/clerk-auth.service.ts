@@ -80,7 +80,6 @@ export class ClerkAuthService implements AuthService {
           permissions.add('org:sys_profile:manage');
           permissions.add('org:sys_billing:read');
           permissions.add('org:sys_billing:manage');
-          permissions.add('org:feature:admin_panel');
         } else if (role === 'org:basic_member') {
           permissions.add('org:sys_domains:read');
           permissions.add('org:sys_memberships:read');
@@ -222,9 +221,8 @@ export class ClerkAuthService implements AuthService {
             allPermissions: permissions
           });
 
-          // Check both direct permissions and role-based permissions
-          if (permissions.includes(permission) || 
-              (permission === 'org:feature:admin_panel' && permissions.includes('org:admin'))) {
+          // Check for direct permissions only, not special case for admin panel
+          if (permissions.includes(permission)) {
             usersWithPermission.push({
               id: user.id,
               email: user.emailAddresses[0]?.emailAddress || '',

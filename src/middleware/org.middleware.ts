@@ -3,9 +3,8 @@ import { authService } from '../services/auth/auth.service.js';
 import { ApiError } from '../utils/error.js';
 import logger from '../utils/logger.js';
 
-// Debug constants need to match those in auth.middleware
-const DEBUG_TOKEN = 'debug-auth-123456';
-const DEBUG_USER_ID = 'debug-user-123';
+// Environment check for production
+const NODE_ENV = process.env.NODE_ENV || 'production';
 
 /**
  * Middleware to check if the user has the required organization role
@@ -14,14 +13,6 @@ const DEBUG_USER_ID = 'debug-user-123';
 export const requireOrgRole = (roles: string[]) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Allow all requests that use the debug token (dev/sandbox mode)
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.split(' ')[1] === DEBUG_TOKEN) {
-        logger.info('Bypassing org role check for debug token');
-        req.orgId = (req.headers['x-organization-id'] as string) || 'debug-org';
-        return next();
-      }
-
       // Get the user from the request (set by auth middleware)
       const user = req.user;
       if (!user) {

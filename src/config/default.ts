@@ -3,7 +3,7 @@ import { AppConfig } from './types';
 export const defaultConfig: AppConfig = {
   server: {
     port: 3005,
-    env: 'devlocal',
+    env: 'development',
     apiPrefix: '/api/v1',
     autoDeploy: false,
   },

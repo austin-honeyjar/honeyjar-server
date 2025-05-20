@@ -8,7 +8,7 @@ services:
     ports:
       - "3005:3005"
     environment:
-      - NODE_ENV=devlocal
+      - NODE_ENV=development
       - DATABASE_URL=postgres://postgres:Password1@db:5432/client_db
       - CLERK_SECRET_KEY=sk_test_YB62TvY7FX1Y91385BJx2HcC50VKWhn2dBY0cmLk9n
       - TZ=UTC

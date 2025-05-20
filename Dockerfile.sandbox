@@ -17,7 +17,7 @@ COPY src ./src
 # Create a default .env file with necessary defaults
 RUN echo "# Default environment variables for sandbox deployment" > .env && \
     echo "PORT=3005" >> .env && \
-    echo "NODE_ENV=devlocal" >> .env
+    echo "NODE_ENV=development" >> .env
 
 # Create a startup script that uses tsx with error handling
 RUN echo '#!/bin/sh' > /app/start.sh && \

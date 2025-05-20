@@ -37,7 +37,7 @@ app.use(config.server.apiPrefix, assetRoutes);
 app.use('/health', healthRoutes);
 
 // Swagger documentation (only in development)
-if (process.env.NODE_ENV === 'devlocal') {
+if (process.env.NODE_ENV === 'development') {
   // Serve Swagger UI
   app.use('/api-docs', swaggerUi.serve);
   app.get('/api-docs', swaggerUi.setup(swaggerSpec, swaggerUiOptions));
@@ -67,7 +67,7 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
   logger.error('Unhandled error:', { error: err });
   res.status(500).json({
     status: 'error',
-    message: process.env.NODE_ENV === 'devlocal' ? err.message : 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
   });
 });
 
@@ -283,7 +283,7 @@ if (process.env.NODE_ENV !== 'test') {
       // Start server after templates are initialized
       app.listen(port, () => {
         logger.info(`Server is running on port ${port}`);
-        if (process.env.NODE_ENV === 'devlocal') {
+        if (process.env.NODE_ENV === 'development') {
           logger.info(`API documentation available at http://localhost:${port}/api-docs`);
           logger.info(`Raw OpenAPI spec available at http://localhost:${port}/api-docs/api.yaml`);
         }

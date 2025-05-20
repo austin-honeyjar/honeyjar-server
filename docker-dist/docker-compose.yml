@@ -6,7 +6,7 @@ services:
     ports:
       - "3005:3005"
     environment:
-      - NODE_ENV=devlocal
+      - NODE_ENV=development
       - DATABASE_URL=postgres://postgres:Password1@db:5432/client_db
       - PG_USER=postgres
       - PG_PASSWORD=Password1

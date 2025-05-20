@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AppConfig, Environment } from './types';
 import { defaultConfig } from './default';
-import { devlocalConfig } from './devlocal';
+import { developmentConfig } from './development';
 import { sandboxConfig } from './sandbox';
 import { testConfig } from './test';
 import { demoConfig } from './demo';
@@ -12,7 +12,7 @@ import logger from '../utils/logger';
 const configSchema = z.object({
   server: z.object({
     port: z.number().int().positive(),
-    env: z.enum(['devlocal', 'sandbox', 'test', 'demo', 'production']),
+    env: z.enum(['development', 'sandbox', 'test', 'demo', 'production']),
     apiPrefix: z.string(),
     branch: z.string().optional(),
     autoDeploy: z.boolean(),
@@ -46,12 +46,12 @@ const configSchema = z.object({
 });
 
 function loadConfig(): AppConfig {
-  const env = (process.env.NODE_ENV || 'devlocal') as Environment;
+  const env = (process.env.NODE_ENV || 'development') as Environment;
   let config: AppConfig;
 
   switch (env) {
-    case 'devlocal':
-      config = devlocalConfig;
+    case 'development':
+      config = developmentConfig;
       break;
     case 'sandbox':
       config = sandboxConfig;
@@ -66,8 +66,8 @@ function loadConfig(): AppConfig {
       config = productionConfig;
       break;
     default:
-      logger.warn(`Unknown environment: ${env}, falling back to devlocal`);
-      config = devlocalConfig;
+      logger.warn(`Unknown environment: ${env}, falling back to development`);
+      config = developmentConfig;
   }
 
   // Override with environment variables

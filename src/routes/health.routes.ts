@@ -71,7 +71,7 @@ router.get('/database', async (req, res) => {
     res.status(503).json({
       status: 'error',
       database: 'disconnected',
-      error: process.env.NODE_ENV === 'devlocal' ? (error as Error).message : 'Database connection failed',
+      error: process.env.NODE_ENV === 'development' ? (error as Error).message : 'Database connection failed',
     });
   }
 });

@@ -1,11 +1,11 @@
 import { AppConfig } from './types';
 import { defaultConfig } from './default';
 
-export const devlocalConfig: AppConfig = {
+export const developmentConfig: AppConfig = {
   ...defaultConfig,
   server: {
     ...defaultConfig.server,
-    env: 'devlocal',
+    env: 'development',
     port: 3005,
     apiPrefix: '/api/v1',
     autoDeploy: false,
@@ -13,7 +13,7 @@ export const devlocalConfig: AppConfig = {
   },
   database: {
     ...defaultConfig.database,
-    url: process.env.DATABASE_URL || 'postgres://localhost:5432/honeyjar_devlocal',
+    url: process.env.DATABASE_URL || 'postgres://localhost:5432/honeyjar_development',
     maxConnections: 5,
     idleTimeoutMs: 10000,
   },
