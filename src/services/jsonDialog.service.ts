@@ -31,12 +31,38 @@ export class JsonDialogService {
       logger.info('Processing JSON dialog message', {
         stepId: step.id,
         stepName: step.name,
-        historyLength: conversationHistory.length
+        historyLength: conversationHistory.length,
+        userInputLength: userInput.length
       });
 
+      // Check if this might be an initial step entry
+      const isInitialEntry = !step.metadata?.processedFirstMessage && 
+                           (!userInput || userInput.trim() === '');
+      
       // Get the step's goal and any previously collected information
       const goal = step.metadata?.goal || `Determine if user has selected a workflow type`;
       const collectedInfo = step.metadata?.collectedInformation || {};
+      
+      // For initial entry with empty user input, return basic info without calling OpenAI
+      if (isInitialEntry) {
+        logger.info('Initial entry to step detected, returning basic info', {
+          stepName: step.name
+        });
+        
+        // Mark that we've processed the first message
+        await this.updateStepMetadata(step.id, {
+          ...step.metadata,
+          processedFirstMessage: true
+        });
+        
+        return {
+          isStepComplete: false,
+          nextQuestion: step.prompt || 'Please provide the requested information.',
+          collectedInformation: collectedInfo,
+          apiResponse: '',
+          readyToGenerate: false
+        };
+      }
       
       // Get required fields for this step type (if defined)
       const requiredFields = this.getRequiredFieldsForStep(step);
@@ -604,5 +630,29 @@ ${completionPercentage >= 0.7 ? "READY TO SUGGEST GENERATION: YES" : "READY TO S
       
       return acc;
     }, {} as Record<string, any>);
+  }
+
+  /**
+   * Update step metadata
+   */
+  private async updateStepMetadata(stepId: string, metadata: any): Promise<void> {
+    try {
+      // Import required modules inline to avoid circular dependencies
+      const { db } = await import('../db');
+      const { workflowSteps } = await import('../db/schema');
+      const { eq } = await import('drizzle-orm');
+      
+      // Update the step metadata
+      await db.update(workflowSteps)
+        .set({ metadata })
+        .where(eq(workflowSteps.id, stepId));
+      
+      logger.info(`Updated metadata for step ${stepId}`);
+    } catch (error) {
+      logger.error('Error updating step metadata', { 
+        stepId, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      });
+    }
   }
 } 

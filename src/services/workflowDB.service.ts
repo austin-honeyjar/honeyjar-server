@@ -13,20 +13,20 @@ import logger from "../utils/logger";
 
 export class WorkflowDBService {
   // Template Operations
-  async createTemplate(template: Omit<WorkflowTemplate, 'id'>): Promise<WorkflowTemplate> {
+  async createTemplate(template: Omit<WorkflowTemplate, 'id'> | WorkflowTemplate): Promise<WorkflowTemplate> {
+    // Use template.id if provided, otherwise generate a new UUID
+    const templateId = (template as any).id || (await import('crypto')).randomUUID();
+    
     // Destructure the template to exclude the 'id' if it exists
-    const { id, ...templateData } = template as any; 
+    const { id, ...templateData } = template as any;
 
-    // Generate a random UUID for the template
-    // Use the randomUUID function from the crypto module
-    // This is just a type definition to inform TypeScript
-    const crypto = await import('crypto');
-    const templateId = crypto.randomUUID();
+    // Log the ID being used
+    console.log(`Creating template with ID: ${templateId}`);
 
     const [newTemplate] = await db
       .insert(workflowTemplates)
       .values({
-        id: templateId, // Explicitly provide a UUID
+        id: templateId, // Use the provided or generated ID
         ...templateData, // Use the rest of the data 
         steps: JSON.stringify(templateData.steps), 
       })
@@ -76,13 +76,18 @@ export class WorkflowDBService {
 
   // Workflow Operations
   async createWorkflow(workflow: Omit<Workflow, "id" | "createdAt" | "updatedAt" | "steps">): Promise<Workflow> {
+    // The templateId should now be a proper UUID passed from WorkflowService
+    // No need to convert or generate UUIDs here
+    
+    logger.info(`Creating workflow with templateId: ${workflow.templateId}`);
+    
     const [newWorkflow] = await db
       .insert(workflows)
       .values(workflow)
       .returning();
 
-    // Return the basic workflow object; steps are created separately
-    return { ...newWorkflow, steps: [] } as Workflow; // Initialize with empty steps array
+    // Return the basic workflow object with a steps array
+    return { ...newWorkflow, steps: [] } as Workflow;
   }
 
   async getWorkflow(id: string): Promise<Workflow | null> {
@@ -151,9 +156,18 @@ export class WorkflowDBService {
      // Use JSON.stringify for nested objects in logs
      logger.info(`DB: Create Step Input Data: ${JSON.stringify({ workflowId: step.workflowId, name: step.name, prompt: step.prompt, order: step.order, status: step.status })}`); 
 
+    // Convert the step type to a string that matches the enum values in the schema
+    const stepTypeAsString = step.stepType.toString();
+    
+    // Create values object with converted stepType
+    const insertValues = {
+      ...step,
+      stepType: stepTypeAsString as any, // Cast to any to bypass type checking
+    };
+
     const [newStep] = await db
       .insert(workflowSteps)
-      .values(step)
+      .values(insertValues)
       .returning();
     
     if (!newStep) {
@@ -180,14 +194,18 @@ export class WorkflowDBService {
     id: string,
     data: Partial<Omit<WorkflowStep, "id" | "workflowId" | "createdAt">> // Don't allow setting updatedAt directly
   ): Promise<WorkflowStep> {
-    // logger.info('Updating step', { id, data }); // Already logged before calling this
+    // Handle stepType conversion if present in the data
+    let convertedData: any = { ...data };
+    
+    // If stepType is provided, convert it to string
+    if (data.stepType !== undefined) {
+      convertedData.stepType = data.stepType.toString();
+    }
     
     const updateData = {
-      ...data,
+      ...convertedData,
       updatedAt: new Date() // Set updatedAt timestamp
     };
-
-    // logger.info('Update data:', updateData); // Already logged before calling this
 
     const [updatedStep] = await db
       .update(workflowSteps)
@@ -199,13 +217,6 @@ export class WorkflowDBService {
       logger.error(`Failed to update step ${id}. Step not found or update failed.`);
       throw new Error(`Failed to update step ${id}`);
     }
-
-    // logger.info('Step updated successfully:', { // Already logged before calling this
-    //   id: updatedStep.id,
-    //   status: updatedStep.status,
-    //   userInput: updatedStep.userInput,
-    //   aiSuggestion: updatedStep.aiSuggestion
-    // });
 
     return updatedStep as WorkflowStep;
   }

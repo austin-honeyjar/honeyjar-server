@@ -9,7 +9,7 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
       type: StepType.JSON_DIALOG,
       name: "Workflow Selection",
       description: "Select the type of workflow you'd like to create",
-      prompt: "Which workflow would you like to create?\n\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Dummy Workflow - For testing purposes",
+      prompt: "Which workflow would you like to use? Please choose from:\n\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Test Step Transitions - For testing step transitions and workflow completion\n• Dummy Workflow - For testing purposes",
       order: 0,
       dependencies: [],
       metadata: {
@@ -17,7 +17,8 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
         options: [
           "Launch Announcement",
           "Dummy Workflow",
-          "JSON Dialog PR Workflow"
+          "JSON Dialog PR Workflow",
+          "Test Step Transitions"
         ],
         baseInstructions: `You are a workflow selection assistant. Your task is to match the user's input to one of the available workflows.
 
@@ -25,12 +26,14 @@ TASK:
 Match user input to one of these workflows:
 - Launch Announcement: For product launches, features, or news releases
 - JSON Dialog PR Workflow: For creating press releases, media pitches, and PR assets
+- Test Step Transitions: For testing step transitions and workflow completion
 - Dummy Workflow: For testing and demonstration purposes
 
 MATCHING RULES:
 - If user mentions "PR", "press release", "press", choose "JSON Dialog PR Workflow"
 - If user mentions "launch", "announcement", "product", choose "Launch Announcement" 
 - If user mentions "test", "dummy", "sample", "demo", choose "Dummy Workflow"
+- If user mentions "step", "transition", "test steps", choose "Test Step Transitions"
 - If no clear match, ask user to clarify with choices
 
 RESPONSE FORMAT:
