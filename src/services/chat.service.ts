@@ -4,6 +4,7 @@ import { WorkflowService } from "./workflow.service";
 import { WorkflowStatus, StepStatus } from "../types/workflow";
 import { eq } from "drizzle-orm";
 import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow.js';
+import logger from "../utils/logger";
 
 export class ChatService {
   private workflowService: WorkflowService;
@@ -867,6 +868,96 @@ Join us on this exciting journey!`;
        // rely on getNextPrompt to figure out what to do (e.g., re-prompt for current step if needed)
        console.warn(`Step ${currentStepId} processed, workflow not complete, but handleStepResponse provided no next step. Calling getNextPrompt.`);
        return this.getNextPrompt(threadId, workflow.id);
+    }
+  }
+
+  /**
+   * Start a new chat with the JSON PR workflow
+   */
+  async startJsonPrWorkflow(userId: string, orgId?: string): Promise<string> {
+    try {
+      logger.info(`Starting JSON PR workflow for user ${userId}`);
+      
+      // 1. Create a new chat thread
+      const thread = await this.createThread(userId, "New Smart PR");
+      
+      // 2. Create a JSON workflow for the thread
+      const workflowService = new WorkflowService();
+      await workflowService.createJsonWorkflow(thread.id);
+      
+      logger.info(`JSON PR workflow started for thread ${thread.id}`);
+      
+      return thread.id;
+    } catch (error) {
+      logger.error('Error starting JSON PR workflow', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        userId
+      });
+      throw error;
+    }
+  }
+  
+  /**
+   * Process a message in a JSON PR workflow
+   */
+  async processJsonPrMessage(threadId: string, userId: string, content: string): Promise<any> {
+    try {
+      logger.info(`Processing JSON PR message in thread ${threadId}`);
+      
+      // 1. Save the user message
+      await this.addMessage(threadId, content, true);
+      
+      // 2. Get the active workflow
+      const workflowService = new WorkflowService();
+      const workflow = await workflowService.getWorkflowByThreadId(threadId);
+      
+      if (!workflow) {
+        throw new Error(`No active workflow found for thread ${threadId}`);
+      }
+      
+      // 3. Process the message with the JSON workflow
+      const currentStepId = workflow.currentStepId;
+      
+      if (!currentStepId) {
+        throw new Error(`No current step found for workflow ${workflow.id}`);
+      }
+      
+      const result = await workflowService.handleJsonMessage(workflow.id, currentStepId, content);
+      
+      // 4. Add the assistant response as a message
+      await this.addMessage(threadId, result.response, false);
+      
+      // 5. Prepare the response with debugging information if enabled
+      const { config } = await import('../config');
+      const response = {
+        message: result.response,
+        complete: result.isComplete,
+        nextStep: result.nextStep,
+        ...(config.debug.enableDebugMode ? { debug: result.debug } : {})
+      };
+      
+      // 6. Log debug information if enabled
+      if (config.debug.enableDebugMode) {
+        logger.info('JSON PR Response with debug', {
+          threadId,
+          responsePreview: result.response.substring(0, 50) + (result.response.length > 50 ? '...' : ''),
+          complete: result.isComplete,
+          debugInfo: result.debug ? {
+            ...result.debug,
+            // Don't log full texts in normal logs
+            fullPrompt: undefined,
+            fullResponse: undefined
+          } : undefined
+        });
+      }
+      
+      return response;
+    } catch (error) {
+      logger.error('Error processing JSON PR message', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        threadId
+      });
+      throw error;
     }
   }
 } 

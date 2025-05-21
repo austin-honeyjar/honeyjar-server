@@ -23,6 +23,20 @@ export interface ClerkConfig {
   webhookSecret?: string;
 }
 
+export interface OpenAIConfig {
+  apiKey: string;
+  assistantId: string;
+  threadPrefix: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+}
+
+export interface DebugConfig {
+  enableDebugMode: boolean;
+  showFullResponses: boolean;
+}
+
 export type Environment = 'development' | 'sandbox' | 'test' | 'demo' | 'production';
 
 export interface ServerConfig {
@@ -44,4 +58,6 @@ export interface AppConfig {
   security: SecurityConfig;
   clerk: ClerkConfig;
   logging: LogConfig;
+  openai: OpenAIConfig;
+  debug: DebugConfig;
 } 

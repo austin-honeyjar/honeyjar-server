@@ -6,95 +6,56 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
   description: "Initial workflow for selecting specific workflow type and setting thread title",
   steps: [
     {
-      type: StepType.AI_SUGGESTION,
+      type: StepType.JSON_DIALOG,
       name: "Workflow Selection",
       description: "Select the type of workflow you'd like to create",
-      prompt: "What type of workflow would you like to create? Choose from: Launch Announcement, or Dummy Workflow.",
+      prompt: "Which workflow would you like to create?\n\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Dummy Workflow - For testing purposes",
       order: 0,
       dependencies: [],
       metadata: {
+        goal: "Determine which workflow the user wants to create based on their input",
         options: [
           "Launch Announcement",
-          "Dummy Workflow"
+          "Dummy Workflow",
+          "JSON Dialog PR Workflow"
         ],
-        openai_instructions: `You are a workflow selection assistant. Your task is to determine which workflow the user wants to create based on their input.
+        baseInstructions: `You are a workflow selection assistant. Your task is to match the user's input to one of the available workflows.
 
-AVAILABLE WORKFLOWS:
-- Launch Announcement: For announcing product launches, features, or news
-- Dummy Workflow: For testing purposes or sample workflows
+TASK:
+Match user input to one of these workflows:
+- Launch Announcement: For product launches, features, or news releases
+- JSON Dialog PR Workflow: For creating press releases, media pitches, and PR assets
+- Dummy Workflow: For testing and demonstration purposes
 
-RULES:
-1. ONLY respond with an EXACT match from the available workflows list
-2. If the user's input doesn't clearly indicate a preference, respond with "NO_MATCH"
-3. If the user expresses a negative preference (e.g., "not X", "don't use X"), respond with "NO_MATCH"
-4. If the user seems confused or is asking questions, respond with "NO_MATCH"
-5. The workflow name must be returned EXACTLY as shown above, with correct capitalization
-6. NEVER provide explanations or additional text in your response
+MATCHING RULES:
+- If user mentions "PR", "press release", "press", choose "JSON Dialog PR Workflow"
+- If user mentions "launch", "announcement", "product", choose "Launch Announcement" 
+- If user mentions "test", "dummy", "sample", "demo", choose "Dummy Workflow"
+- If no clear match, ask user to clarify with choices
 
-EXAMPLES:
-User: "launch"
-Response: Launch Announcement
-
-User: "announcement"
-Response: Launch Announcement
-
-User: "dummy"
-Response: Dummy Workflow
-
-User: "test"
-Response: Dummy Workflow
-
-User: "not dummy, the other one"
-Response: Launch Announcement
-
-User: "launch please"
-Response: Launch Announcement
-
-User: "what are the options?"
-Response: NO_MATCH
-
-User: "something else"
-Response: NO_MATCH
-
-User: "I need to announce our new product"
-Response: Launch Announcement
-
-Your response must be ONLY the workflow name or "NO_MATCH" - no other text.`
+RESPONSE FORMAT:
+You MUST respond with ONLY valid JSON in this format:
+{
+  "isComplete": true/false,
+  "isMatch": true/false,
+  "collectedInformation": {
+    "selectedWorkflow": "EXACT NAME FROM OPTIONS LIST",
+    "confidence": "high/low"
+  },
+  "nextQuestion": "Your clarification question if needed, otherwise null",
+  "suggestedNextStep": "Thread Title and Summary" 
+}`
       }
     },
     {
-      type: StepType.AI_SUGGESTION,
+      type: StepType.JSON_DIALOG,
       name: "Thread Title and Summary",
       description: "Set the thread title and generate a summary subtitle",
       prompt: "What would you like to name this thread workspace?",
       order: 1,
       dependencies: ["Workflow Selection"],
       metadata: {
-        openai_instructions: `You are a subtitle generation assistant. The user has provided a title for their workflow, and you need to generate a brief, professional subtitle that expands on the title and adds context.
-
-TASK:
-Generate a concise, descriptive subtitle (1-2 sentences) that elaborates on the user's title and provides additional context about the purpose or benefits of the workflow.
-
-RULES:
-1. The subtitle should be professional and clear
-2. Keep it concise - no more than 2 sentences
-3. Add meaningful context that enhances the title
-4. Focus on benefits or purpose when possible
-5. DO NOT simply restate the title
-6. Return ONLY the subtitle prefixed with "SUBTITLE:"
-
-EXAMPLES:
-
-Title: "Q4 Product Launch"
-SUBTITLE: A comprehensive plan for announcing our newest product line in the fourth quarter with maximum market impact.
-
-Title: "New Feature Announcement"
-SUBTITLE: Strategic communication plan for rolling out the latest platform enhancements to customers and stakeholders.
-
-Title: "Marketing Campaign 2023"
-SUBTITLE: Framework for executing our flagship promotional campaign with coordinated messaging across all media channels.
-
-Your response must begin with "SUBTITLE:" followed by your generated subtitle - no other text or explanation.`
+        goal: "Get a title for the thread from the user and generate a professional subtitle that adds context"
       }
     }
   ],

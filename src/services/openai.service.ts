@@ -90,9 +90,12 @@ export class OpenAIService {
       // Determine if we should limit the response length
       const isChatStep = step.stepType === 'user_input' || step.stepType === 'ai_suggestion';
       const isAssetGenerationStep = step.name === 'Asset Generation';
+      const isJsonDialogStep = step.stepType === 'json_dialog';
       
-      // Higher token limit for asset generation, moderate for other non-chat steps, low for chat
-      const maxTokens = isAssetGenerationStep ? 4000 : (isChatStep ? 100 : 2000);
+      // Higher token limit for asset generation and JSON dialog, moderate for other non-chat steps, low for chat
+      const maxTokens = isAssetGenerationStep ? 4000 : 
+                     isJsonDialogStep ? 4000 : 
+                     isChatStep ? 100 : 2000;
       const presencePenalty = isChatStep ? 0.5 : 0;
       const frequencyPenalty = isChatStep ? 0.5 : 0;
 

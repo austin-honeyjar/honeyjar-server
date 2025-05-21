@@ -43,6 +43,18 @@ const configSchema = z.object({
     level: z.enum(['error', 'warn', 'info', 'debug']),
     format: z.enum(['json', 'text']),
   }),
+  openai: z.object({
+    apiKey: z.string(),
+    assistantId: z.string(),
+    threadPrefix: z.string(),
+    model: z.string(),
+    temperature: z.number().min(0).max(1),
+    maxTokens: z.number().int().positive(),
+  }),
+  debug: z.object({
+    enableDebugMode: z.boolean(),
+    showFullResponses: z.boolean(),
+  }),
 });
 
 function loadConfig(): AppConfig {
@@ -77,6 +89,38 @@ function loadConfig(): AppConfig {
 
   if (process.env.CLERK_WEBHOOK_SECRET) {
     config.clerk.webhookSecret = process.env.CLERK_WEBHOOK_SECRET;
+  }
+
+  if (process.env.OPENAI_API_KEY) {
+    config.openai.apiKey = process.env.OPENAI_API_KEY;
+  }
+
+  if (process.env.OPENAI_ASSISTANT_ID) {
+    config.openai.assistantId = process.env.OPENAI_ASSISTANT_ID;
+  }
+
+  if (process.env.OPENAI_THREAD_PREFIX) {
+    config.openai.threadPrefix = process.env.OPENAI_THREAD_PREFIX;
+  }
+
+  if (process.env.OPENAI_MODEL) {
+    config.openai.model = process.env.OPENAI_MODEL;
+  }
+
+  if (process.env.OPENAI_TEMPERATURE) {
+    config.openai.temperature = parseFloat(process.env.OPENAI_TEMPERATURE);
+  }
+
+  if (process.env.OPENAI_MAX_TOKENS) {
+    config.openai.maxTokens = parseInt(process.env.OPENAI_MAX_TOKENS, 10);
+  }
+
+  if (process.env.DEBUG_MODE) {
+    config.debug.enableDebugMode = process.env.DEBUG_MODE === 'true';
+  }
+
+  if (process.env.SHOW_FULL_RESPONSES) {
+    config.debug.showFullResponses = process.env.SHOW_FULL_RESPONSES === 'true';
   }
 
   try {

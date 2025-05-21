@@ -32,4 +32,16 @@ export const defaultConfig: AppConfig = {
     level: 'info',
     format: 'json',
   },
+  openai: {
+    apiKey: '',
+    assistantId: '',
+    threadPrefix: 'thread_',
+    model: 'gpt-4',
+    temperature: 0.7,
+    maxTokens: 1000,
+  },
+  debug: {
+    enableDebugMode: false,
+    showFullResponses: false,
+  },
 }; 

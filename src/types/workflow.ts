@@ -12,11 +12,12 @@ export enum WorkflowStatus {
 }
 
 export enum StepType {
-  AI_SUGGESTION = "ai_suggestion",
   USER_INPUT = "user_input",
-  API_CALL = "api_call",
-  DATA_TRANSFORMATION = "data_transformation",
+  AI_SUGGESTION = "ai_suggestion",
   ASSET_CREATION = "asset_creation",
+  API_CALL = "api_call",
+  JSON_DIALOG = "json_dialog",
+  DATA_TRANSFORMATION = "data_transformation",
 }
 
 export enum WorkflowAction {

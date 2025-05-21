@@ -82,6 +82,54 @@ async function initializeDatabase() {
       logger.error('Error during migrations, will try direct SQL initialization:', migrationError);
     }
     
+    // Check if the step_type enum has JSON_DIALOG
+    const stepTypeEnumCheck = await db.execute(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM pg_type 
+        JOIN pg_enum ON pg_enum.enumtypid = pg_type.oid 
+        WHERE pg_type.typname = 'step_type' 
+        AND pg_enum.enumlabel = 'json_dialog'
+      );
+    `);
+    
+    // Add JSON_DIALOG to step_type enum if it doesn't exist
+    if (!stepTypeEnumCheck[0]?.exists) {
+      logger.info('Adding JSON_DIALOG to step_type enum...');
+      try {
+        await db.execute(sql`
+          ALTER TYPE step_type ADD VALUE IF NOT EXISTS 'json_dialog';
+        `);
+        logger.info('JSON_DIALOG added to step_type enum successfully');
+      } catch (enumError) {
+        logger.error('Error adding JSON_DIALOG to step_type enum:', enumError);
+        
+        // Alternative approach if the above fails (for PostgreSQL versions that don't support ADD VALUE)
+        try {
+          logger.info('Trying alternative approach to update step_type enum...');
+          await db.execute(sql`
+            -- Create a new enum type with all values including the new one
+            CREATE TYPE step_type_new AS ENUM ('ai_suggestion', 'user_input', 'api_call', 'data_transformation', 'asset_creation', 'json_dialog');
+            
+            -- Update the workflow_steps table to use the new enum
+            ALTER TABLE workflow_steps 
+              ALTER COLUMN step_type TYPE step_type_new 
+              USING step_type::text::step_type_new;
+            
+            -- Drop the old enum type
+            DROP TYPE step_type;
+            
+            -- Rename the new enum type to the original name
+            ALTER TYPE step_type_new RENAME TO step_type;
+          `);
+          logger.info('step_type enum updated successfully using alternative method');
+        } catch (alternativeError) {
+          logger.error('Error updating step_type enum using alternative method:', alternativeError);
+        }
+      }
+    } else {
+      logger.info('JSON_DIALOG already exists in step_type enum');
+    }
+    
     // Check if the assets table exists
     const assetTableCheck = await db.execute(sql`
       SELECT EXISTS (
@@ -114,7 +162,7 @@ async function initializeDatabase() {
           END $$;
           
           DO $$ BEGIN
-           CREATE TYPE "step_type" AS ENUM ('ai_suggestion', 'user_input', 'api_call', 'data_transformation', 'asset_creation');
+           CREATE TYPE "step_type" AS ENUM ('ai_suggestion', 'user_input', 'api_call', 'data_transformation', 'asset_creation', 'json_dialog');
           EXCEPTION
            WHEN duplicate_object THEN null;
           END $$;
@@ -275,22 +323,26 @@ if (process.env.NODE_ENV !== 'test') {
       
       // Initialize workflow templates
       const workflowService = new WorkflowService();
-      return workflowService.initializeTemplates();
-    })
-    .then(() => {
-      logger.info('Workflow templates initialized successfully');
       
-      // Start server after templates are initialized
-      app.listen(port, () => {
-        logger.info(`Server is running on port ${port}`);
-        if (process.env.NODE_ENV === 'development') {
-          logger.info(`API documentation available at http://localhost:${port}/api-docs`);
-          logger.info(`Raw OpenAPI spec available at http://localhost:${port}/api-docs/api.yaml`);
-        }
+      // Log templates
+      return workflowService.initializeTemplates().then(() => {
+        console.log('Workflow templates initialized');
+        
+        // Start the server
+        app.listen(port, () => {
+          logger.info(`Server listening on port ${port}`);
+          
+          // Print the API address
+          const host = `http://localhost:${port}${config.server.apiPrefix}`;
+          logger.info(`API available at: ${host}`);
+          
+          // Print route to Swagger UI
+          logger.info(`API Documentation: ${host}/docs`);
+        });
       });
     })
-    .catch(error => {
-      logger.error('Failed to initialize application:', error);
+    .catch((err) => {
+      logger.error('Server startup error:', err);
       process.exit(1);
     });
 } 

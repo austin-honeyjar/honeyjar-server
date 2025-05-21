@@ -105,13 +105,35 @@ export class AssetService {
       : stepData.metadata || {};
     
     // For Asset Generation step, asset data could be in different places
-    // Check different potential locations based on step structure
     
-    // Extract asset content - prefer openAIResponse, fall back to userInput or other fields
+    // Extract asset content - prefer metadata.generatedAsset first
     let assetContent = '';
-    if (stepData.openAIResponse) {
-      assetContent = stepData.openAIResponse;
-    } else if (metadata.generatedContent) {
+    
+    // First check for generatedAsset in metadata (highest priority)
+    if (metadata.generatedAsset) {
+      assetContent = metadata.generatedAsset;
+      logger.info('Using generatedAsset from metadata as content source');
+    }
+    // Next try openAIResponse, but parse it to extract just the asset
+    else if (stepData.openAIResponse) {
+      try {
+        // Try to parse response as JSON to extract just asset content
+        const parsedResponse = JSON.parse(stepData.openAIResponse);
+        if (parsedResponse.asset) {
+          assetContent = parsedResponse.asset;
+          logger.info('Successfully extracted asset from openAIResponse JSON');
+        } else {
+          assetContent = stepData.openAIResponse;
+          logger.info('Using complete openAIResponse as content (no asset field found in JSON)');
+        }
+      } catch (e) {
+        // If parsing fails, use the whole response
+        assetContent = stepData.openAIResponse;
+        logger.info('Using complete openAIResponse as content (not valid JSON)');
+      }
+    } 
+    // Fall back to other possible content sources
+    else if (metadata.generatedContent) {
       assetContent = metadata.generatedContent;
     } else if (stepData.userInput && stepData.name.toLowerCase().includes('asset')) {
       assetContent = stepData.userInput;
@@ -136,6 +158,8 @@ export class AssetService {
     
     // Use step name as asset name if not specified in metadata
     const assetName = metadata.assetName || stepData.name;
+    
+    logger.info(`Extracted asset data: ${assetName} (${assetType}), content length: ${assetContent?.length || 0}`);
     
     // Return structured asset data
     return {
