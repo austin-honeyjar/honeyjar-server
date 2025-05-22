@@ -17,7 +17,8 @@ import { simpleCache } from '../utils/simpleCache';
 
 const router = Router();
 
-const CACHE_TTL = 300000; // 5 minutes
+// Reduce cache TTL to just 10 seconds for more frequent database refreshes
+const CACHE_TTL = 10000; // 10 seconds
 
 // Apply auth middleware to all thread routes
 router.use(authMiddleware);
@@ -237,7 +238,7 @@ router.get('/:id', async (req: AuthRequest, res) => {
       .from(chatMessages)
       .where(eq(chatMessages.threadId, threadId))
       .orderBy(desc(chatMessages.createdAt))
-      .limit(50);
+      .limit(200);
     
     // Reverse to chronological order for UI
     messages = messages.reverse();
@@ -461,37 +462,75 @@ router.delete('/:id', async (req: AuthRequest, res) => {
     }
 
     // 3. Next delete all messages in the thread
-    await db
-      .delete(chatMessages)
-      .where(eq(chatMessages.threadId, threadId));
-
-    // 4. Finally delete the thread itself
-    const result = await db
-      .delete(chatThreads)
-      .where(
-        and(
-          eq(chatThreads.id, threadId),
-          eq(chatThreads.userId, req.user.id)
-        )
-      )
-      .returning();
-
-    if (result.length === 0) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Thread not found'
+    try {
+      const messagesDeleteCount = await db
+        .delete(chatMessages)
+        .where(eq(chatMessages.threadId, threadId))
+        .returning();
+      
+      logger.info(`Deleted ${messagesDeleteCount.length} messages for thread ${threadId}`);
+    } catch (messageDeleteError) {
+      logger.error('Error deleting messages:', { 
+        error: messageDeleteError instanceof Error ? messageDeleteError.message : messageDeleteError,
+        threadId
       });
+      // Continue despite error
     }
 
-    logger.info('Thread deleted:', { 
-      userId: req.user.id,
-      threadId
-    });
+    // 4. Finally delete the thread itself
+    try {
+      const result = await db
+        .delete(chatThreads)
+        .where(
+          and(
+            eq(chatThreads.id, threadId),
+            eq(chatThreads.userId, req.user.id)
+          )
+        )
+        .returning();
 
-    res.json({ 
-      status: 'success',
-      message: 'Thread deleted successfully'
-    });
+      if (result.length === 0) {
+        logger.error('Thread not found or not owned by user', { 
+          threadId, 
+          userId: req.user.id 
+        });
+        return res.status(404).json({
+          status: 'error',
+          message: 'Thread not found'
+        });
+      }
+
+      logger.info('Thread deleted:', { 
+        userId: req.user.id,
+        threadId,
+        deletedThread: result[0]
+      });
+
+      // Invalidate all relevant caches
+      const orgId = Array.isArray(req.headers['x-organization-id']) 
+        ? req.headers['x-organization-id'][0]
+        : req.headers['x-organization-id'];
+      
+      try {
+        simpleCache.del(`thread:${threadId}`);
+        simpleCache.del(`threads:${req.user.id}:${orgId}`);
+        logger.info('Cache invalidated for deleted thread', { threadId });
+      } catch (cacheError) {
+        logger.error('Error invalidating cache for deleted thread', { error: cacheError });
+      }
+
+      res.json({ 
+        status: 'success',
+        message: 'Thread deleted successfully'
+      });
+    } catch (threadDeleteError) {
+      logger.error('Error deleting thread from database:', { 
+        error: threadDeleteError instanceof Error ? threadDeleteError.message : threadDeleteError,
+        threadId,
+        userId: req.user.id
+      });
+      throw threadDeleteError; // Re-throw to be caught by outer try-catch
+    }
   } catch (error) {
     logger.error('Error deleting thread:', { error });
     res.status(500).json({ 

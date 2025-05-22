@@ -81,7 +81,13 @@ export const chatController = {
       logger.info('Created chat message', { messageId: message.id, threadId });
 
       // Invalidate thread cache
-      simpleCache.del(`thread:${threadId}`);
+      try {
+        simpleCache.del(`thread:${threadId}`);
+        simpleCache.del(`threads:${userId}:${orgId}`);
+        logger.info('Invalidated caches for thread and thread list', { threadId, userId, orgId });
+      } catch (cacheError) {
+        logger.error('Error invalidating cache', { error: cacheError });
+      }
 
       res.status(201).json({
         message,
