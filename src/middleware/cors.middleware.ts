@@ -6,7 +6,7 @@ const allowedOrigins = process.env.CORS_ORIGIN
       'http://localhost:3000', 
       'http://localhost:5173',  // Vite default port
       'http://localhost:3001',
-      'https://app.sandbox.honey-jar.dev',
+      'https://app.development.honey-jar.dev',
       'https://honey-jar.dev',
       'https://clerk.honey-jar.dev'
     ];

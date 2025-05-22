@@ -14,8 +14,8 @@ const options: swaggerJsdoc.Options = {
         description: 'Development server',
       },
       {
-        url: 'https://honeyjar-server-sandbox-734191217628.us-central1.run.app',
-        description: 'Sandbox Cloud Run server',
+        url: 'https://honeyjar-development-734191217628.us-central1.run.app',
+        description: 'Development Cloud Run server',
       },
     ],
     components: {
