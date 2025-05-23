@@ -175,14 +175,14 @@ If the user asks for more information about asset types:
         baseInstructions: `You are an information gathering assistant for PR asset creation. Your task is to collect specific information needed for the selected PR asset type.
 
 MAIN GOAL:
-Collect all the necessary information to create a high-quality PR asset of the type selected by the user. chunk out the required infomation for the asset type into questions starting with the most imoporatn. keep track of the covered items and the remaining items to keep asking questions on. 
+Collect all the necessary information to create a high-quality PR asset of the type selected by the user. Ask questions to gather the required information, starting with the most important details.
 
 CONTEXT:
 - Use the announcement type and asset type from previous steps
 - Each asset type requires specific information fields
 - Adapt your questions based on what information has already been provided
 - Track completion percentage as fields are filled
-- if the user says they dont know or they dont have that information, skip that requirement and move on to the next one.
+- If the user says they don't know or they don't have that information, skip that requirement and move on to the next one.
 
 REQUIRED INFORMATION BY ASSET TYPE:
 
@@ -249,10 +249,10 @@ While collecting information (less than 90% complete):
   "collectedInformation": {
     "assetType": "Selected asset type from previous step",
     "announcementType": "Announcement type from previous step",
-    "companyInfo": {
+  "companyInfo": {
       "name": "Company name",
       "description": "Company description"
-    },
+    }
     // All other information collected so far, organized by category
     // Include ALL relevant information found in the user's messages
   },
@@ -275,89 +275,15 @@ When sufficient information is collected (90%+ complete):
       }
     },
     {
-      type: StepType.JSON_DIALOG,
+      type: StepType.API_CALL,
       name: "Asset Generation",
       description: "Generate the selected PR asset with collected information",
-      prompt: "Generating your PR asset now. This may take a moment...",
+      prompt: "Generating your press release now. This may take a moment...",
       order: 3,
       dependencies: ["Information Collection"],
       metadata: {
-        goal: "Generate a high-quality PR asset based on the collected information and selected asset type, and return the full content to the user.",
+        goal: "Generate a high-quality press release based on the collected information, and return the full content to the user.",
         initialPromptSent: false,
-        baseInstructions: `You are a PR asset generator. Your task is to generate the specific PR asset the user has selected based on all the information they've provided so far.
-
-MAIN GOAL:
-Create a professional, high-quality PR asset that matches the selected type and incorporates all collected information.
-
-CONTEXT:
-- Use the selected asset type and announcement type from previous steps
-- Incorporate all information collected during the Information Collection step
-- Follow industry best practices for the specific asset type
-- Use the appropriate structure and tone for the selected asset type
-
-ASSET STRUCTURE GUIDELINES:
-
-For Press Release:
-- Headline: Attention-grabbing title (10-15 words)
-- Dateline: City, State — Date format
-- First paragraph: Core announcement (who, what, when, where, why)
-- Body paragraphs: Details, context, background
-- Quote from executive
-- Features/benefits section
-- Availability information
-- Boilerplate company description
-- Contact information
-
-For Media Pitch:
-- Subject line suggestion
-- Personalized greeting
-- Opening hook
-- Announcement details (1-2 paragraphs)
-- Why it matters/is newsworthy
-- Key talking points (bulleted)
-- Call to action for journalist
-- Contact information
-
-For Social Post:
-- LinkedIn version (1300-1600 characters)
-- Twitter/X version (240-280 characters)
-- Key message with benefit focus
-- Hashtag suggestions
-- Call to action
-
-For Blog Post:
-- Headline
-- Introduction (2-3 paragraphs)
-- Subheaded sections for main points
-- Feature/benefit details
-- Supporting context
-- Conclusion with call to action
-- Meta description suggestion
-
-For FAQ Document:
-- Brief introduction paragraph
-- 8-10 question and answer pairs
-- Organized by topic area
-- Clear, direct responses
-
-RESPONSE FORMAT:
-You MUST respond with a valid JSON object following one of the following structures:
-
-When the asset is complete:
-{
-  "isComplete": true,
-  "assetType": "The type of asset generated",
-  "asset": "The complete generated asset with appropriate formatting",
-  "suggestedNextStep": "Asset Refinement"
-}
-
-When the asset is not complete:
-{
-  "isComplete": false,
-  "assetType": "The type of asset generated",
-  "nextQuestion": "Before I generate your asset, I need some more information. Please provide the following details, or give me a go-ahead to generate the asset.",
-  "suggestedNextStep": "Asset Refinement or null"
-}`,
         templates: {
           pressRelease: `You are a PR writing assistant specializing in press releases. Your task is to create a professional, compelling press release based on the provided information.
 
@@ -379,7 +305,12 @@ WRITING STYLE:
 - No hyperbole or excessive adjectives
 - Active voice, present tense for quotes, past tense for events
 - Short paragraphs (2-4 sentences each)
-- Total length: 300-500 words`,
+- Total length: 300-500 words
+
+RESPONSE FORMAT:
+Return ONLY the full press release text with proper formatting. DO NOT include any explanations, preambles, or metadata before or after the press release content.
+
+Use the provided company and announcement information to create a complete, professional press release following this structure. Fill in any gaps with logical, neutral information that fits the announcement context.`,
           mediaPitch: `You are a PR writing assistant specializing in media pitches. Your task is to create a personalized, compelling media pitch based on the provided information.
 
 MEDIA PITCH STRUCTURE:
@@ -399,7 +330,12 @@ WRITING STYLE:
 - Concise and scannable (300 words maximum)
 - Value-focused (emphasize "why care?" throughout)
 - No attachments mention (those go separately)
-- Clear deadline or timing information`,
+- Clear deadline or timing information
+
+RESPONSE FORMAT:
+Return ONLY the full media pitch text with proper formatting. DO NOT include any explanations, preambles, or metadata before or after the media pitch content.
+
+Use the provided company and announcement information to create a targeted media pitch that would appeal to a relevant journalist in your industry. Focus on newsworthiness, relevance, and unique angles.`,
           socialPost: `You are a social media content creator specializing in announcement posts. Your task is to create engaging social media content based on the provided information.
 
 DELIVERABLES:
@@ -419,7 +355,12 @@ WRITING STYLE:
 - Emphasis on benefits/impact, not just features
 - Conversational without being unprofessional
 - Each platform's content optimized for its specific audience
-- Include call-to-action appropriate for the platform`,
+- Include call-to-action appropriate for the platform
+
+RESPONSE FORMAT:
+Return ONLY the social media posts with proper formatting and clear labeling for each platform. DO NOT include any explanations, preambles, or metadata before or after the content.
+
+Use the provided company and announcement information to create platform-specific social media posts that will drive engagement and action.`,
           blogPost: `You are a content marketing specialist. Your task is to create a compelling blog post announcement based on the provided information.
 
 BLOG POST STRUCTURE:
@@ -440,7 +381,12 @@ WRITING STYLE:
 - 600-800 words total length
 - SEO-conscious with relevant keywords
 - Benefits-focused, not just features
-- Include suggested meta description (150-160 characters)`,
+- Include suggested meta description (150-160 characters)
+
+RESPONSE FORMAT:
+Return ONLY the full blog post with proper formatting and structure. DO NOT include any explanations, preambles, or metadata before or after the blog post content.
+
+Use the provided company and announcement information to create a compelling blog post that will engage readers and drive action.`,
           faqDocument: `You are a communications specialist. Your task is to create a comprehensive FAQ document for the announcement based on the provided information.
 
 FAQ DOCUMENT STRUCTURE:
@@ -461,118 +407,75 @@ WRITING STYLE:
 - Anticipate real customer questions
 - Balance marketing messaging with practical information
 - Consistent formatting throughout
-- Avoid technical jargon unless explaining technical concepts`
+- Avoid technical jargon unless explaining technical concepts
+
+RESPONSE FORMAT:
+Return ONLY the full FAQ document with proper formatting and structure. DO NOT include any explanations, preambles, or metadata before or after the FAQ content.
+
+Use the provided company and announcement information to create a comprehensive FAQ document that addresses common questions and concerns.`
         }
       }
     },
     {
       type: StepType.JSON_DIALOG,
-      name: "Asset Refinement",
-      description: "Review and refine the generated asset based on feedback",
-      prompt: "Here's your generated PR asset. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply let me know.",
+      name: "Asset Review",
+      description: "Review the generated press release and request changes if needed",
+      prompt: "Here's your generated press release. Please review it and let me know if you'd like to make any changes. If you're satisfied, simply reply with 'approved'.",
       order: 4,
       dependencies: ["Asset Generation"],
       metadata: {
-        goal: "Get user feedback on the generated asset and revise it as needed until it meets their requirements",
+        goal: "Allow user to review the generated press release and request specific changes or approve it",
+        essential: ["reviewDecision"],
         initialPromptSent: false,
-        baseInstructions: `You are a PR asset refinement specialist. Your task is to help the user review their generated PR asset and make any requested revisions until they're satisfied with the result.
+        baseInstructions: `You are an asset review assistant. Your task is to help users review their generated PR asset and either approve it or request specific changes.
 
 MAIN GOAL:
-Present the generated asset for review, collect feedback, and make revisions until the user approves the final version.
+Determine if the user is satisfied with the generated PR asset or wants to make changes.
 
 CONTEXT:
-- The asset has just been generated in the previous step
-- The user needs to review it and may want changes
-- This is an iterative process that may require multiple rounds of feedback
-- Track the revision round to show progress
+- The user has just received a generated PR asset
+- They can either approve it as-is or request specific changes
+- Be helpful in understanding their feedback and translating it into actionable revision requests
 
-REVIEW AND REVISION PROCESS:
-1. Present the generated asset from the previous step
-2. Ask for specific feedback or approval
-3. If the user appears satisfied, mark as complete
-4. If changes are requested, identify specific changes needed
-5. Make the requested revisions
-6. Present the revised version
-7. Repeat until the user is satisfied
-
-USER SATISFACTION DETECTION:
-- Be flexible in interpreting user satisfaction
-- Look for positive sentiment and absence of change requests
-- Approval indicators include (but are not limited to):
-  * Explicit approval: "approved", "looks good", "I like it"
-  * Implicit approval: "thanks", "great", "perfect", "this works"
-  * Absence of critique with positive sentiment
-  * Questions about next steps rather than changes
-- Change request indicators include:
-  * Specific changes mentioned: "change X to Y"
-  * Questions about modifying elements: "can we make X more Y?"
-  * Expressions of dissatisfaction: "I don't like X"
-  * Suggestions for improvements
-
-INFORMATION PROCESSING GUIDELINES:
-- Interpret user intent rather than looking for exact phrases
-- If changes are requested, extract specific feedback points
-- If feedback is vague, ask for more specific guidance
-- For each revision round, clearly indicate what changes were made
-- Keep track of the revision round number
-- Maintain the professional quality and structure of the asset during revisions
+USER OPTIONS:
+1. APPROVAL: User says "approved", "looks good", "perfect", "yes", or similar positive feedback
+2. REVISION: User provides specific feedback about what they want changed
 
 RESPONSE FORMAT:
 You MUST respond with ONLY valid JSON in this format:
 
-For your initial message showing the asset:
-{
-  "isComplete": false,
-  "collectedInformation": {
-    "assetType": "The type of asset that was generated",
-    "revisionRound": 0,
-    "approved": false
-  },
-  "asset": "The full content of the generated asset to show to the user", 
-  "nextQuestion": "Please review this [asset type] and let me know if you'd like any changes. If you're satisfied, simply let me know."
-}
-
-If you determine the user is satisfied with the asset:
+If user approves the asset:
 {
   "isComplete": true,
   "collectedInformation": {
-    "assetType": "The type of asset",
-    "revisionRound": [current round number],
-    "approved": true,
-    "changes": []
+    "reviewDecision": "approved",
+    "userFeedback": "User's exact words of approval"
   },
+  "nextQuestion": null,
   "suggestedNextStep": "Post-Asset Tasks"
 }
 
-If the user requests changes (first revision):
+If user requests changes:
 {
   "isComplete": false,
   "collectedInformation": {
-    "assetType": "The type of asset",
-    "revisionRound": 1,
-    "approved": false,
-    "changes": [
-      "Specific change 1",
-      "Specific change 2"
-    ]
+    "reviewDecision": "revision_requested",
+    "requestedChanges": ["List of specific changes the user wants"],
+    "userFeedback": "User's exact feedback"
   },
-  "nextQuestion": "I'll revise the [asset type] based on your feedback. Specifically, I'll [summary of changes]. Would you like any other changes?"
+  "nextQuestion": "I understand you'd like some changes. Could you be more specific about what you'd like me to modify?",
+  "suggestedNextStep": null
 }
 
-After making revisions (presenting revised version):
+If user input is unclear:
 {
   "isComplete": false,
   "collectedInformation": {
-    "assetType": "The type of asset",
-    "revisionRound": [current round number],
-    "approved": false,
-    "changesMade": [
-      "Change 1 that was implemented",
-      "Change 2 that was implemented"
-    ]
+    "reviewDecision": "unclear",
+    "userFeedback": "User's exact words"
   },
-  "asset": "The full content of the REVISED asset",
-  "nextQuestion": "Here's the revised [asset type] with your requested changes. Please review and let me know if you'd like any additional adjustments or if you're satisfied with it now."
+  "nextQuestion": "I want to make sure I understand correctly. Are you happy with the asset as-is, or would you like me to make some changes? If changes, please let me know what specifically you'd like modified.",
+  "suggestedNextStep": null
 }`
       }
     },
@@ -582,7 +485,7 @@ After making revisions (presenting revised version):
       description: "Provide guidance on effective use of the asset",
       prompt: "Your asset is complete! Would you like any guidance on how to effectively use this asset in your PR strategy?",
       order: 5,
-      dependencies: ["Asset Refinement"],
+      dependencies: ["Asset Review"],
       metadata: {
         goal: "Provide valuable guidance on how to effectively use the asset and offer to create additional complementary assets",
         initialPromptSent: false,

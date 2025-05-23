@@ -35,6 +35,37 @@ export class JsonDialogService {
         userInputLength: userInput.length
       });
 
+      // Special handling for the "Generate an Asset" step - send a "generating" message
+      if ((step.name === "Generate an Asset" || step.name === "Asset Generation") && !userInput.includes("INTERNAL_SYSTEM_PROMPT")) {
+        // Set userInput to include a system flag to avoid infinite recursion
+        const systemPrompt = `${userInput}\n\nINTERNAL_SYSTEM_PROMPT: This is the final user input for generating the press release.`;
+        
+        // Import dependencies without causing circular imports
+        const { db } = await import('../db');
+        const { chatMessages } = await import('../db/schema');
+        
+        try {
+          // Insert a "generating" message before starting the process
+          await db.insert(chatMessages)
+            .values({
+              threadId: step.workflowId, // In this context workflowId is used as threadId
+              content: "Generating your PR asset now. This may take a moment...",
+              role: "assistant",
+              userId: "system"
+            });
+            
+          logger.info('Added generating message to chat', { threadId: step.workflowId });
+        } catch (error) {
+          logger.error('Error adding generating message to chat', {
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+          // Continue even if the message couldn't be added
+        }
+        
+        // Use the modified prompt
+        userInput = systemPrompt;
+      }
+
       // Check if this might be an initial step entry
       const isInitialEntry = !step.metadata?.processedFirstMessage && 
                            (!userInput || userInput.trim() === '');
@@ -98,12 +129,18 @@ export class JsonDialogService {
       try {
         responseData = JSON.parse(openAIResult.responseText);
         
-        // Validate required fields
-        if (typeof responseData.isComplete !== 'boolean') {
-          throw new Error('Missing isComplete boolean field in response');
+        // Handle different field naming conventions
+        // Check for isComplete or isStepComplete
+        if (typeof responseData.isComplete === 'boolean' && responseData.isStepComplete === undefined) {
+          responseData.isStepComplete = responseData.isComplete;
+        } else if (typeof responseData.isStepComplete === 'boolean' && responseData.isComplete === undefined) {
+          responseData.isComplete = responseData.isStepComplete;
+        } else if (responseData.isComplete === undefined && responseData.isStepComplete === undefined) {
+          // No completion status at all
+          throw new Error('Missing isComplete or isStepComplete boolean field in response');
         }
 
-        // Handle different field naming conventions
+        // Handle extractedInformation vs collectedInformation
         if (responseData.extractedInformation && !responseData.collectedInformation) {
           // Convert extractedInformation to collectedInformation for compatibility
           responseData.collectedInformation = {
@@ -111,9 +148,20 @@ export class JsonDialogService {
             ...collectedInfo // Preserve any existing collected info
           };
         }
+        
+        // If we have collectedInformation, make sure it's kept as an object
+        if (responseData.collectedInformation) {
+          responseData.collectedInformation = {
+            ...collectedInfo, // Start with existing info
+            ...responseData.collectedInformation // Override with new info
+          };
+        } else {
+          // No collectedInformation field at all, create it
+          responseData.collectedInformation = { ...collectedInfo };
+        }
 
         logger.info('Successfully parsed JSON dialog response', {
-          isComplete: responseData.isComplete,
+          isComplete: responseData.isComplete || responseData.isStepComplete || false,
           hasNextQuestion: !!responseData.nextQuestion,
           readyToGenerate: responseData.readyToGenerate || false,
           completionPercentage: responseData.completionPercentage || 0
@@ -129,6 +177,55 @@ export class JsonDialogService {
           collectedInformation: collectedInfo,
           nextQuestion: "I'm having trouble understanding. Could you please be more specific?"
         };
+      }
+
+      // Special handling for asset generation - add the generated asset to the chat directly
+      if ((step.name === "Generate an Asset" || step.name === "Asset Generation") && 
+          (responseData.isComplete || responseData.isStepComplete) && 
+          (responseData.collectedInformation?.asset || responseData.asset)) {
+        logger.info('Generated asset detected, adding to chat', {
+          stepId: step.id,
+          stepName: step.name,
+          // Handle both response formats
+          assetLength: (responseData.collectedInformation?.asset || responseData.asset || '').length
+        });
+        
+        try {
+          // Import dependencies without causing circular imports
+          const { db } = await import('../db');
+          const { chatMessages } = await import('../db/schema');
+          
+          // Get the asset from either location
+          const assetContent = responseData.collectedInformation?.asset || responseData.asset;
+          const assetType = responseData.collectedInformation?.assetType || responseData.assetType || "PR Asset";
+          
+          // Add the generated asset as a direct message
+          await db.insert(chatMessages)
+            .values({
+              threadId: step.workflowId, // In this context workflowId is used as threadId
+              content: `Here's your generated ${assetType}:\n\n${assetContent}`,
+              role: "assistant",
+              userId: "system"
+            });
+          
+          logger.info('Successfully added PR asset to chat', {
+            threadId: step.workflowId,
+            assetLength: assetContent.length
+          });
+          
+          // If the asset was directly on responseData, move it to collectedInformation for consistency
+          if (!responseData.collectedInformation?.asset && responseData.asset) {
+            responseData.collectedInformation = responseData.collectedInformation || {};
+            responseData.collectedInformation.asset = responseData.asset;
+            responseData.collectedInformation.assetType = responseData.assetType;
+          }
+        } catch (error) {
+          logger.error('Error adding press release to chat', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            stack: error instanceof Error ? error.stack : undefined
+          });
+          // Continue with normal response even if adding to chat failed
+        }
       }
 
       // Build the response
@@ -152,44 +249,10 @@ export class JsonDialogService {
    * Get required fields for a specific step type
    */
   private getRequiredFieldsForStep(step: WorkflowStep): any {
-    // Default field definition for PR info collection
-    if (step.name === "PR Information Collection" || step.name === "Information Collection") {
-      return {
-        essential: [
-          "companyName", 
-          "announcementType", 
-          "mainMessage"
-        ],
-        important: [
-          "productName", 
-          "keyFeatures", 
-          "targetAudience", 
-          "releaseDate"
-        ],
-        optional: [
-          "companyDescription",
-          "spokesperson", 
-          "quote", 
-          "pricing", 
-          "availabilityInfo",
-          "contactInfo"
-        ]
-      };
-    }
-    
     // For workflow selection
     if (step.name === "Workflow Selection") {
       return {
         essential: ["selectedWorkflow"]
-      };
-    }
-    
-    // For asset type selection
-    if (step.name === "Asset Type Selection") {
-      return {
-        essential: ["selectedAssetType"],
-        important: ["announcementType"],
-        optional: ["distributionPreferences", "recommendedAssets"]
       };
     }
     
@@ -200,11 +263,20 @@ export class JsonDialogService {
       };
     }
     
-    // Default structure
+    // For any information collection step - use generic fields
+    if (step.name.includes("Information Collection") || step.name.includes("Collection")) {
+      return {
+        essential: ["companyName", "announcementType"],
+        important: ["productName", "keyFeatures"],
+        optional: ["contactInfo", "quote"]
+      };
+    }
+    
+    // Default structure for other steps
     return {
-      essential: [],
-      important: [],
-      optional: []
+      essential: step.metadata?.essential || [],
+      important: step.metadata?.important || [],
+      optional: step.metadata?.optional || []
     };
   }
 

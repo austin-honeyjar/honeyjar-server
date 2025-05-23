@@ -15,6 +15,7 @@ import { DUMMY_WORKFLOW_TEMPLATE } from "../templates/workflows/dummy-workflow";
 import { LAUNCH_ANNOUNCEMENT_TEMPLATE } from "../templates/workflows/launch-announcement";
 import { JSON_DIALOG_PR_WORKFLOW_TEMPLATE } from "../templates/workflows/json-dialog-pr-workflow";
 import { TEST_STEP_TRANSITIONS_TEMPLATE } from "../templates/workflows/test-step-transitions";
+import { QUICK_PRESS_RELEASE_TEMPLATE } from "../templates/workflows/quick-press-release";
 import { db } from "../db";
 import { chatThreads, chatMessages } from "../db/schema";
 import { eq } from "drizzle-orm";
@@ -131,7 +132,8 @@ const WORKFLOW_TYPES = {
   DUMMY: 'Dummy Workflow',
   PR_WORKFLOW: 'JSON Dialog PR Workflow',
   LAUNCH_ANNOUNCEMENT: 'Launch Announcement',
-  TEST_STEP_TRANSITIONS: 'Test Step Transitions'
+  TEST_STEP_TRANSITIONS: 'Test Step Transitions',
+  QUICK_PRESS_RELEASE: 'Quick Press Release'
 };
 
 // Workflow pattern matching configuration
@@ -139,7 +141,8 @@ const WORKFLOW_PATTERNS = {
   [WORKFLOW_TYPES.DUMMY]: [/\b(dummy|test|demo|sample)\b/i],
   [WORKFLOW_TYPES.PR_WORKFLOW]: [/\b(pr|press|release|dialog)\b/i],
   [WORKFLOW_TYPES.LAUNCH_ANNOUNCEMENT]: [/\b(launch|product|announcement|feature)\b/i],
-  [WORKFLOW_TYPES.TEST_STEP_TRANSITIONS]: [/\b(step|transition|test step|steps|test transitions)\b/i]
+  [WORKFLOW_TYPES.TEST_STEP_TRANSITIONS]: [/\b(step|transition|test step|steps|test transitions)\b/i],
+  [WORKFLOW_TYPES.QUICK_PRESS_RELEASE]: [/\b(quick|press release|fast|simple)\b/i]
 };
 
 // Add hardcoded UUIDs for each template type
@@ -148,7 +151,8 @@ const TEMPLATE_UUIDS = {
   DUMMY_WORKFLOW: '00000000-0000-0000-0000-000000000002',
   LAUNCH_ANNOUNCEMENT: '00000000-0000-0000-0000-000000000003',
   JSON_DIALOG_PR_WORKFLOW: '00000000-0000-0000-0000-000000000004',
-  TEST_STEP_TRANSITIONS: '00000000-0000-0000-0000-000000000005'
+  TEST_STEP_TRANSITIONS: '00000000-0000-0000-0000-000000000005',
+  QUICK_PRESS_RELEASE: '00000000-0000-0000-0000-000000000006'
 };
 
 export class WorkflowService {
@@ -196,6 +200,11 @@ export class WorkflowService {
           ...TEST_STEP_TRANSITIONS_TEMPLATE,
           id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS
         };
+      case QUICK_PRESS_RELEASE_TEMPLATE.name:
+        return { 
+          ...QUICK_PRESS_RELEASE_TEMPLATE,
+          id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE
+        };
       default:
         console.log(`Template not found for name: ${name}`);
         return null;
@@ -203,8 +212,49 @@ export class WorkflowService {
   }
 
   async initializeTemplates(): Promise<void> {
-    console.log('Using in-code templates only. DB initialization skipped.');
-    // No-op since we're not using DB templates anymore
+    console.log('Creating minimal template entries in database for foreign key constraints...');
+    
+    // Create minimal template entries just for foreign key constraints
+    // The actual template data comes from code, not the database
+    const templateEntries = [
+      { id: TEMPLATE_UUIDS.BASE_WORKFLOW, name: 'Base Workflow' },
+      { id: TEMPLATE_UUIDS.DUMMY_WORKFLOW, name: 'Dummy Workflow' },
+      { id: TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT, name: 'Launch Announcement' },
+      { id: TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW, name: 'JSON Dialog PR Workflow' },
+      { id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS, name: 'Test Step Transitions' },
+      { id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE, name: 'Quick Press Release' }
+    ];
+
+    for (const { id, name } of templateEntries) {
+      try {
+        // Check if template entry already exists
+        const existingTemplate = await this.dbService.getTemplate(id);
+        
+        if (existingTemplate) {
+          console.log(`✅ Template entry "${name}" already exists with UUID ${id}`);
+          continue;
+        }
+
+        // Create minimal template entry (just for foreign key constraint)
+        console.log(`Creating minimal template entry "${name}" with UUID ${id}...`);
+        await this.dbService.createTemplate({
+          id,
+          name,
+          description: `Template entry for ${name} (actual template data comes from code)`,
+          steps: [], // Empty steps since we use code templates
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        
+        console.log(`✅ Created minimal template entry "${name}" successfully`);
+        
+      } catch (error) {
+        console.error(`❌ Error creating template entry "${name}":`, error);
+        // Continue with other templates even if one fails
+      }
+    }
+    
+    console.log('Template entry initialization complete. Using in-code templates for actual workflow logic.');
   }
 
   async getTemplate(templateId: string): Promise<WorkflowTemplate | null> {
@@ -229,12 +279,17 @@ export class WorkflowService {
     } else if (templateId === TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW) {
       return { 
         ...JSON_DIALOG_PR_WORKFLOW_TEMPLATE, 
-        id: TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW 
+        id: TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW
       };
     } else if (templateId === TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS) {
       return { 
         ...TEST_STEP_TRANSITIONS_TEMPLATE, 
         id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS 
+      };
+    } else if (templateId === TEMPLATE_UUIDS.QUICK_PRESS_RELEASE) {
+      return { 
+        ...QUICK_PRESS_RELEASE_TEMPLATE, 
+        id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
       };
     }
     
@@ -264,6 +319,11 @@ export class WorkflowService {
         ...TEST_STEP_TRANSITIONS_TEMPLATE, 
         id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS 
       };
+    } else if (templateId === QUICK_PRESS_RELEASE_TEMPLATE.name) {
+      return { 
+        ...QUICK_PRESS_RELEASE_TEMPLATE, 
+        id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
+      };
     }
     
     // Fallback to pattern matching in templateId
@@ -292,6 +352,11 @@ export class WorkflowService {
         ...TEST_STEP_TRANSITIONS_TEMPLATE, 
         id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS 
       };
+    } else if (templateId.includes("Quick Press Release")) {
+      return { 
+        ...QUICK_PRESS_RELEASE_TEMPLATE, 
+        id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
+      };
     }
     
     // If no match found, try to get the template by name directly
@@ -300,23 +365,46 @@ export class WorkflowService {
 
   // Workflow Management
   async createWorkflow(threadId: string, templateId: string): Promise<Workflow> {
+    console.log(`=== WORKFLOW CREATION DEBUG ===`);
     console.log(`Proceeding to create workflow with templateId: ${templateId} for threadId: ${threadId}`);
+
+    // Add debug logging for template resolution
+    console.log(`Attempting to get template with ID: ${templateId}`);
 
     // Ensure the template exists before creating workflow record
     const template = await this.getTemplate(templateId);
     if (!template) {
+      console.error(`❌ TEMPLATE NOT FOUND: Template with ID "${templateId}" was not found`);
+      console.log(`Available template IDs in code:`);
+      console.log(`- Base Workflow: ${TEMPLATE_UUIDS.BASE_WORKFLOW}`);
+      console.log(`- Dummy Workflow: ${TEMPLATE_UUIDS.DUMMY_WORKFLOW}`);
+      console.log(`- Launch Announcement: ${TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT}`);
+      console.log(`- JSON Dialog PR: ${TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW}`);
+      console.log(`- Test Step Transitions: ${TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS}`);
+      console.log(`- Quick Press Release: ${TEMPLATE_UUIDS.QUICK_PRESS_RELEASE}`);
+      
       throw new Error(`Template not found: ${templateId}`);
     }
-    console.log(`Using template "${template.name}" with ${template.steps?.length || 0} steps defined.`);
+    
+    console.log(`✅ Template found: "${template.name}" with ${template.steps?.length || 0} steps defined.`);
+    console.log(`Template UUID being used: ${template.id}`);
+
+    // Add debug before database workflow creation
+    console.log(`Creating workflow record in database with:`);
+    console.log(`- threadId: ${threadId}`);
+    console.log(`- templateId: ${templateId}`);
+    console.log(`- template.id: ${template.id}`);
 
     // Create the workflow first
+    try {
     const workflow = await this.dbService.createWorkflow({
       threadId,
       templateId,
       status: WorkflowStatus.ACTIVE,
       currentStepId: null
     });
-    console.log(`Created workflow record ${workflow.id}. Now creating steps...`);
+      
+      console.log(`✅ Created workflow record ${workflow.id}. Now creating steps...`);
 
     // Create steps and set first step as IN_PROGRESS
     let firstStepId: string | null = null;
@@ -327,7 +415,12 @@ export class WorkflowService {
         const isFirstStep = i === 0;
         
         // Log the definition being used for this iteration
-        console.log(`Creating step ${i} from definition: ${JSON.stringify({name: stepDefinition.name, prompt: stepDefinition.prompt})}`);
+          console.log(`Creating step ${i} from definition:`, {
+            name: stepDefinition.name, 
+            type: stepDefinition.type,
+            prompt: stepDefinition.prompt?.substring(0, 50) + '...',
+            hasMetadata: !!stepDefinition.metadata
+          });
 
         const createdStep = await this.dbService.createStep({
           workflowId: workflow.id,
@@ -345,23 +438,37 @@ export class WorkflowService {
           }
         });
 
+          console.log(`✅ Created step ${i}: "${createdStep.name}" (${createdStep.id})`);
+
         if (isFirstStep && stepDefinition.prompt) {
           firstStepId = createdStep.id;
           // Send the first step's prompt as a message from the AI
-          await this.addDirectMessage(threadId, stepDefinition.prompt || "");
-          console.log(`Sent first step prompt to thread ${threadId}`);
+            await this.addDirectMessage(threadId, stepDefinition.prompt || "");
+            console.log(`✅ Sent first step prompt to thread ${threadId}`);
         }
       }
 
       if (firstStepId) {
         // Set the workflow's current step to the first step
         await this.dbService.updateWorkflowCurrentStep(workflow.id, firstStepId);
-        console.log(`Set currentStepId for workflow ${workflow.id} to ${firstStepId}`);
+          console.log(`✅ Set currentStepId for workflow ${workflow.id} to ${firstStepId}`);
       }
     }
 
+      console.log(`=== WORKFLOW CREATION COMPLETE ===`);
     // Return the complete workflow
     return this.dbService.getWorkflow(workflow.id) as Promise<Workflow>;
+      
+    } catch (dbError) {
+      console.error(`❌ DATABASE ERROR during workflow creation:`, dbError);
+      console.error(`Error details:`, {
+        errorMessage: dbError instanceof Error ? dbError.message : 'Unknown error',
+        templateId,
+        threadId,
+        templateName: template.name
+      });
+      throw dbError;
+    }
   }
 
   async getWorkflow(id: string): Promise<Workflow | null> {
@@ -637,7 +744,7 @@ export class WorkflowService {
       // As a fallback, use the prompt directly from the code template
       try {
         const basePrompt = BASE_WORKFLOW_TEMPLATE.steps?.[0]?.prompt || 
-          "Which workflow would you like to use? Please choose from: Launch Announcement, Dummy Workflow, JSON Dialog PR Workflow, Test Step Transitions";
+          "Which workflow would you like to use? Please choose from: Launch Announcement, Dummy Workflow, JSON Dialog PR Workflow, Test Step Transitions, Quick Press Release";
         
         await this.addDirectMessage(threadId, basePrompt);
       } catch (sendError) {
@@ -648,7 +755,7 @@ export class WorkflowService {
         // Last resort hardcoded fallback only if everything else fails
         await this.addDirectMessage(
           threadId, 
-          "Which workflow would you like to use? Please choose from: Launch Announcement, Dummy Workflow, JSON Dialog PR Workflow, Test Step Transitions"
+          "Which workflow would you like to use? Please choose from: Launch Announcement, Dummy Workflow, JSON Dialog PR Workflow, Test Step Transitions, Quick Press Release"
         );
       }
     }
@@ -929,6 +1036,235 @@ export class WorkflowService {
       // Handle JSON_DIALOG step type separately
       if (step.stepType === StepType.JSON_DIALOG) {
         return await this.handleJsonDialogStep(step, userInput);
+      }
+      
+      // Handle API_CALL step type for Quick Press Release Asset Generation
+      if (step.stepType === StepType.API_CALL && step.name === "Asset Generation") {
+        // Get the workflow to get the threadId
+        const workflow = await this.dbService.getWorkflow(workflowId);
+        if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+        
+        // Find the information collection step to get the collected information
+        const infoStep = workflow.steps.find(s => s.name === "Information Collection");
+        if (!infoStep) throw new Error(`Information Collection step not found`);
+        
+        // Get collected information from the information step
+        const rawCollectedInfo = infoStep.metadata?.collectedInformation || {};
+        console.log("API_CALL Asset Generation - Raw collected info:", JSON.stringify(infoStep.metadata, null, 2).substring(0, 1000) + "...");
+        
+        // Also check for userInput which might contain the information
+        console.log("API_CALL Asset Generation - Info step userInput:", infoStep.userInput ? infoStep.userInput.substring(0, 500) + "..." : "No user input");
+        
+        // Ensure we have some information to work with
+        let collectedInfo;
+        if (typeof rawCollectedInfo === 'object' && Object.keys(rawCollectedInfo).length > 0) {
+          collectedInfo = rawCollectedInfo;
+          console.log("API_CALL Asset Generation - Using collectedInformation from metadata");
+        } else if (infoStep.userInput) {
+          // Fall back to using the user input directly if metadata is empty
+          collectedInfo = { manualInput: infoStep.userInput };
+          console.log("API_CALL Asset Generation - Using userInput as fallback");
+        } else {
+          // Last resort, try to use current step's input
+          collectedInfo = { manualInput: userInput };
+          console.log("API_CALL Asset Generation - Using current step userInput as last resort");
+        }
+        
+        // Send a message about generating the asset
+        await this.addDirectMessage(workflow.threadId, `Generating your PR asset. This may take a moment...`);
+        
+        // Get the template for the appropriate asset type
+        let templateName = "pressRelease";
+        if (collectedInfo.selectedAssetType) {
+          // Try to find the appropriate template based on asset type
+          const assetType = collectedInfo.selectedAssetType.toLowerCase().replace(/\s+/g, '');
+          
+          const templateMap: Record<string, string> = {
+            'pressrelease': 'pressRelease',
+            'mediapitch': 'mediaPitch',
+            'socialpost': 'socialPost',
+            'blogpost': 'blogPost',
+            'faqdocument': 'faqDocument'
+          };
+          
+          templateName = templateMap[assetType] || 'pressRelease';
+        }
+        
+        const template = step.metadata?.templates?.[templateName];
+        if (!template) {
+          console.error("Template not found for asset generation", {
+            availableTemplates: Object.keys(step.metadata?.templates || {}),
+            requestedTemplate: templateName
+          });
+          throw new Error(`Template not found for asset generation`);
+        }
+        
+        // Create custom step with the template
+        const customStep = {
+          ...step,
+          metadata: {
+            ...step.metadata,
+            openai_instructions: template
+          }
+        };
+        
+        // Format the collected information for generation
+        let formattedInfo = "PRESS RELEASE INFORMATION:\n\n";
+        
+        try {
+          // Convert collected information to a formatted string
+          if (typeof collectedInfo.manualInput === 'string') {
+            // If we're using raw user input, just use it directly with minimal formatting
+            formattedInfo = `PRESS RELEASE INFORMATION:\n\n${collectedInfo.manualInput}`;
+            console.log("API_CALL Asset Generation - Using manual input directly");
+          } else {
+            // Otherwise, format structured data
+            console.log("API_CALL Asset Generation - Formatting structured information");
+            
+            if (collectedInfo.companyInfo) {
+              formattedInfo += "COMPANY INFORMATION:\n";
+              formattedInfo += `Company Name: ${collectedInfo.companyInfo.name || 'Not provided'}\n`;
+              formattedInfo += `Company Description: ${collectedInfo.companyInfo.description || 'Not provided'}\n\n`;
+            }
+            
+            if (collectedInfo.announcementDetails) {
+              formattedInfo += "ANNOUNCEMENT DETAILS:\n";
+              formattedInfo += `Headline/Title: ${collectedInfo.announcementDetails.title || 'Not provided'}\n`;
+              formattedInfo += `Main Message: ${collectedInfo.announcementDetails.mainMessage || 'Not provided'}\n\n`;
+            }
+            
+            if (collectedInfo.productInfo) {
+              formattedInfo += "PRODUCT INFORMATION:\n";
+              formattedInfo += `Product Name: ${collectedInfo.productInfo.name || 'Not provided'}\n`;
+              formattedInfo += `Product Description: ${collectedInfo.productInfo.description || 'Not provided'}\n`;
+              formattedInfo += `Key Features: ${Array.isArray(collectedInfo.productInfo.keyFeatures) ? 
+                collectedInfo.productInfo.keyFeatures.join(', ') : (collectedInfo.productInfo.keyFeatures || 'Not provided')}\n\n`;
+            }
+            
+            if (collectedInfo.executiveInfo) {
+              formattedInfo += "EXECUTIVE INFORMATION:\n";
+              formattedInfo += `Name: ${collectedInfo.executiveInfo.name || 'Not provided'}\n`;
+              formattedInfo += `Title: ${collectedInfo.executiveInfo.title || 'Not provided'}\n`;
+              formattedInfo += `Quote: ${collectedInfo.executiveInfo.quote || 'Not provided'}\n\n`;
+            }
+            
+            if (infoStep.userInput) {
+              formattedInfo += "USER DIRECT INPUT:\n";
+              formattedInfo += infoStep.userInput + "\n\n";
+            }
+            
+            // Add any remaining information as raw JSON
+            formattedInfo += "ADDITIONAL INFORMATION:\n";
+            formattedInfo += JSON.stringify(collectedInfo, null, 2);
+          }
+          
+          console.log("API_CALL Asset Generation - Formatted info preview:", formattedInfo.substring(0, 500) + "...");
+        } catch (formatError) {
+          console.error('Error formatting collected information', formatError);
+          logger.error('Error formatting collected information', {
+            error: formatError instanceof Error ? formatError.message : 'Unknown error'
+          });
+          
+          // Fallback to raw JSON string with user input directly included
+          formattedInfo = `All collected information:\n${JSON.stringify(collectedInfo, null, 2)}\n\nDirect User Input:\n${infoStep.userInput || userInput || 'Not provided'}`;
+        }
+        
+        // Generate the asset using OpenAI
+        console.log("API_CALL Asset Generation - Sending request to OpenAI");
+        const result = await this.openAIService.generateStepResponse(
+          customStep,
+          formattedInfo,
+          []
+        );
+        
+        // Get the generated content directly from the response
+        const assetContent = result.responseText;
+        const assetType = collectedInfo.selectedAssetType || "Press Release";
+        
+        // Store the generated asset
+        await this.dbService.updateStep(stepId, {
+          status: StepStatus.COMPLETE,
+          userInput,
+          metadata: {
+            ...step.metadata,
+            generatedAsset: assetContent,
+            assetType
+          }
+        });
+        
+        // Add the generated asset to the chat
+        await this.addDirectMessage(
+          workflow.threadId,
+          `Here's your generated ${assetType}:\n\n${assetContent}`
+        );
+        
+        // Continue to next step or complete workflow
+        if (workflow.templateId.includes("quick-press-release")) {
+          // Complete workflow for Quick Press Release
+          await this.dbService.updateWorkflowStatus(workflowId, WorkflowStatus.COMPLETED);
+          await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
+          
+          return {
+            response: `${assetType} generated successfully.`,
+            isComplete: true
+          };
+        } else {
+          // Find the Asset Refinement step for standard workflows
+          const refinementStep = workflow.steps.find(s => s.name === "Asset Refinement");
+          if (refinementStep) {
+            // Mark current step as complete
+            await this.dbService.updateStep(stepId, {
+              status: StepStatus.COMPLETE
+            });
+            
+            // Set refinement step as current and in progress
+            await this.dbService.updateWorkflowCurrentStep(workflow.id, refinementStep.id);
+            await this.dbService.updateStep(refinementStep.id, {
+              status: StepStatus.IN_PROGRESS,
+              metadata: {
+                ...refinementStep.metadata,
+                initialPromptSent: false,
+                generatedAsset: assetContent,
+                assetType
+              }
+            });
+            
+            // Customize prompt for the specific asset
+            const customPrompt = `Here's your generated ${assetType}. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply let me know.`;
+            
+            // Send the refinement prompt
+            await this.addDirectMessage(workflow.threadId, customPrompt);
+            
+            // Mark that the prompt has been sent
+            await this.dbService.updateStep(refinementStep.id, {
+              prompt: customPrompt,
+              metadata: {
+                ...refinementStep.metadata,
+                initialPromptSent: true
+              }
+            });
+            
+            return {
+              response: `${assetType} generated successfully. Moving to review step.`,
+              nextStep: {
+                id: refinementStep.id,
+                name: refinementStep.name,
+                prompt: customPrompt,
+                type: refinementStep.stepType
+              },
+              isComplete: false
+            };
+          } else {
+            // No refinement step, just complete the workflow
+            await this.dbService.updateWorkflowStatus(workflowId, WorkflowStatus.COMPLETED);
+            await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
+            
+            return {
+              response: `${assetType} generated successfully.`,
+              isComplete: true
+            };
+          }
+        }
       }
 
       // Process step with OpenAI if needed
@@ -1247,6 +1583,13 @@ export class WorkflowService {
             const dummyTemplate = await this.dbService.getTemplateByName(WORKFLOW_TYPES.DUMMY);
             if (dummyTemplate) {
               newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, dummyTemplate.id);
+            }
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.QUICK_PRESS_RELEASE)) {
+            // Create a Quick Press Release workflow
+            const quickPressTemplate = await this.dbService.getTemplateByName(WORKFLOW_TYPES.QUICK_PRESS_RELEASE);
+            if (quickPressTemplate) {
+              newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, quickPressTemplate.id);
             }
           }
           
@@ -1597,7 +1940,7 @@ export class WorkflowService {
           
           // Save metadata
           await this.dbService.updateStep(step.id, {
-            metadata: {
+                  metadata: {
               ...step.metadata,
               collectedInformation: collectedInfo,
               interactionCount: interactionCount,
@@ -1638,7 +1981,7 @@ export class WorkflowService {
       };
       
       // 3. Call OpenAI to process the user input and get structured JSON response
-      const openAIResult = await this.openAIService.generateStepResponse(
+                const openAIResult = await this.openAIService.generateStepResponse(
         extractionStep,
         userInput,
         []
@@ -1752,9 +2095,9 @@ export class WorkflowService {
         userInput: step.userInput ? `${step.userInput}\n${userInput}` : userInput
       });
       
-                return {
+              return {
         response: extractionData.nextQuestion,
-                  nextStep: {
+                nextStep: {
           id: step.id,
           name: step.name,
           prompt: extractionData.nextQuestion,
@@ -1830,7 +2173,7 @@ export class WorkflowService {
       // 4. Create a custom step with the template instructions
                 const customStep = {
         ...step,
-                  metadata: {
+              metadata: { 
           ...step.metadata,
                     openai_instructions: template
                   }
@@ -1913,7 +2256,7 @@ export class WorkflowService {
         
         // Update the current step to complete
         await this.dbService.updateStep(step.id, {
-          status: StepStatus.COMPLETE,
+                  status: StepStatus.COMPLETE,
           userInput: userInput || "generate asset"
         });
         
@@ -1928,9 +2271,9 @@ export class WorkflowService {
           assetContentLength: assetContent.length
         });
         
-                  return {
+                return {
           response: customPrompt,
-                    nextStep: {
+                  nextStep: {
             id: assetRevisionStep.id,
             name: assetRevisionStep.name,
             prompt: customPrompt,
@@ -2101,13 +2444,13 @@ export class WorkflowService {
         // Create a custom step for the revision
         const revisionStep = {
           ...step,
-          metadata: {
+                  metadata: {
             ...step.metadata,
             openai_instructions: revisionPrompt
-          }
-        };
-        
-        // Generate the revised asset
+                  }
+                };
+                
+                // Generate the revised asset
         const revisionResult = await this.openAIService.generateStepResponse(
           revisionStep,
           originalAsset,
@@ -2143,9 +2486,9 @@ export class WorkflowService {
             revisionChanges: revisionData.changes
           }
         });
-        
-        // Add the revised asset as a direct message
-        await this.addDirectMessage(
+                
+                // Add the revised asset as a direct message
+                await this.addDirectMessage(
           workflow.threadId,
           `Here's your revised ${assetType}:\n\n${revisedAsset}`
         );
@@ -2244,6 +2587,12 @@ export class WorkflowService {
         throw new Error(`Workflow not found: ${step.workflowId}`);
       }
 
+      // Special handling for "Generate an Asset" step in Quick Press Release workflow
+      if (step.name === "Generate an Asset") {
+        // Remove custom logic - use the standard JSON dialog processing instead
+        logger.info('Using standard JSON dialog processing for Generate an Asset step');
+      }
+
       // If this is the first time processing this step and no initialPromptSent flag is set
       // Send the prompt to the user
       if (step.prompt && !step.metadata?.initialPromptSent) {
@@ -2339,7 +2688,7 @@ export class WorkflowService {
         await this.restartBaseWorkflow(workflow.threadId);
         
         // Return result to indicate workflow is complete
-        return {
+                  return {
           response: completionMessage,
           isComplete: true
         };
@@ -2408,12 +2757,46 @@ export class WorkflowService {
             metadata: { ...nextStep.metadata, initialPromptSent: false }
           });
           
-          // Send the initial prompt for the next step
+          // Check if the next step is an API_CALL that should auto-execute
+          if (nextStep.stepType === StepType.API_CALL && nextStep.name === "Asset Generation") {
+            logger.info('Auto-executing Asset Generation step', {
+              stepId: nextStep.id,
+              workflowId: workflow.id
+            });
+            
+            // Automatically execute the Asset Generation step
+            try {
+              const assetResult = await this.handleJsonAssetGeneration(workflow, nextStep, "auto-execute");
+              
+              // Return the result from asset generation
+              return assetResult;
+            } catch (error) {
+              logger.error('Error auto-executing Asset Generation step', {
+                error: error instanceof Error ? error.message : 'Unknown error'
+              });
+              
+              // Fall back to normal step processing if auto-execution fails
+              await this.addDirectMessage(workflow.threadId, "There was an error generating your asset. Please try again.");
+              
+              return {
+                response: "Error generating asset. Please try again.",
+                nextStep: {
+                  id: nextStep.id,
+                  name: nextStep.name,
+                  prompt: nextStep.prompt,
+                  type: nextStep.stepType
+                },
+                isComplete: false
+              };
+            }
+          }
+          
+          // Send the initial prompt for the next step (for non-auto-executing steps)
           if (nextStep.prompt) {
             await this.addDirectMessage(workflow.threadId, nextStep.prompt);
             
             // Mark prompt as sent
-            await this.dbService.updateStep(nextStep.id, {
+        await this.dbService.updateStep(nextStep.id, {
               metadata: { ...nextStep.metadata, initialPromptSent: true }
             });
             
@@ -2424,8 +2807,8 @@ export class WorkflowService {
           const transitionMessage = result.nextQuestion || 
                                   `Step "${step.name}" completed. Moving to "${nextStep.name}".`;
           await this.addDirectMessage(workflow.threadId, transitionMessage);
-          
-          return {
+
+        return {
             response: transitionMessage,
             nextStep: {
               id: nextStep.id,
@@ -2434,8 +2817,8 @@ export class WorkflowService {
               type: nextStep.stepType
             },
             isComplete: false
-          };
-        } else {
+        };
+      } else {
           // No next step found - workflow is complete
           await this.dbService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
           await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
@@ -2486,7 +2869,7 @@ export class WorkflowService {
         const nextQuestion = result.nextQuestion || "Please provide more information.";
         await this.addDirectMessage(workflow.threadId, nextQuestion);
         
-        return {
+           return {
           response: nextQuestion,
           nextStep: {
             id: step.id,
@@ -2689,19 +3072,14 @@ export class WorkflowService {
         return await this.handleJsonDialogStep(currentStep, userInput);
       }
 
-      // 2. Handle user input based on current step type
-      if (currentStep.name === "PR Information Collection") {
-        return await this.handleJsonInformationCollection(workflow, currentStep, userInput);
-      } else if (currentStep.name === "Asset Generation") {
+      // 2. Handle user input based on current step type - use standard JSON dialog for all steps
+      if (currentStep.name === "Asset Generation") {
         return await this.handleJsonAssetGeneration(workflow, currentStep, userInput);
       } else if (currentStep.name === "Asset Revision") {
         return await this.handleJsonAssetRevision(workflow, currentStep, userInput);
-      } else if (currentStep.name.startsWith("Step ")) {
-        // Handle Test Step Transitions workflow steps (Step 1, Step 2, Step 3, Step 4)
-        // These should use the standard JsonDialogService processing
-        return await this.handleJsonDialogStep(currentStep, userInput);
       } else {
-        throw new Error(`Unexpected step name in JSON workflow: ${currentStep.name}`);
+        // Handle all other JSON Dialog steps (including Information Collection) with standard processing
+        return await this.handleJsonDialogStep(currentStep, userInput);
       }
     } catch (error) {
       logger.error('Error handling JSON message', {

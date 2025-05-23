@@ -18,7 +18,7 @@ export class WorkflowDBService {
     const templateId = (template as any).id || (await import('crypto')).randomUUID();
     
     // Destructure the template to exclude the 'id' if it exists
-    const { id, ...templateData } = template as any;
+    const { id, ...templateData } = template as any; 
 
     // Log the ID being used
     console.log(`Creating template with ID: ${templateId}`);
