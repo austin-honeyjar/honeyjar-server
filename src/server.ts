@@ -130,6 +130,54 @@ async function initializeDatabase() {
       logger.info('JSON_DIALOG already exists in step_type enum');
     }
     
+    // Check if the step_type enum has GENERATE_THREAD_TITLE
+    const generateTitleEnumCheck = await db.execute(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM pg_type 
+        JOIN pg_enum ON pg_enum.enumtypid = pg_type.oid 
+        WHERE pg_type.typname = 'step_type' 
+        AND pg_enum.enumlabel = 'generate_thread_title'
+      );
+    `);
+    
+    // Add GENERATE_THREAD_TITLE to step_type enum if it doesn't exist
+    if (!generateTitleEnumCheck[0]?.exists) {
+      logger.info('Adding GENERATE_THREAD_TITLE to step_type enum...');
+      try {
+        await db.execute(sql`
+          ALTER TYPE step_type ADD VALUE IF NOT EXISTS 'generate_thread_title';
+        `);
+        logger.info('GENERATE_THREAD_TITLE added to step_type enum successfully');
+      } catch (enumError) {
+        logger.error('Error adding GENERATE_THREAD_TITLE to step_type enum:', enumError);
+        
+        // Alternative approach if the above fails
+        try {
+          logger.info('Trying alternative approach to update step_type enum with generate_thread_title...');
+          await db.execute(sql`
+            -- Create a new enum type with all values including the new one
+            CREATE TYPE step_type_new AS ENUM ('ai_suggestion', 'user_input', 'api_call', 'data_transformation', 'asset_creation', 'json_dialog', 'generate_thread_title');
+            
+            -- Update the workflow_steps table to use the new enum
+            ALTER TABLE workflow_steps 
+              ALTER COLUMN step_type TYPE step_type_new 
+              USING step_type::text::step_type_new;
+            
+            -- Drop the old enum type
+            DROP TYPE step_type;
+            
+            -- Rename the new enum type to the original name
+            ALTER TYPE step_type_new RENAME TO step_type;
+          `);
+          logger.info('step_type enum updated successfully with generate_thread_title using alternative method');
+        } catch (alternativeError) {
+          logger.error('Error updating step_type enum with generate_thread_title using alternative method:', alternativeError);
+        }
+      }
+    } else {
+      logger.info('GENERATE_THREAD_TITLE already exists in step_type enum');
+    }
+    
     // Check if the assets table exists
     const assetTableCheck = await db.execute(sql`
       SELECT EXISTS (
@@ -162,7 +210,7 @@ async function initializeDatabase() {
           END $$;
           
           DO $$ BEGIN
-           CREATE TYPE "step_type" AS ENUM ('ai_suggestion', 'user_input', 'api_call', 'data_transformation', 'asset_creation', 'json_dialog');
+           CREATE TYPE "step_type" AS ENUM ('ai_suggestion', 'user_input', 'api_call', 'data_transformation', 'asset_creation', 'json_dialog', 'generate_thread_title');
           EXCEPTION
            WHEN duplicate_object THEN null;
           END $$;

@@ -1,7 +1,7 @@
 import { db } from "../db";
 import { chatThreads, chatMessages } from "../db/schema";
 import { WorkflowService } from "./workflow.service";
-import { WorkflowStatus, StepStatus } from "../types/workflow";
+import { WorkflowStatus, StepStatus, StepType } from "../types/workflow";
 import { eq } from "drizzle-orm";
 import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow.js';
 import logger from "../utils/logger";
@@ -329,10 +329,29 @@ export class ChatService {
 
     } else if (stepResponse.nextStep) {
       // If the workflow is not complete, but there's a specific next step prompt from handleStepResponse
-       const nextPrompt = stepResponse.nextStep.prompt || "Please provide the required information.";
        
-       // Get the next step information to check if it's already been sent
+       // Get the next step information to check if it should auto-execute
        const nextStepInfo = workflow.steps.find(step => step.id === stepResponse.nextStep?.id);
+       
+       // Check if this is an auto-executing step that should be handled silently
+       if (nextStepInfo && 
+           (nextStepInfo.stepType === StepType.GENERATE_THREAD_TITLE || nextStepInfo.stepType === StepType.API_CALL) && 
+           nextStepInfo.metadata?.autoExecute) {
+         console.log(`Auto-executing step from stepResponse.nextStep: ${nextStepInfo.name} (${nextStepInfo.stepType})`);
+         
+         try {
+           // Execute the step automatically
+           const autoExecResult = await this.workflowService.handleStepResponse(nextStepInfo.id, "auto-execute");
+           
+           // Return the result from auto-execution
+           return autoExecResult.response || `Step "${nextStepInfo.name}" executed automatically.`;
+         } catch (error) {
+           console.error(`Error auto-executing step ${nextStepInfo.name}:`, error);
+           // Fall through to normal prompt handling if auto-execution fails
+         }
+       }
+       
+       const nextPrompt = stepResponse.nextStep.prompt || "Please provide the required information.";
        
        // Check if the initial prompt has already been sent or if this is a duplicate we should avoid
        const isInitialPromptAlreadySent = nextStepInfo?.metadata?.initialPromptSent === true;
@@ -422,6 +441,25 @@ export class ChatService {
       await this.workflowService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
     }
 
+    // Check if this is an auto-executing step that should be handled silently
+    if ((nextStep.stepType === StepType.GENERATE_THREAD_TITLE || nextStep.stepType === StepType.API_CALL) && 
+        nextStep.metadata?.autoExecute) {
+      console.log(`Auto-executing step: ${nextStep.name} (${nextStep.stepType})`);
+      
+      try {
+        // Execute the step automatically
+        const autoExecResult = await this.workflowService.handleStepResponse(nextStep.id, "auto-execute");
+        
+        // If the auto-execution completed the workflow or transitioned to another workflow,
+        // return the result without sending any prompt
+        if (autoExecResult.isComplete || autoExecResult.nextStep) {
+          return autoExecResult.response || `Step "${nextStep.name}" executed automatically.`;
+        }
+      } catch (error) {
+        console.error(`Error auto-executing step ${nextStep.name}:`, error);
+        // Fall back to normal prompt handling if auto-execution fails
+      }
+    }
 
       const prompt = nextStep.prompt || "Please provide the required information.";
     // Avoid adding duplicate prompts if the step didn't change
@@ -833,10 +871,29 @@ Join us on this exciting journey!`;
 
     } else if (stepResponse.nextStep) {
       // If the workflow is not complete, but there's a specific next step prompt from handleStepResponse
-       const nextPrompt = stepResponse.nextStep.prompt || "Please provide the required information.";
        
-       // Get the next step information to check if it's already been sent
+       // Get the next step information to check if it should auto-execute
        const nextStepInfo = workflow.steps.find(step => step.id === stepResponse.nextStep?.id);
+       
+       // Check if this is an auto-executing step that should be handled silently
+       if (nextStepInfo && 
+           (nextStepInfo.stepType === StepType.GENERATE_THREAD_TITLE || nextStepInfo.stepType === StepType.API_CALL) && 
+           nextStepInfo.metadata?.autoExecute) {
+         console.log(`Auto-executing step from stepResponse.nextStep: ${nextStepInfo.name} (${nextStepInfo.stepType})`);
+         
+         try {
+           // Execute the step automatically
+           const autoExecResult = await this.workflowService.handleStepResponse(nextStepInfo.id, "auto-execute");
+           
+           // Return the result from auto-execution
+           return autoExecResult.response || `Step "${nextStepInfo.name}" executed automatically.`;
+         } catch (error) {
+           console.error(`Error auto-executing step ${nextStepInfo.name}:`, error);
+           // Fall through to normal prompt handling if auto-execution fails
+         }
+       }
+       
+       const nextPrompt = stepResponse.nextStep.prompt || "Please provide the required information.";
        
        // Check if the initial prompt has already been sent or if this is a duplicate we should avoid
        const isInitialPromptAlreadySent = nextStepInfo?.metadata?.initialPromptSent === true;

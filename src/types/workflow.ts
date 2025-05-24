@@ -18,6 +18,7 @@ export enum StepType {
   API_CALL = "api_call",
   JSON_DIALOG = "json_dialog",
   DATA_TRANSFORMATION = "data_transformation",
+  GENERATE_THREAD_TITLE = "generate_thread_title",
 }
 
 export enum WorkflowAction {
