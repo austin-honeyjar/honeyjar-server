@@ -3399,4 +3399,134 @@ export class WorkflowService {
       throw error;
     }
   }
+
+  /**
+   * Handle workflow completion and potential transitions
+   */
+  async handleWorkflowCompletion(workflow: Workflow, threadId: string): Promise<{
+    newWorkflow?: Workflow;
+    selectedWorkflow?: string;
+    message?: string;
+  }> {
+    try {
+      // Check if this is the base workflow
+      const baseTemplateFromDB = await this.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
+      
+      if (workflow.templateId === baseTemplateFromDB?.id) {
+        console.log('Base workflow completed. Checking for next workflow selection...');
+        
+        // Get the workflow selection
+        const completedBaseWorkflow = await this.getWorkflow(workflow.id);
+        const selectionStep = completedBaseWorkflow?.steps.find(s => s.name === "Workflow Selection");
+        const selectedWorkflowName = selectionStep?.aiSuggestion || selectionStep?.userInput;
+        
+        if (selectedWorkflowName) {
+          console.log(`User selected: ${selectedWorkflowName}`);
+          
+          // Try to find and create the selected workflow
+          let nextTemplate = await this.getTemplateByName(selectedWorkflowName);
+          
+          // Try fuzzy matching if exact match fails
+          if (!nextTemplate) {
+            const availableTemplates = ["Launch Announcement", "JSON Dialog PR Workflow", "Quick Press Release", "Test Step Transitions", "Dummy Workflow"];
+            for (const templateName of availableTemplates) {
+              if (templateName.toLowerCase().includes(selectedWorkflowName.toLowerCase()) || 
+                  selectedWorkflowName.toLowerCase().includes(templateName.toLowerCase())) {
+                console.log(`Found fuzzy match: "${templateName}" for "${selectedWorkflowName}"`);
+                nextTemplate = await this.getTemplateByName(templateName);
+                break;
+              }
+            }
+          }
+          
+          if (nextTemplate) {
+            console.log(`Creating workflow for "${selectedWorkflowName}"`);
+            const nextWorkflow = await this.createWorkflow(threadId, nextTemplate.id);
+            return { 
+              newWorkflow: nextWorkflow, 
+              selectedWorkflow: selectedWorkflowName 
+            };
+          } else {
+            console.warn(`Template not found for selection: ${selectedWorkflowName}`);
+            return { 
+              message: `Sorry, I couldn't find a workflow template named "${selectedWorkflowName}".` 
+            };
+          }
+        }
+      }
+      
+      // Standard workflow completion
+      return { 
+        message: `${workflow.templateId || 'Workflow'} completed successfully.` 
+      };
+    } catch (error) {
+      logger.error('Error handling workflow completion', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        workflowId: workflow.id
+      });
+      return { 
+        message: 'Error completing workflow.' 
+      };
+    }
+  }
+
+  /**
+   * Check if a step should auto-execute and handle it if so
+   */
+  async checkAndHandleAutoExecution(stepId: string, workflowId: string, threadId: string): Promise<{
+    autoExecuted: boolean;
+    result?: any;
+    nextWorkflow?: Workflow;
+  }> {
+    try {
+      const step = await this.dbService.getStep(stepId);
+      if (!step) return { autoExecuted: false };
+
+      // Check if this step should auto-execute
+      const shouldAutoExecute = (step.stepType === StepType.GENERATE_THREAD_TITLE || 
+                                step.stepType === StepType.API_CALL) && 
+                               !!step.metadata?.autoExecute;
+
+      if (!shouldAutoExecute) {
+        return { autoExecuted: false };
+      }
+
+      logger.info('Auto-executing step', {
+        stepId: step.id,
+        stepName: step.name,
+        stepType: step.stepType,
+        workflowId
+      });
+
+      // Execute the step automatically
+      const autoExecResult = await this.handleStepResponse(stepId, "auto-execute");
+      
+      // Check if this resulted in a workflow transition
+      if (autoExecResult.isComplete) {
+        const workflow = await this.dbService.getWorkflow(workflowId);
+        if (workflow) {
+          const completionResult = await this.handleWorkflowCompletion(workflow, threadId);
+          
+          if (completionResult.newWorkflow) {
+            return {
+              autoExecuted: true,
+              result: autoExecResult,
+              nextWorkflow: completionResult.newWorkflow
+            };
+          }
+        }
+      }
+
+      return {
+        autoExecuted: true,
+        result: autoExecResult
+      };
+    } catch (error) {
+      logger.error('Error in auto-execution check', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stepId
+      });
+      return { autoExecuted: false };
+    }
+  }
 }
