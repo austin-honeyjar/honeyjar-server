@@ -449,20 +449,6 @@ router.get('/permissions',
           permissionsArray = userPermissions.permissions || [];
         }
 
-        // Check if user has admin role in any organization
-        const orgId = req.headers['x-organization-id'] as string;
-        if (orgId) {
-          try {
-            const hasAdminRole = await authService.hasOrgRole(req.user.id, orgId, ['admin']);
-            if (hasAdminRole) {
-              permissionsArray.push('org:feature:admin_panel');
-            }
-          } catch (error) {
-            logger.error('Error checking org role:', { error });
-            // Continue without admin role
-          }
-        }
-
         logger.info('Retrieved user permissions', {
           userId: req.user.id,
           permissions: permissionsArray
@@ -567,20 +553,6 @@ router.get('/permissions/:userId',
         } else {
           // Assume it's the old UserPermissions object format
           permissionsArray = userPermissions.permissions || [];
-        }
-
-        // Check if user has admin role in any organization
-        const orgId = req.headers['x-organization-id'] as string;
-        if (orgId) {
-          try {
-            const hasAdminRole = await authService.hasOrgRole(userId, orgId, ['admin']);
-            if (hasAdminRole) {
-              permissionsArray.push('org:feature:admin_panel');
-            }
-          } catch (error) {
-            logger.error('Error checking org role:', { error });
-            // Continue without admin role
-          }
         }
 
         logger.info('Retrieved user permissions', {

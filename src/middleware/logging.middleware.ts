@@ -1,1 +1,1 @@
-const isDev = process.env.NODE_ENV === 'devlocal'; 
+const isDev = process.env.NODE_ENV === 'development'; 

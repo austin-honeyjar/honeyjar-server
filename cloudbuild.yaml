@@ -1,11 +1,11 @@
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/honeyjar-server:$COMMIT_SHA', '.']
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/honeyjar-personal/honeyjar-docker-repo/honeyjar-server:latest', '-f', 'Dockerfile.prod', '.']
 
-  # Push the container image to Container Registry
+  # Push the container image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/honeyjar-server:$COMMIT_SHA']
+    args: ['push', 'us-central1-docker.pkg.dev/honeyjar-personal/honeyjar-docker-repo/honeyjar-server:latest']
 
   # Deploy container image to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -14,19 +14,20 @@ steps:
       - 'run'
       - 'deploy'
       - 'honeyjar-server'
-      - '--image'
-      - 'gcr.io/$PROJECT_ID/honeyjar-server:$COMMIT_SHA'
-      - '--region'
-      - 'us-central1'
-      - '--platform'
-      - 'managed'
+      - '--image=us-central1-docker.pkg.dev/honeyjar-personal/honeyjar-docker-repo/honeyjar-server:latest'
+      - '--region=us-central1'
+      - '--platform=managed'
       - '--allow-unauthenticated'
-      - '--set-env-vars'
-      - 'NODE_ENV=production,DATABASE_URL=$$DATABASE_URL,CLERK_SECRET_KEY=$$CLERK_SECRET_KEY'
+      - '--port=3005'
+      - '--memory=1Gi'
+      - '--min-instances=0'
+      - '--max-instances=5'
+      - '--set-env-vars=NODE_ENV=production'
+      - '--set-secrets=CLERK_SECRET_KEY=CLERK_SECRET_KEY_SANDBOX:latest,DATABASE_URL=DATABASE_URL_HONEYJAR:latest'
 
-# Store images in Container Registry
+# Store images in Artifact Registry
 images:
-  - 'gcr.io/$PROJECT_ID/honeyjar-server:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/honeyjar-personal/honeyjar-docker-repo/honeyjar-server:latest'
 
 # Timeout for the build
 timeout: '1600s'

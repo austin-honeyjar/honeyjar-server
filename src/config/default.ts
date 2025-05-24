@@ -3,7 +3,7 @@ import { AppConfig } from './types';
 export const defaultConfig: AppConfig = {
   server: {
     port: 3005,
-    env: 'devlocal',
+    env: 'development',
     apiPrefix: '/api/v1',
     autoDeploy: false,
   },
@@ -31,5 +31,17 @@ export const defaultConfig: AppConfig = {
   logging: {
     level: 'info',
     format: 'json',
+  },
+  openai: {
+    apiKey: '',
+    assistantId: '',
+    threadPrefix: 'thread_',
+    model: 'gpt-4',
+    temperature: 0.7,
+    maxTokens: 1000,
+  },
+  debug: {
+    enableDebugMode: false,
+    showFullResponses: false,
   },
 }; 

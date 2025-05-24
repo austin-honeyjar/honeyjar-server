@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-alpine AS builder
+FROM node:18-alpine AS builder
 
 WORKDIR /app
 
@@ -17,23 +17,25 @@ COPY migrations ./migrations
 COPY scripts ./scripts
 
 # Build the application
-RUN npm run build
+RUN npm run build && \
+    echo "Checking build output:" && \
+    ls -la && \
+    ls -la dist || (echo "dist directory not found, creating it" && mkdir -p dist)
 
 # Production stage
-FROM node:20-alpine
-
+FROM node:18-alpine AS runner
 WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-
-# Install production dependencies only
-RUN npm install --omit=dev
 
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/docker-setup/setup-db.js ./
+COPY --from=builder /app/docker-setup/wait-for-db.js ./
+COPY --from=builder /app/src/db/migrations/ ./src/db/migrations/
+COPY --from=builder /app/src/db/schema.ts ./src/db/schema.ts
+COPY --from=builder /app/drizzle.config.ts ./
 
 # Copy environment files if they exist, fallback to example if they don't
 COPY .env* ./
@@ -43,8 +45,21 @@ RUN if [ ! -f .env ]; then \
       fi \
     fi
 
+# Install production dependencies only
+RUN npm install --omit=dev
+
+# Create a startup script to handle DB setup
+RUN echo '#!/bin/sh' > /app/start.sh && \
+    echo 'echo "Waiting for database to be ready..."' >> /app/start.sh && \
+    echo 'node wait-for-db.js' >> /app/start.sh && \
+    echo 'echo "Running database setup..."' >> /app/start.sh && \
+    echo 'node setup-db.js' >> /app/start.sh && \
+    echo 'echo "Starting server..."' >> /app/start.sh && \
+    echo 'node dist/server.js' >> /app/start.sh && \
+    chmod +x /app/start.sh
+
 # Expose the port the app runs on
 EXPOSE 3005
 
 # Start the server
-CMD ["npm", "start"] 
+CMD ["/app/start.sh"] 

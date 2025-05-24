@@ -3,6 +3,9 @@ import { authService } from '../services/auth/auth.service.js';
 import { ApiError } from '../utils/error.js';
 import logger from '../utils/logger.js';
 
+// Environment check for production
+const NODE_ENV = process.env.NODE_ENV || 'production';
+
 /**
  * Middleware to check if the user has the required organization role
  * @param roles Array of allowed roles

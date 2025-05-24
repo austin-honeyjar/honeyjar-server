@@ -2,11 +2,11 @@ version: '3.8'
 
 services:
   server:
-    image: honeyjar-server-image:latest
+    image: honeyjar-server:latest
     ports:
       - "3005:3005"
     environment:
-      - NODE_ENV=devlocal
+      - NODE_ENV=development
       - DATABASE_URL=postgres://postgres:Password1@db:5432/client_db
       - PG_USER=postgres
       - PG_PASSWORD=Password1
@@ -21,7 +21,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: npm run dev
+    command: sh -c "npm run db:generate && npx drizzle-kit push:pg --force && npm run db:migrate && npm start"
 
   db:
     image: postgres:15-alpine
@@ -34,7 +34,6 @@ services:
       - TZ=UTC
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s

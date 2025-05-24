@@ -6,7 +6,7 @@ export const productionConfig: AppConfig = {
   server: {
     ...defaultConfig.server,
     env: 'production',
-    port: Number(process.env.PORT) || 3001,
+    port: Number(process.env.PORT) || 3005,
     autoDeploy: false,
     branch: 'main',
   },

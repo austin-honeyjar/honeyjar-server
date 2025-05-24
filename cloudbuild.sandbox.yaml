@@ -1,0 +1,41 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/honeyjar-personal/honeyjar-docker-repo/honeyjar-server-sandbox:latest', '-f', 'Dockerfile.sandbox', '.']
+
+  # Push the container image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/honeyjar-personal/honeyjar-docker-repo/honeyjar-server-sandbox:latest']
+
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'honeyjar-server-sandbox'
+      - '--image=us-central1-docker.pkg.dev/honeyjar-personal/honeyjar-docker-repo/honeyjar-server-sandbox:latest'
+      - '--region=us-central1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=3005'
+      - '--memory=1Gi'
+      - '--min-instances=0'
+      - '--max-instances=5'
+      - '--set-env-vars=NODE_ENV=development'
+      - '--set-secrets=DATABASE_URL=DATABASE_URL_SANDBOX:latest,CLERK_SECRET_KEY=CLERK_SECRET_KEY_SANDBOX:latest,NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=CLERK_PUBLISHABLE_KEY_SANDBOX:latest,OPENAI_API_KEY=OPENAI_API_KEY_SANDBOX:latest'
+      - '--timeout=300s'
+      - '--cpu=1'
+      - '--cpu-boost'
+      - '--add-cloudsql-instances=honeyjar-personal:us-central1:honeyjar-db'
+
+# Store images in Artifact Registry
+images:
+  - 'us-central1-docker.pkg.dev/honeyjar-personal/honeyjar-docker-repo/honeyjar-server-sandbox:latest'
+
+# Timeout for the build
+timeout: '1600s'
+
+# Available machine types: N1_HIGHCPU_8, N1_HIGHCPU_32
+options:
+  machineType: 'N1_HIGHCPU_8' 

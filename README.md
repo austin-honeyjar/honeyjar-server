@@ -15,7 +15,7 @@ A Node.js server for the Honeyjar application, providing API endpoints for CSV p
 
 1. Create a `.env` file in the root directory with the following variables:
 ```env
-NODE_ENV=devlocal
+NODE_ENV=development
 DATABASE_URL=postgres://postgres:Password1@localhost:5432/client_db
 CLERK_SECRET_KEY=your_clerk_secret_key
 ```
@@ -251,7 +251,7 @@ To start the server in development mode:
 npm run dev
 ```
 
-This will start the server in devlocal mode with hot reloading enabled.
+This will start the server in development mode with hot reloading enabled.
 
 ### Running Tests
 ```bash
@@ -278,4 +278,4 @@ MIT
 
 The following environment variables are required:
 
-- `NODE_ENV`: The environment to run in (devlocal, production) 
+- `NODE_ENV`: The environment to run in (development, production) 

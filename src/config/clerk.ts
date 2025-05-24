@@ -9,11 +9,4 @@ if (!process.env.CLERK_SECRET_KEY) {
 export const clerkClient = createClerkClient({
   secretKey: process.env.CLERK_SECRET_KEY,
   // Add error handling
-  onError: (error) => {
-    logger.error('Clerk client error:', {
-      error,
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
-    });
-  }
 }); 

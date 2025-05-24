@@ -2,7 +2,7 @@
 Write-Host "Starting Honeyjar Server and PostgreSQL..." -ForegroundColor Green
 
 # Check if the image is already loaded
-$imageExists = docker images honeyjar-server-image:latest -q
+$imageExists = docker images honeyjar-server:latest -q
 if (-not $imageExists) {
     # If image doesn't exist, try to load it
     Write-Host "Loading Docker image from tar file..." -ForegroundColor Yellow

@@ -3,6 +3,9 @@ import { db } from '../db/index';
 import { csvMetadata } from '../db/schema';
 import os from 'os';
 import logger from '../utils/logger';
+import express from 'express';
+import { config } from '../config';
+import { authMiddleware } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -22,11 +25,12 @@ const router = Router();
  *             schema:
  *               $ref: '#/components/schemas/HealthCheck'
  */
-router.get('/', (req, res) => {
-  res.json({
+router.get('/', (_req, res) => {
+  res.status(200).json({
     status: 'ok',
+    message: 'Server is running',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
+    environment: config.server.env
   });
 });
 
@@ -71,7 +75,7 @@ router.get('/database', async (req, res) => {
     res.status(503).json({
       status: 'error',
       database: 'disconnected',
-      error: process.env.NODE_ENV === 'devlocal' ? (error as Error).message : 'Database connection failed',
+      error: process.env.NODE_ENV === 'development' ? (error as Error).message : 'Database connection failed',
     });
   }
 });
@@ -223,6 +227,60 @@ router.get('/full', async (req, res) => {
   }
 
   res.status(checks.status === 'ok' ? 200 : 503).json(checks);
+});
+
+const debugRouter = express.Router();
+
+// Health check endpoint
+debugRouter.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    message: 'Server is running',
+    timestamp: new Date().toISOString(),
+    environment: config.server.env
+  });
+});
+
+// Debug settings endpoint (protected)
+debugRouter.put('/debug', authMiddleware, (req, res) => {
+  try {
+    const { enableDebugMode, showFullResponses } = req.body;
+    
+    // Update config with new settings
+    if (typeof enableDebugMode === 'boolean') {
+      (config.debug as any).enableDebugMode = enableDebugMode;
+    }
+    
+    if (typeof showFullResponses === 'boolean') {
+      (config.debug as any).showFullResponses = showFullResponses;
+    }
+    
+    logger.info('Debug settings updated', { 
+      enableDebugMode: config.debug.enableDebugMode,
+      showFullResponses: config.debug.showFullResponses,
+      updatedBy: req.user?.id || 'unknown'
+    });
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'Debug settings updated',
+      settings: config.debug
+    });
+  } catch (error) {
+    logger.error('Error updating debug settings', { error });
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update debug settings'
+    });
+  }
+});
+
+// Get current debug settings (protected)
+debugRouter.get('/debug', authMiddleware, (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    settings: config.debug
+  });
 });
 
 export default router; 

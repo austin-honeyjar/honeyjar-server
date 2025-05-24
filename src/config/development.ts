@@ -5,7 +5,7 @@ export const developmentConfig: AppConfig = {
   ...defaultConfig,
   server: {
     ...defaultConfig.server,
-    env: 'devlocal',
+    env: 'development',
   },
   logging: {
     ...defaultConfig.logging,

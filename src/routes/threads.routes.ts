@@ -5,14 +5,20 @@ import { AuthRequest } from '../types/request';
 import { Thread } from '../types/thread';
 import { db } from '../db';
 import { chatThreads, chatMessages, workflows, workflowSteps } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { validate } from '../middleware/validation.middleware';
 import { createChatSchema } from '../validators/chat.validator';
 import { chatController } from '../controllers/chatController';
 import { requireOrgRole } from '../middleware/org.middleware';
 import { WorkflowDBService } from '../services/workflowDB.service';
+import { ChatService } from '../services/chat.service';
+import { WorkflowService } from '../services/workflow.service';
+import { simpleCache } from '../utils/simpleCache';
 
 const router = Router();
+
+// Reduce cache TTL to just 10 seconds for more frequent database refreshes
+const CACHE_TTL = 10000; // 10 seconds
 
 // Apply auth middleware to all thread routes
 router.use(authMiddleware);
@@ -69,12 +75,22 @@ router.get('/', async (req: AuthRequest, res) => {
       });
     }
 
+    const wallStart = Date.now();
+
     logger.info('Getting threads for user:', { 
       userId: req.user.id,
       orgId,
       sessionId: req.user.sessionId,
       permissions: req.user.permissions
     });
+    
+    const cacheKey = `threads:${req.user.id}:${orgId}`;
+    const cached = simpleCache.get<any[]>(cacheKey);
+    if (cached) {
+      logger.info('Returning threads from cache', { count: cached.length });
+      logger.info(`[perf] GET /threads finished in ${Date.now() - wallStart} ms`);
+      return res.json({ threads: cached });
+    }
     
     // Try to get threads with org_id first
     let threads = await db
@@ -87,6 +103,9 @@ router.get('/', async (req: AuthRequest, res) => {
         )
       )
       .orderBy(chatThreads.createdAt);
+    
+    // Cache for 30 seconds
+    simpleCache.set(cacheKey, threads, CACHE_TTL);
 
     logger.info('Returning threads:', { 
       userId: req.user.id,
@@ -94,6 +113,7 @@ router.get('/', async (req: AuthRequest, res) => {
       count: threads.length
     });
     
+    logger.info(`[perf] GET /threads finished in ${Date.now() - wallStart} ms`);
     res.json({ threads });
   } catch (error) {
     logger.error('Error getting threads:', { error });
@@ -175,6 +195,8 @@ router.get('/:id', async (req: AuthRequest, res) => {
       });
     }
 
+    const wallStart = Date.now();
+
     logger.info('Getting thread:', { 
       userId: req.user.id,
       threadId,
@@ -182,6 +204,14 @@ router.get('/:id', async (req: AuthRequest, res) => {
       sessionId: req.user.sessionId,
       permissions: req.user.permissions
     });
+    
+    const threadCacheKey = `thread:${threadId}`;
+    const cachedThread = simpleCache.get<any>(threadCacheKey);
+    if (cachedThread) {
+      logger.info('Returning thread from cache');
+      logger.info(`[perf] GET /threads/:id finished in ${Date.now() - wallStart} ms`);
+      return res.json(cachedThread);
+    }
     
     // Try to get thread with org_id first
     let thread = await db
@@ -203,11 +233,15 @@ router.get('/:id', async (req: AuthRequest, res) => {
       });
     }
     
-    const messages = await db
+    let messages = await db
       .select()
       .from(chatMessages)
       .where(eq(chatMessages.threadId, threadId))
-      .orderBy(chatMessages.createdAt);
+      .orderBy(desc(chatMessages.createdAt))
+      .limit(200);
+    
+    // Reverse to chronological order for UI
+    messages = messages.reverse();
     
     logger.info('Returning thread:', { 
       userId: req.user.id,
@@ -215,7 +249,11 @@ router.get('/:id', async (req: AuthRequest, res) => {
       orgId
     });
     
-    res.json({ thread: thread[0], messages });
+    const responsePayload = { thread: thread[0], messages };
+    simpleCache.set(threadCacheKey, responsePayload, CACHE_TTL);
+
+    logger.info(`[perf] GET /threads/:id finished in ${Date.now() - wallStart} ms`);
+    res.json(responsePayload);
   } catch (error) {
     logger.error('Error getting thread:', { error });
     res.status(500).json({ 
@@ -305,6 +343,7 @@ router.post('/', async (req: AuthRequest, res) => {
       permissions: req.user.permissions
     });
     
+    // Create the thread in the database
     const [thread] = await db
       .insert(chatThreads)
       .values({
@@ -314,7 +353,24 @@ router.post('/', async (req: AuthRequest, res) => {
       })
       .returning();
     
-    logger.info('Thread created:', { 
+    // Initialize the base workflow
+    const workflowService = new WorkflowService();
+    const chatService = new ChatService();
+    
+    // Get the base workflow template
+    const baseTemplate = await workflowService.getTemplateByName('Base Workflow');
+    if (!baseTemplate) {
+      logger.error('Base workflow template not found');
+      return res.status(500).json({ 
+        status: 'error', 
+        message: 'Failed to initialize workflow - template not found' 
+      });
+    }
+    
+    // Create the base workflow - this sends the initial AI message
+    await workflowService.createWorkflow(thread.id, baseTemplate.id);
+    
+    logger.info('Thread created with base workflow:', { 
       userId: req.user.id,
       orgId,
       threadId: thread.id
@@ -406,37 +462,75 @@ router.delete('/:id', async (req: AuthRequest, res) => {
     }
 
     // 3. Next delete all messages in the thread
-    await db
-      .delete(chatMessages)
-      .where(eq(chatMessages.threadId, threadId));
-
-    // 4. Finally delete the thread itself
-    const result = await db
-      .delete(chatThreads)
-      .where(
-        and(
-          eq(chatThreads.id, threadId),
-          eq(chatThreads.userId, req.user.id)
-        )
-      )
-      .returning();
-
-    if (result.length === 0) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Thread not found'
+    try {
+      const messagesDeleteCount = await db
+        .delete(chatMessages)
+        .where(eq(chatMessages.threadId, threadId))
+        .returning();
+      
+      logger.info(`Deleted ${messagesDeleteCount.length} messages for thread ${threadId}`);
+    } catch (messageDeleteError) {
+      logger.error('Error deleting messages:', { 
+        error: messageDeleteError instanceof Error ? messageDeleteError.message : messageDeleteError,
+        threadId
       });
+      // Continue despite error
     }
 
-    logger.info('Thread deleted:', { 
-      userId: req.user.id,
-      threadId
-    });
+    // 4. Finally delete the thread itself
+    try {
+      const result = await db
+        .delete(chatThreads)
+        .where(
+          and(
+            eq(chatThreads.id, threadId),
+            eq(chatThreads.userId, req.user.id)
+          )
+        )
+        .returning();
 
-    res.json({ 
-      status: 'success',
-      message: 'Thread deleted successfully'
-    });
+      if (result.length === 0) {
+        logger.error('Thread not found or not owned by user', { 
+          threadId, 
+          userId: req.user.id 
+        });
+        return res.status(404).json({
+          status: 'error',
+          message: 'Thread not found'
+        });
+      }
+
+      logger.info('Thread deleted:', { 
+        userId: req.user.id,
+        threadId,
+        deletedThread: result[0]
+      });
+
+      // Invalidate all relevant caches
+      const orgId = Array.isArray(req.headers['x-organization-id']) 
+        ? req.headers['x-organization-id'][0]
+        : req.headers['x-organization-id'];
+      
+      try {
+        simpleCache.del(`thread:${threadId}`);
+        simpleCache.del(`threads:${req.user.id}:${orgId}`);
+        logger.info('Cache invalidated for deleted thread', { threadId });
+      } catch (cacheError) {
+        logger.error('Error invalidating cache for deleted thread', { error: cacheError });
+      }
+
+      res.json({ 
+        status: 'success',
+        message: 'Thread deleted successfully'
+      });
+    } catch (threadDeleteError) {
+      logger.error('Error deleting thread from database:', { 
+        error: threadDeleteError instanceof Error ? threadDeleteError.message : threadDeleteError,
+        threadId,
+        userId: req.user.id
+      });
+      throw threadDeleteError; // Re-throw to be caught by outer try-catch
+    }
   } catch (error) {
     logger.error('Error deleting thread:', { error });
     res.status(500).json({ 
