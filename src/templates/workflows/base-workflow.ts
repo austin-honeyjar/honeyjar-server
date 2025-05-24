@@ -49,19 +49,22 @@ You MUST respond with ONLY valid JSON in this format:
     "confidence": "high/low"
   },
   "nextQuestion": "Your clarification question if needed, otherwise null",
-  "suggestedNextStep": "Thread Title and Summary" 
+  "suggestedNextStep": "Auto Generate Thread Title" 
 }`
       }
     },
     {
-      type: StepType.JSON_DIALOG,
-      name: "Thread Title and Summary",
-      description: "Set the thread title and generate a summary subtitle",
-      prompt: "What would you like to name this thread workspace?",
+      type: StepType.GENERATE_THREAD_TITLE,
+      name: "Auto Generate Thread Title",
+      description: "Automatically generate thread title based on selected workflow and current date",
+      prompt: "", // No prompt needed for auto-generation
       order: 1,
       dependencies: ["Workflow Selection"],
       metadata: {
-        goal: "Get a title for the thread from the user and generate a professional subtitle that adds context"
+        goal: "Automatically generate thread title based on selected workflow and current date",
+        autoExecute: true,
+        silent: true, // Don't send messages to user
+        titleTemplate: "{workflowType} - {date}"
       }
     }
   ],

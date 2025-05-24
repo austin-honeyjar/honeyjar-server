@@ -22,11 +22,15 @@ const db = drizzle(pool);
 // Custom migration for step_type enum
 async function migrateStepTypeEnum() {
   try {
-    console.log('Running custom migration: Adding asset_creation to step_type enum');
+    console.log('Running custom migration: Adding asset_creation and generate_thread_title to step_type enum');
     
-    // Add the new enum value to the step_type type
+    // Add the new enum values to the step_type type
     await db.execute(sql`
       ALTER TYPE step_type ADD VALUE IF NOT EXISTS 'asset_creation';
+    `);
+    
+    await db.execute(sql`
+      ALTER TYPE step_type ADD VALUE IF NOT EXISTS 'generate_thread_title';
     `);
     
     console.log('Custom enum migration completed successfully');
