@@ -472,7 +472,46 @@ export class WorkflowService {
   }
 
   async getWorkflow(id: string): Promise<Workflow | null> {
-    return this.dbService.getWorkflow(id);
+    const workflow = await this.dbService.getWorkflow(id);
+    if (!workflow) {
+      return null;
+    }
+
+    // Get the latest template from code to ensure we have the most up-to-date step metadata
+    const template = await this.getTemplate(workflow.templateId);
+    if (!template) {
+      console.warn(`Template not found for workflow ${id}, using database version`);
+      return workflow;
+    }
+
+    // Merge the latest template step metadata with the database workflow steps
+    const updatedSteps = workflow.steps.map(dbStep => {
+      // Find the corresponding step in the template
+      const templateStep = template.steps?.find(tStep => 
+        tStep.name === dbStep.name && tStep.order === dbStep.order
+      );
+
+      if (templateStep) {
+        // Merge template metadata with database step, preserving runtime state
+        return {
+          ...dbStep,
+          metadata: {
+            ...templateStep.metadata, // Use latest template metadata
+            ...dbStep.metadata, // Preserve runtime state like collectedInformation, initialPromptSent
+            // Ensure template metadata takes precedence for essential fields
+            essential: templateStep.metadata?.essential || dbStep.metadata?.essential,
+            baseInstructions: templateStep.metadata?.baseInstructions || dbStep.metadata?.baseInstructions
+          }
+        };
+      }
+
+      return dbStep; // No template step found, use database version
+    });
+
+    return {
+      ...workflow,
+      steps: updatedSteps
+    };
   }
 
   async getWorkflowByThreadId(threadId: string): Promise<Workflow | null> {
@@ -1771,7 +1810,7 @@ export class WorkflowService {
                 });
                 
                 // Update prompt for next review
-                const revisedPrompt = `Here's your revised ${selectedAsset}. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply reply with 'approved'.`;
+                const revisedPrompt = `Here's your revised ${selectedAsset}. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply let me know.`;
                 
                 // Update step with new prompt
                 await this.dbService.updateStep(stepId, {
@@ -3019,6 +3058,23 @@ export class WorkflowService {
           });
         }
         
+        // Handle special case for Announcement Type Selection - save announcement type
+        else if (step.name === "Announcement Type Selection" && result.collectedInformation?.announcementType) {
+          logger.info('Saving announcement type from JSON dialog', {
+            announcementType: result.collectedInformation.announcementType,
+            stepId: step.id,
+            fullCollectedInfo: result.collectedInformation
+          });
+          
+          await this.dbService.updateStep(step.id, {
+            aiSuggestion: result.collectedInformation.announcementType,
+            metadata: {
+              ...step.metadata,
+              collectedInformation: result.collectedInformation
+            }
+          });
+        }
+        
         // Handle special case for Asset Type Selection - extract from either format
         else if (step.name === "Asset Type Selection") {
           // Try both formats - extractedInformation (new) or collectedInformation (legacy)
@@ -3034,10 +3090,47 @@ export class WorkflowService {
               aiSuggestion: selectedAssetType,
               metadata: {
                 ...step.metadata,
-                selectedAssetType: selectedAssetType
+                selectedAssetType: selectedAssetType,
+                collectedInformation: result.collectedInformation
               }
             });
           }
+        }
+        
+        // Handle special case for Information Collection - pass context from previous steps
+        else if (step.name === "Information Collection") {
+          // Gather information from all previous completed steps
+          const previousStepsInfo: Record<string, any> = {};
+          
+          // Get announcement type from Announcement Type Selection step
+          const announcementStep = workflow.steps.find(s => s.name === "Announcement Type Selection");
+          if (announcementStep?.metadata?.collectedInformation?.announcementType) {
+            previousStepsInfo.announcementType = announcementStep.metadata.collectedInformation.announcementType;
+          }
+          
+          // Get asset type from Asset Type Selection step
+          const assetStep = workflow.steps.find(s => s.name === "Asset Type Selection");
+          if (assetStep?.metadata?.selectedAssetType) {
+            previousStepsInfo.assetType = assetStep.metadata.selectedAssetType;
+          } else if (assetStep?.aiSuggestion) {
+            previousStepsInfo.assetType = assetStep.aiSuggestion;
+          }
+          
+          // Initialize the Information Collection step with context from previous steps
+          await this.dbService.updateStep(step.id, {
+            metadata: {
+              ...step.metadata,
+              collectedInformation: {
+                ...previousStepsInfo,
+                ...result.collectedInformation
+              }
+            }
+          });
+          
+          logger.info('Initialized Information Collection step with previous context', {
+            previousStepsInfo,
+            stepId: step.id
+          });
         }
         
         // Find the next step - either suggested or next in order
@@ -3058,6 +3151,26 @@ export class WorkflowService {
         
         // If a next step is found, update it and the workflow
         if (nextStep) {
+          // IMPORTANT: Refresh the workflow data to get the latest step metadata
+          // The workflow object is stale and doesn't contain the updated step metadata
+          const refreshedWorkflow = await this.dbService.getWorkflow(workflow.id);
+          if (!refreshedWorkflow) {
+            throw new Error(`Failed to refresh workflow data: ${workflow.id}`);
+          }
+          
+          // Initialize any step with context from previous steps
+          // This replaces the custom Information Collection logic with a general approach
+          await this.initializeStepWithContext(nextStep.id, refreshedWorkflow);
+          
+          // Update the next step status
+          await this.dbService.updateStep(nextStep.id, {
+            status: StepStatus.IN_PROGRESS,
+            metadata: { 
+              ...nextStep.metadata, 
+              initialPromptSent: false
+            }
+          });
+          
           // Update the workflow to point to the next step
           await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
           
@@ -3103,8 +3216,12 @@ export class WorkflowService {
           }
           
           // Send the initial prompt for the next step (for non-auto-executing steps)
-          if (nextStep.prompt) {
-            await this.addDirectMessage(workflow.threadId, nextStep.prompt);
+          // IMPORTANT: Get the updated step after context initialization to use the new prompt
+          const updatedNextStep = await this.dbService.getStep(nextStep.id);
+          const promptToSend = updatedNextStep?.prompt || nextStep.prompt;
+          
+          if (promptToSend) {
+            await this.addDirectMessage(workflow.threadId, promptToSend);
             
             // Mark prompt as sent
         await this.dbService.updateStep(nextStep.id, {
@@ -3124,7 +3241,7 @@ export class WorkflowService {
             nextStep: {
               id: nextStep.id,
               name: nextStep.name,
-              prompt: nextStep.prompt,
+              prompt: promptToSend || nextStep.prompt,
               type: nextStep.stepType
             },
             isComplete: false
@@ -3528,5 +3645,183 @@ export class WorkflowService {
       });
       return { autoExecuted: false };
     }
+  }
+
+  /**
+   * Gather context from all previous completed steps in a workflow
+   * This provides a general way to pass information between steps
+   */
+  private async gatherPreviousStepsContext(workflow: Workflow): Promise<Record<string, any>> {
+    const context: Record<string, any> = {};
+    
+    // Get all steps that have useful information, sorted by order
+    // Include both completed steps AND steps that have collected information or AI suggestions
+    const informativeSteps = workflow.steps
+      .filter(s => 
+        s.status === StepStatus.COMPLETE || 
+        s.metadata?.collectedInformation || 
+        s.aiSuggestion
+      )
+      .sort((a, b) => a.order - b.order);
+    
+    for (const step of informativeSteps) {
+      // Extract information from different step types
+      if (step.metadata?.collectedInformation) {
+        // Merge collected information from JSON Dialog steps
+        Object.assign(context, step.metadata.collectedInformation);
+      }
+      
+      if (step.aiSuggestion) {
+        // Store AI suggestions with step name as key
+        const stepKey = step.name.toLowerCase().replace(/\s+/g, '');
+        context[stepKey] = step.aiSuggestion;
+        
+        // Also store with semantic keys for common step types
+        if (step.name === "Asset Type Selection") {
+          context.assetType = step.aiSuggestion;
+          context.selectedAssetType = step.aiSuggestion;
+        } else if (step.name === "Announcement Type Selection") {
+          context.announcementType = step.aiSuggestion;
+        } else if (step.name === "Workflow Selection") {
+          context.selectedWorkflow = step.aiSuggestion;
+        }
+      }
+      
+      if (step.userInput) {
+        // Store user inputs with step name as key
+        const stepKey = step.name.toLowerCase().replace(/\s+/g, '') + 'Input';
+        context[stepKey] = step.userInput;
+      }
+    }
+    
+    logger.info('Gathered context from previous steps', {
+      workflowId: workflow.id,
+      informativeStepsCount: informativeSteps.length,
+      contextKeys: Object.keys(context),
+      announcementType: context.announcementType,
+      assetType: context.assetType || context.selectedAssetType,
+      fullContext: context
+    });
+    
+    return context;
+  }
+
+  /**
+   * Generate a contextual prompt using AI based on previous steps context
+   */
+  private async generateContextualPrompt(step: WorkflowStep, context: Record<string, any>): Promise<string> {
+    try {
+      // Use the OpenAI service to generate the contextual prompt
+      return await this.openAIService.generateContextualPrompt(step, context);
+    } catch (error) {
+      logger.error('Error generating contextual prompt in workflow service', {
+        stepName: step.name,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      
+      // Fallback to original prompt if AI generation fails
+      return step.prompt || "";
+    }
+  }
+
+  /**
+   * Replace placeholder text in step prompts with actual values from context
+   * @deprecated - Use generateContextualPrompt instead for better AI-powered prompts
+   */
+  private replacePlaceholdersInPrompt(prompt: string, context: Record<string, any>): string {
+    let updatedPrompt = prompt;
+    
+    // Replace common placeholders with actual values
+    if (context.assetType || context.selectedAssetType) {
+      const assetType = context.assetType || context.selectedAssetType;
+      updatedPrompt = updatedPrompt.replace(/\[asset type selected in previous step\]/gi, assetType);
+    }
+    
+    if (context.announcementType) {
+      updatedPrompt = updatedPrompt.replace(/\[announcement type\]/gi, context.announcementType);
+    }
+    
+    // Replace asset-specific field placeholders
+    if (context.assetType || context.selectedAssetType) {
+      const assetType = (context.assetType || context.selectedAssetType).toLowerCase();
+      let topFields = "";
+      
+      if (assetType.includes("press release")) {
+        topFields = "company name, announcement headline, and key product details";
+      } else if (assetType.includes("media pitch")) {
+        topFields = "company name, story angle, and key talking points";
+      } else if (assetType.includes("social post")) {
+        topFields = "company name, core announcement, and key benefit";
+      } else if (assetType.includes("blog post")) {
+        topFields = "company name, announcement title, and main message";
+      } else if (assetType.includes("faq")) {
+        topFields = "company name, product/service name, and main announcement";
+      } else {
+        topFields = "company name and key announcement details";
+      }
+      
+      updatedPrompt = updatedPrompt.replace(/\[top few most important fields for that specific asset type\]/gi, topFields);
+    }
+    
+    return updatedPrompt;
+  }
+
+  /**
+   * Initialize a step with context from previous steps
+   * This is a general function that can be used for any step type
+   */
+  private async initializeStepWithContext(stepId: string, workflow: Workflow): Promise<void> {
+    const step = workflow.steps.find(s => s.id === stepId);
+    if (!step) return;
+    
+    logger.info('Initializing step with context - BEFORE gathering context', {
+      stepId,
+      stepName: step.name,
+      originalPrompt: step.prompt
+    });
+    
+    // Gather context from all previous steps
+    const previousContext = await this.gatherPreviousStepsContext(workflow);
+    
+    logger.info('Initializing step with context - AFTER gathering context', {
+      stepId,
+      stepName: step.name,
+      contextKeys: Object.keys(previousContext),
+      contextValues: previousContext
+    });
+    
+    // Generate a contextual prompt using AI based on the context
+    const updatedPrompt = await this.generateContextualPrompt(step, previousContext);
+    
+    logger.info('Initializing step with context - AFTER generating prompt', {
+      stepId,
+      stepName: step.name,
+      originalPrompt: step.prompt,
+      updatedPrompt: updatedPrompt,
+      promptChanged: updatedPrompt !== step.prompt
+    });
+    
+    // Merge with existing step metadata, preserving any existing collected information
+    const updatedMetadata = {
+      ...step.metadata,
+      collectedInformation: {
+        ...previousContext,
+        ...step.metadata?.collectedInformation // Preserve any existing step-specific info
+      }
+    };
+    
+    // Update the step with the context and AI-generated prompt
+    await this.dbService.updateStep(stepId, {
+      prompt: updatedPrompt,
+      metadata: updatedMetadata
+    });
+    
+    logger.info('Initialized step with previous context and AI-generated prompt - COMPLETE', {
+      stepId,
+      stepName: step.name,
+      contextKeys: Object.keys(previousContext),
+      promptUpdated: updatedPrompt !== step.prompt,
+      finalPrompt: updatedPrompt
+    });
   }
 }

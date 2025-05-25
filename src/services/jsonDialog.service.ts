@@ -263,8 +263,18 @@ export class JsonDialogService {
       };
     }
     
-    // For any information collection step - use generic fields
+    // For Information Collection steps, prioritize step metadata over hardcoded values
     if (step.name.includes("Information Collection") || step.name.includes("Collection")) {
+      // First check if the step has its own essential fields defined
+      if (step.metadata?.essential && step.metadata.essential.length > 0) {
+        return {
+          essential: step.metadata.essential,
+          important: step.metadata.important || [],
+          optional: step.metadata.optional || []
+        };
+      }
+      
+      // Fallback to generic fields only if no step-specific fields are defined
       return {
         essential: ["companyName", "announcementType"],
         important: ["productName", "keyFeatures"],
@@ -272,7 +282,7 @@ export class JsonDialogService {
       };
     }
     
-    // Default structure for other steps
+    // Default structure for other steps - always respect step metadata first
     return {
       essential: step.metadata?.essential || [],
       important: step.metadata?.important || [],
@@ -398,6 +408,19 @@ If the user is asking a question or needs help:
     }
     // Default case for other steps - particularly important for information gathering steps
     else {
+      // Special handling for Information Collection steps - use their baseInstructions but include context
+      if (step.name.includes("Information Collection") || step.name.includes("Collection")) {
+        const baseInstructions = step.metadata?.baseInstructions;
+        if (baseInstructions) {
+          // Include the collected information context in the baseInstructions
+          const contextSection = Object.keys(collectedInfo).length > 0 
+            ? `\n\nCONTEXT FROM PREVIOUS STEPS:\n${JSON.stringify(collectedInfo, null, 2)}\n\nIMPORTANT: Use this context to understand what has already been established (announcement type, asset type, etc.) and ask relevant follow-up questions. Do NOT ask for information that is already provided in the context above.`
+            : '';
+          
+          return baseInstructions + contextSection + formattedHistory;
+        }
+      }
+      
       // Calculate what information we already have vs what we still need
       const infoTracking = this.generateInfoTrackingStatus(collectedInfo, requiredFields);
       
@@ -433,7 +456,7 @@ If all essential information is collected:
     // All collected information including new info from this message
   },
   "nextQuestion": null,
-  "suggestedNextStep": "Asset Generation",
+  "suggestedNextStep": null,
   "completionPercentage": 100
 }
 

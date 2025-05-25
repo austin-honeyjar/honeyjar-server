@@ -81,7 +81,7 @@ If the user provides a type that doesn't fit the standard categories:
       type: StepType.JSON_DIALOG,
       name: "Asset Type Selection", 
       description: "Select the type of PR asset to generate",
-      prompt: "Based on your announcement type, I recommend the following PR assets:\n\n- Press Release\n- Media Pitch\n- Social Post\n- Blog Post\n- FAQ Document\n\nWhich type of asset would you like to create?",
+      prompt: "Based on your [announcement type] announcement, I recommend the following PR assets:\n\n- Press Release\n- Media Pitch\n- Social Post\n- Blog Post\n- FAQ Document\n\nWhich type of asset would you like to create?",
       order: 1,
       dependencies: ["Announcement Type Selection"],
       metadata: {
@@ -165,28 +165,25 @@ If the user asks for more information about asset types:
       type: StepType.JSON_DIALOG,
       name: "Information Collection",
       description: "Collect detailed information for asset generation",
-      prompt: "Now I'll collect the specific information needed for your [asset type selected in previous step]. Please provide details about [top few most important fields for that specific asset type].",
+      prompt: "Now I'll collect the specific information needed for your [selected asset type] regarding the [announcement type] announcement. Please provide details about [key information needed for this asset type].",
       order: 2,
       dependencies: ["Asset Type Selection"],
       metadata: {
         goal: "Collect all necessary information to generate a high-quality PR asset based on the selected asset type",
         essential: ["collectedInformation"],
         initialPromptSent: false,
-        baseInstructions: `You are an information gathering assistant for PR asset creation. Your task is to collect specific information needed for the selected PR asset type.
+        baseInstructions: `You are an information gathering assistant for PR asset creation. Your task is to collect specific information needed for creating a PR asset.
 
 MAIN GOAL:
-Collect all the necessary information to create a high-quality PR asset of the type selected by the user. Ask questions to gather the required information, starting with the most important details.
+Collect all the necessary information to create a high-quality PR asset. Ask questions to gather the required information, starting with the most important details.
 
 CONTEXT:
-- Use the announcement type and asset type from previous steps
-- Each asset type requires specific information fields
+- This is for creating the PR asset type selected in the previous step
 - Adapt your questions based on what information has already been provided
 - Track completion percentage as fields are filled
 - If the user says they don't know or they don't have that information, skip that requirement and move on to the next one.
 
-REQUIRED INFORMATION BY ASSET TYPE:
-
-For Press Release:
+REQUIRED INFORMATION FOR PRESS RELEASE:
 - Company name and description
 - Announcement headline/title
 - Product/service name and description (if applicable)
@@ -195,6 +192,8 @@ For Press Release:
 - Release/launch date
 - Pricing/availability information (if applicable)
 - Contact information (name, email, phone)
+
+FOR OTHER ASSET TYPES:
 
 For Media Pitch:
 - Company name and description
@@ -232,7 +231,6 @@ For FAQ Document:
 - Technical details (if applicable)
 
 INFORMATION PROCESSING GUIDELINES:
-- Use information from previous steps without re-asking
 - Extract ALL relevant information from each user message, not just what you asked for
 - Look for information that fits any required field, not just the ones you explicitly asked about
 - Track completion percentage based on how many required fields are filled
@@ -249,10 +247,10 @@ While collecting information (less than 90% complete):
   "collectedInformation": {
     "assetType": "Selected asset type from previous step",
     "announcementType": "Announcement type from previous step",
-  "companyInfo": {
+    "companyInfo": {
       "name": "Company name",
       "description": "Company description"
-    }
+    },
     // All other information collected so far, organized by category
     // Include ALL relevant information found in the user's messages
   },
@@ -278,7 +276,7 @@ When sufficient information is collected (90%+ complete):
       type: StepType.API_CALL,
       name: "Asset Generation",
       description: "Generate the selected PR asset with collected information",
-      prompt: "Generating your press release now. This may take a moment...",
+      prompt: "Generating your [selected asset type] for the [announcement type] announcement. This may take a moment...",
       order: 3,
       dependencies: ["Information Collection"],
       metadata: {
@@ -420,7 +418,7 @@ Use the provided company and announcement information to create a comprehensive 
       type: StepType.JSON_DIALOG,
       name: "Asset Review",
       description: "Review the generated press release and request changes if needed",
-      prompt: "Here's your generated press release. Please review it and let me know if you'd like to make any changes. If you're satisfied, simply reply with 'approved'.",
+      prompt: "Here's your generated [selected asset type]. Please review it and let me know if you'd like to make any changes. If you're satisfied, simply reply with 'approved'.",
       order: 4,
       dependencies: ["Asset Generation"],
       metadata: {
@@ -483,7 +481,7 @@ If user input is unclear:
       type: StepType.JSON_DIALOG,
       name: "Post-Asset Tasks",
       description: "Provide guidance on effective use of the asset",
-      prompt: "Your asset is complete! Would you like any guidance on how to effectively use this asset in your PR strategy?",
+      prompt: "Your [selected asset type] is complete! Would you like any guidance on how to effectively use this asset in your PR strategy?",
       order: 5,
       dependencies: ["Asset Review"],
       metadata: {

@@ -303,4 +303,114 @@ Please provide ONLY the edited version of the text, with no additional comments 
       throw error;
     }
   }
+
+  /**
+   * Generate a contextual prompt for a workflow step based on previous steps context
+   * @param step The workflow step that needs a contextual prompt
+   * @param context Information gathered from previous completed steps
+   * @returns A personalized prompt that acknowledges previous context
+   */
+  async generateContextualPrompt(
+    step: WorkflowStep,
+    context: Record<string, any>
+  ): Promise<string> {
+    try {
+      logger.info('Generating contextual prompt', {
+        stepName: step.name,
+        contextKeys: Object.keys(context),
+        originalPromptLength: step.prompt?.length || 0,
+        contextValues: {
+          announcementType: context.announcementType,
+          assetType: context.assetType || context.selectedAssetType,
+          selectedAssetType: context.selectedAssetType
+        }
+      });
+
+      // If there's no context, use the original prompt
+      if (!context || Object.keys(context).length === 0) {
+        return step.prompt || "";
+      }
+
+      // Create a system prompt for generating contextual step prompts
+      const systemPrompt = `You are a workflow prompt generator. Your task is to create a personalized, contextual prompt for a workflow step based on information from previous steps.
+
+STEP INFORMATION:
+- Step Name: ${step.name}
+- Step Description: ${step.description}
+- Original Prompt: ${step.prompt}
+
+CONTEXT FROM PREVIOUS STEPS (JSON):
+\`\`\`json
+${JSON.stringify(context, null, 2)}
+\`\`\`
+
+TASK:
+Generate a new prompt for this step that:
+1. Uses the EXACT values from the context JSON above
+2. Replaces any placeholder text with actual values from the context
+3. Is specific and personalized based on the context
+4. Maintains a conversational, helpful tone
+5. Avoids asking for information that's already been provided
+
+CONTEXT INTERPRETATION RULES:
+- If context contains "announcementType": use that exact value (e.g., "Product Launch", "Funding Round")
+- If context contains "selectedAssetType" or "assetType": use that exact value
+- Replace placeholders like [announcement type], [asset type], etc. with actual values
+- If original prompt has placeholder text in brackets, replace it with context values
+
+EXAMPLES:
+
+Original: "Based on your announcement type of [Announcement Type Selection], I recommend..."
+Context: {"announcementType": "Product Launch"}
+Generated: "Based on your Product Launch announcement, I recommend..."
+
+Original: "Now I'll collect information for your [asset type selected in previous step]"
+Context: {"selectedAssetType": "Press Release", "announcementType": "Product Launch"}
+Generated: "Now I'll collect the specific information needed for your Product Launch press release"
+
+RESPONSE FORMAT:
+Return ONLY the new prompt text. Do not include any explanations, metadata, or formatting - just the prompt that should be shown to the user.`;
+
+      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Generate a contextual prompt for the "${step.name}" step.` }
+      ];
+
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        temperature: 0.7,
+        max_tokens: 500, // Prompts should be concise
+        presence_penalty: 0,
+        frequency_penalty: 0,
+      });
+
+      const response = completion.choices[0]?.message?.content;
+      if (!response) {
+        logger.error('No contextual prompt generated from OpenAI', {
+          stepName: step.name
+        });
+        // Fallback to original prompt
+        return step.prompt || "";
+      }
+
+      logger.info('Generated contextual prompt', {
+        stepName: step.name,
+        originalPromptLength: step.prompt?.length || 0,
+        newPromptLength: response.length,
+        usage: completion.usage
+      });
+
+      return response.trim();
+    } catch (error) {
+      logger.error('Error generating contextual prompt:', {
+        stepName: step.name,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      
+      // Fallback to original prompt if AI generation fails
+      return step.prompt || "";
+    }
+  }
 } 
