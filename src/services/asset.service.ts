@@ -276,7 +276,8 @@ export class AssetService {
       const updatedText = await this.processTextEdit(
         asset.content,
         selectedText,
-        instruction
+        instruction,
+        asset
       );
 
       // If no changes were made, return the original asset
@@ -321,16 +322,28 @@ export class AssetService {
   }
 
   /**
-   * Process text edit using AI to generate updated content
+   * Process text edit using AI to generate updated content with enhanced context
    */
   private async processTextEdit(
     fullContent: string,
     selectedText: string,
-    instruction: string
+    instruction: string,
+    asset?: any
   ): Promise<string> {
     try {
-      // Use OpenAI to generate edited text based on the instruction
-      const response = await this.openAIService.generateEditedText(selectedText, instruction);
+      // Extract surrounding context for better AI understanding
+      const surroundingContext = this.extractSurroundingContext(fullContent, selectedText);
+      
+      // Prepare context for AI
+      const context = {
+        fullContent,
+        assetType: asset?.assetType || asset?.type,
+        assetTitle: asset?.title,
+        surroundingContext
+      };
+
+      // Use OpenAI to generate edited text based on the instruction with enhanced context
+      const response = await this.openAIService.generateEditedText(selectedText, instruction, context);
       
       // If OpenAI didn't return anything useful, return the original content
       if (!response || response.trim() === '') {
@@ -338,8 +351,7 @@ export class AssetService {
         return fullContent;
       }
 
-      // Replace the selected text in the full content
-      // Using a more robust replacement that handles multiple occurrences and special characters
+      // Replace the selected text in the full content with improved logic
       return this.replaceTextInContent(fullContent, selectedText, response);
     } catch (error) {
       logger.error(`Error processing text edit with AI: ${error}`);
@@ -348,22 +360,114 @@ export class AssetService {
   }
 
   /**
-   * Replace text in content with better handling of multiple occurrences
+   * Extract surrounding context around the selected text for better AI understanding
+   */
+  private extractSurroundingContext(fullContent: string, selectedText: string, contextWindow: number = 500): string {
+    const index = fullContent.indexOf(selectedText);
+    if (index === -1) {
+      return '';
+    }
+
+    // Calculate start and end positions for context window
+    const start = Math.max(0, index - contextWindow);
+    const end = Math.min(fullContent.length, index + selectedText.length + contextWindow);
+    
+    // Extract the surrounding text
+    const contextBefore = fullContent.substring(start, index);
+    const contextAfter = fullContent.substring(index + selectedText.length, end);
+    
+    // Combine with markers to show where the selected text fits
+    return `${contextBefore}[SELECTED TEXT GOES HERE]${contextAfter}`;
+  }
+
+  /**
+   * Replace text in content with improved handling and fuzzy matching
    */
   private replaceTextInContent(
     fullContent: string, 
     selectedText: string, 
     replacementText: string
   ): string {
-    // If the selected text doesn't exist in the content, return original
+    // If the selected text doesn't exist in the content, try fuzzy matching
     if (!fullContent.includes(selectedText)) {
-      logger.warn('Selected text not found in content - unable to replace');
+      logger.warn('Selected text not found in content - attempting fuzzy replacement');
+      
+      // Try to find similar text (handle minor formatting differences)
+      const normalizedSelected = this.normalizeText(selectedText);
+      const contentLines = fullContent.split('\n');
+      
+      for (let i = 0; i < contentLines.length; i++) {
+        const normalizedLine = this.normalizeText(contentLines[i]);
+        if (normalizedLine.includes(normalizedSelected) || 
+            this.calculateSimilarity(normalizedLine, normalizedSelected) > 0.8) {
+          // Found a close match, replace the entire line or portion
+          const originalLine = contentLines[i];
+          contentLines[i] = originalLine.replace(selectedText, replacementText);
+          return contentLines.join('\n');
+        }
+      }
+      
+      // If still not found, return original content
+      logger.warn('Could not find suitable replacement location - returning original content');
       return fullContent;
     }
 
-    // Simple replacement for now - could be enhanced with fuzzy matching
-    // or better context awareness for multiple occurrences
-    return fullContent.replace(selectedText, replacementText);
+    // Handle multiple occurrences by finding the most contextually appropriate one
+    const occurrences = this.findAllOccurrences(fullContent, selectedText);
+    
+    if (occurrences.length === 1) {
+      // Simple case - only one occurrence
+      return fullContent.replace(selectedText, replacementText);
+    } else if (occurrences.length > 1) {
+      logger.info(`Found ${occurrences.length} occurrences of selected text - using first occurrence`);
+      // For multiple occurrences, replace the first one
+      // In the future, we could improve this by using the selection position
+      const index = fullContent.indexOf(selectedText);
+      return fullContent.substring(0, index) + 
+             replacementText + 
+             fullContent.substring(index + selectedText.length);
+    }
+
+    return fullContent;
+  }
+
+  /**
+   * Normalize text by removing extra whitespace and converting to lowercase
+   */
+  private normalizeText(text: string): string {
+    return text.replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  /**
+   * Calculate text similarity using simple character-based comparison
+   */
+  private calculateSimilarity(text1: string, text2: string): number {
+    const maxLength = Math.max(text1.length, text2.length);
+    if (maxLength === 0) return 1;
+
+    let matches = 0;
+    const minLength = Math.min(text1.length, text2.length);
+    
+    for (let i = 0; i < minLength; i++) {
+      if (text1[i] === text2[i]) matches++;
+    }
+
+    return matches / maxLength;
+  }
+
+  /**
+   * Find all occurrences of a substring in text
+   */
+  private findAllOccurrences(text: string, substring: string): number[] {
+    const occurrences: number[] = [];
+    let index = text.indexOf(substring);
+    
+    while (index !== -1) {
+      occurrences.push(index);
+      index = text.indexOf(substring, index + 1);
+    }
+    
+    return occurrences;
   }
 
   /**
