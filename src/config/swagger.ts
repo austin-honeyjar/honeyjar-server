@@ -148,6 +148,148 @@ const options: swaggerJsdoc.Options = {
           },
           required: ['id', 'threadId', 'userId', 'role', 'content', 'createdAt'],
         },
+        Article: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Unique identifier for the article',
+            },
+            title: {
+              type: 'string',
+              description: 'Title of the article',
+            },
+            summary: {
+              type: 'string',
+              description: 'Brief summary or description of the article',
+            },
+            content: {
+              type: 'string',
+              description: 'Full content of the article (optional)',
+            },
+            url: {
+              type: 'string',
+              format: 'uri',
+              description: 'URL to the original article',
+            },
+            source: {
+              type: 'string',
+              description: 'Name of the news source/publication',
+            },
+            publishedAt: {
+              type: 'string',
+              format: 'date-time',
+              description: 'When the article was published',
+            },
+            author: {
+              type: 'string',
+              description: 'Author of the article (optional)',
+            },
+            topics: {
+              type: 'array',
+              items: {
+                type: 'string'
+              },
+              description: 'Array of topics/categories related to the article',
+            },
+            metadata: {
+              type: 'object',
+              description: 'Additional metadata about the article (optional)',
+            },
+          },
+          required: ['id', 'title', 'summary', 'url', 'source', 'publishedAt', 'topics'],
+        },
+        ArticleSearchResponse: {
+          type: 'object',
+          properties: {
+            articles: {
+              type: 'array',
+              items: {
+                $ref: '#/components/schemas/Article'
+              },
+              description: 'Array of articles matching the search criteria',
+            },
+            totalCount: {
+              type: 'integer',
+              description: 'Total number of articles available (for pagination)',
+            },
+            hasMore: {
+              type: 'boolean',
+              description: 'Whether there are more articles available',
+            },
+            nextPage: {
+              type: 'string',
+              description: 'Token or URL for the next page of results (optional)',
+            },
+          },
+          required: ['articles', 'totalCount', 'hasMore'],
+        },
+        RevokedArticlesResponse: {
+          type: 'object',
+          properties: {
+            revokedArticles: {
+              type: 'array',
+              items: {
+                type: 'string'
+              },
+              description: 'Array of article IDs that have been revoked and should be removed from your system',
+            },
+            sequenceId: {
+              type: 'string',
+              description: 'Next sequence ID to use for pagination in subsequent requests',
+              example: '12345'
+            },
+            totalCount: {
+              type: 'integer',
+              description: 'Total number of revoked articles in this response',
+            },
+          },
+          required: ['revokedArticles', 'sequenceId', 'totalCount'],
+        },
+        Error: {
+          type: 'object',
+          properties: {
+            status: {
+              type: 'string',
+              example: 'error',
+              description: 'Status of the response',
+            },
+            message: {
+              type: 'string',
+              description: 'Error message describing what went wrong',
+            },
+            error: {
+              type: 'string',
+              description: 'Detailed error information (only in development)',
+            },
+          },
+          required: ['status', 'message'],
+        },
+        HealthCheck: {
+          type: 'object',
+          properties: {
+            status: {
+              type: 'string',
+              example: 'ok',
+              description: 'Health status of the service',
+            },
+            message: {
+              type: 'string',
+              example: 'Server is running',
+              description: 'Health check message',
+            },
+            timestamp: {
+              type: 'string',
+              format: 'date-time',
+              description: 'Timestamp when the health check was performed',
+            },
+            environment: {
+              type: 'string',
+              description: 'Current environment (development, production, etc.)',
+            },
+          },
+          required: ['status', 'message', 'timestamp'],
+        },
       },
     },
     security: [

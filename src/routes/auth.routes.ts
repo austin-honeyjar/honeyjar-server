@@ -15,6 +15,7 @@ import logger from '../utils/logger';
 import { AuthService } from '../services/auth.service';
 import { AuthRequest } from '../types/request';
 import { ApiError } from '../utils/error';
+import jwt from 'jsonwebtoken';
 
 const router = Router();
 
@@ -579,5 +580,139 @@ router.get('/permissions/:userId',
     }
   }
 );
+
+/**
+ * @swagger
+ * /api/v1/auth/dev-login:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Development login (DEVELOPMENT ONLY)
+ *     description: Simple username/password login for development testing (bypasses Clerk)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - password
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 description: Username or email
+ *                 example: "dev@example.com"
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 description: Password
+ *                 example: "password123"
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 accessToken:
+ *                   type: string
+ *                   description: JWT token for API authentication
+ *                 refreshToken:
+ *                   type: string
+ *                   description: Refresh token
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                     permissions:
+ *                       type: array
+ *                       items:
+ *                         type: string
+ *       401:
+ *         description: Invalid credentials
+ *       403:
+ *         description: Not available in production
+ */
+router.post('/dev-login', async (req, res) => {
+  // Only allow in development
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({
+      status: 'error',
+      message: 'Development login not available in production'
+    });
+  }
+
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Username and password are required'
+      });
+    }
+
+    // Simple dev credentials check (you can customize these)
+    const validCredentials = [
+      { username: 'dev@example.com', password: 'password123' },
+      { username: 'admin@example.com', password: 'admin123' },
+      { username: 'test@example.com', password: 'test123' },
+      { username: 'dev', password: 'dev' },
+      { username: 'admin', password: 'admin' }
+    ];
+
+    const user = validCredentials.find(
+      cred => (cred.username === username || cred.username === username.toLowerCase()) && 
+              cred.password === password
+    );
+
+    if (!user) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Invalid username or password'
+      });
+    }
+
+    // Create a JWT token for testing
+    const userId = `dev-user-${Date.now()}`;
+    const testToken = jwt.sign(
+      {
+        sub: userId,
+        email: username.includes('@') ? username : `${username}@example.com`,
+        iss: 'dev-auth',
+        exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24 * 7), // 7 days
+        permissions: username.includes('admin') ? ['admin', 'read', 'write'] : ['read', 'write'],
+        username: username
+      },
+      process.env.JWT_SECRET || 'dev-secret'
+    );
+
+    logger.info('Development login successful', {
+      username,
+      userId
+    });
+
+    res.json({
+      accessToken: testToken,
+      refreshToken: testToken, // Same token for simplicity in dev
+      user: {
+        id: userId,
+        email: username.includes('@') ? username : `${username}@example.com`,
+        username: username,
+        permissions: username.includes('admin') ? ['admin', 'read', 'write'] : ['read', 'write']
+      }
+    });
+  } catch (error) {
+    logger.error('Error in development login:', { error });
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to process login'
+    });
+  }
+});
 
 export default router; 
