@@ -1,6 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import logger from '../utils/logger';
 import { cacheService, withCache } from './cache.service';
+import { MetabaseComplianceService } from './metabaseCompliance.service';
 
 export interface Article {
   id: string;
@@ -204,10 +205,12 @@ export class MetabaseService {
   private client: AxiosInstance;
   private apiKey: string;
   private baseUrl: string;
+  private complianceService: MetabaseComplianceService;
 
   constructor() {
     this.apiKey = process.env.METABASE_API_KEY || '';
     this.baseUrl = process.env.METABASE_BASE_URL || 'http://metabase.moreover.com';
+    this.complianceService = new MetabaseComplianceService();
     
     logger.info('🚀 Initializing MetabaseService', {
       hasApiKey: !!this.apiKey,
@@ -427,6 +430,8 @@ export class MetabaseService {
    * Only supports basic article retrieval - search parameters not supported by Metabase API
    */
   private async fetchArticlesFromAPI(params: ArticleSearchParams): Promise<ArticleSearchResponse> {
+    const startTime = Date.now();
+    
     logger.info('🌐 Fetching articles from Metabase API (cache miss)', {
       limit: params.limit,
       hasApiKey: !!this.apiKey,
@@ -472,51 +477,53 @@ export class MetabaseService {
       params: requestParams
     });
 
-    logger.info('📥 Raw response received, starting JSON parsing...', {
+    const responseTime = Date.now() - startTime;
+
+    logger.info('📥 Articles response received, starting JSON parsing...', {
       responseType: typeof response.data,
       responseLength: response.data?.length || 0,
       requestedLimit: requestParams.limit,
+      responseTime,
       isGzipped: response.headers['content-encoding'] === 'gzip'
     });
-
-    // Add debug logging to inspect raw JSON structure
-    if (response.data && typeof response.data === 'string') {
-      // Count potential articles in raw JSON
-      const articleMatches = response.data.match(/{\s*"article"\s*:\s*\[/g);
-      const articleCount = articleMatches ? articleMatches.length : 0;
-      
-      logger.info('🔍 DEBUG: Raw JSON analysis', {
-        jsonLength: response.data.length,
-        articleTagsFound: articleCount,
-        jsonPreview: response.data.substring(0, 500) + '...',
-        jsonEnd: '...' + response.data.substring(response.data.length - 200)
-      });
-    }
 
     // Parse JSON response
     const parsedResponse = response.data;
     
-    // Add detailed logging of the parsed structure
-    logger.info('🔍 DEBUG: Full parsed structure inspection', {
-      parsedKeys: Object.keys(parsedResponse),
-      hasResponse: !!parsedResponse,
-      responseType: typeof parsedResponse,
-      directStructure: JSON.stringify(parsedResponse, null, 2).substring(0, 1000) + '...'
-    });
-    
-    logger.info('🔄 JSON parsing completed, transforming to JSON format...');
+    logger.info('🔄 JSON parsing completed, transforming articles...');
     
     // Transform the response to match our interface
     const articlesData = this.transformArticlesResponse(parsedResponse);
 
-    logger.info('✅ Articles search completed successfully', {
-      requestedLimit: requestParams.limit,
-      articlesFound: articlesData.articles.length,
-      totalCount: articlesData.totalCount,
-      hasMore: articlesData.hasMore,
-      lastSequenceId: articlesData.lastSequenceId,
-      sampleTitles: articlesData.articles.slice(0, 3).map(a => a.title)
+    logger.info('✅ Articles transformed successfully', {
+      articlesCount: articlesData.articles.length,
+      hasNextPage: !!articlesData.lastSequenceId,
+      nextSequenceId: articlesData.lastSequenceId,
+      responseTime,
+      totalProcessingTime: Date.now() - startTime
     });
+
+    // Log API call to database for sync history
+    await this.complianceService.logApiCall({
+      callType: 'articles',
+      endpoint: '/api/v10/articles',
+      parameters: requestParams,
+      responseStatus: response.status,
+      responseTime,
+      articlesReturned: articlesData.articles.length,
+      sequenceId: articlesData.lastSequenceId,
+      cacheHit: false,
+      metadata: {
+        requestedLimit: limit,
+        hasSequenceId: !!params.sequenceId,
+        gzipEncoding: response.headers['content-encoding'] === 'gzip'
+      }
+    });
+
+    // Store articles in database for persistence
+    if (articlesData.articles.length > 0) {
+      await this.complianceService.storeArticles(articlesData.articles);
+    }
 
     return articlesData;
   }
@@ -525,6 +532,8 @@ export class MetabaseService {
    * Private method to fetch revoked articles from API (used by cache)
    */
   private async fetchRevokedArticlesFromAPI(params: RevokedArticlesParams): Promise<RevokedArticlesResponse> {
+    const startTime = Date.now();
+    
     logger.info('🌐 Fetching revoked articles from Metabase API (cache miss)', {
       limit: params.limit,
       sequenceId: params.sequenceId
@@ -540,14 +549,47 @@ export class MetabaseService {
       params: requestParams
     });
 
+    const responseTime = Date.now() - startTime;
+
     // Parse JSON response
     const parsedResponse = response.data;
     const revokedData = this.transformRevokedArticlesResponse(parsedResponse);
 
     logger.info('✅ Revoked articles fetched successfully', {
       revokedCount: revokedData.revokedArticles.length,
-      nextSequenceId: revokedData.sequenceId
+      nextSequenceId: revokedData.sequenceId,
+      responseTime
     });
+
+    // Log API call to database for compliance tracking
+    await this.complianceService.logApiCall({
+      callType: 'revoked',
+      endpoint: '/api/v10/revokedArticles',
+      parameters: requestParams,
+      responseStatus: response.status,
+      responseTime,
+      articlesReturned: revokedData.revokedArticles.length,
+      sequenceId: revokedData.sequenceId,
+      cacheHit: false,
+      metadata: {
+        requestedLimit: params.limit || 1000,
+        hasSequenceId: !!params.sequenceId,
+        complianceCall: true
+      }
+    });
+
+    // Store revoked articles for compliance tracking
+    if (revokedData.revokedArticles.length > 0) {
+      await this.complianceService.storeRevokedArticles(revokedData.revokedArticles);
+      await this.complianceService.markArticlesAsRevoked(revokedData.revokedArticles);
+      
+      // Create compliance check record
+      await this.complianceService.createComplianceCheck(
+        revokedData.revokedArticles.length,
+        revokedData.revokedArticles,
+        'compliant'
+      );
+    }
 
     return revokedData;
   }
@@ -1221,18 +1263,8 @@ export class MetabaseService {
     try {
       logger.info('📋 Checking compliance workflow status');
 
-      // TODO: Implement actual compliance tracking
-      // This should check database for last revoked articles sync, etc.
-      
-      const mockStatus = {
-        lastComplianceCheck: new Date().toISOString(),
-        revokedArticlesProcessed: 0,
-        complianceStatus: 'compliant' as const,
-        nextScheduledCheck: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-      };
-
-      logger.info('✅ Compliance status retrieved', mockStatus);
-      return mockStatus;
+      // Use real database operations via MetabaseComplianceService
+      return await this.complianceService.getComplianceStatus();
     } catch (error) {
       logger.error('💥 Error checking compliance status', {
         error: error instanceof Error ? error.message : 'Unknown error'
@@ -1249,20 +1281,34 @@ export class MetabaseService {
     try {
       logger.info('📊 Retrieving cache performance metrics');
 
-      // TODO: Implement actual cache statistics from Redis/cache service
-      // This should integrate with cacheService to get real metrics
+      // Get real cache statistics from Redis/cache service
+      const cacheStats = await cacheService.getStats();
       
-      const mockStats = {
-        hitRate: 85.5,
-        totalRequests: 1247,
-        cacheSize: 2048576, // bytes
-        averageResponseTime: 45, // ms
-        keysStored: 156,
-        memoryUsage: '2.1MB'
+      // Calculate hit rate percentage
+      const totalRequests = cacheStats.hits + cacheStats.misses;
+      const hitRate = totalRequests > 0 ? (cacheStats.hits / totalRequests) * 100 : 0;
+      
+      // Get additional sync statistics from database
+      const syncStats = await this.complianceService.getRecentApiCallStats();
+      
+      const enhancedStats = {
+        hitRate: Number(hitRate.toFixed(2)),
+        totalRequests,
+        hits: cacheStats.hits,
+        misses: cacheStats.misses,
+        errors: cacheStats.errors,
+        keysStored: cacheStats.totalKeys,
+        memoryUsage: cacheStats.memoryUsage ? `${(cacheStats.memoryUsage / 1024 / 1024).toFixed(2)} MB` : 'N/A',
+        memoryUsageBytes: cacheStats.memoryUsage || 0,
+        // Add sync statistics
+        lastSync: syncStats.lastSync,
+        recentArticlesRetrieved: syncStats.articlesRetrieved,
+        recentErrors: syncStats.errors,
+        lastError: syncStats.lastError
       };
 
-      logger.info('✅ Cache statistics retrieved', mockStats);
-      return mockStats;
+      logger.info('✅ Cache statistics retrieved', enhancedStats);
+      return enhancedStats;
     } catch (error) {
       logger.error('💥 Error retrieving cache stats', {
         error: error instanceof Error ? error.message : 'Unknown error'

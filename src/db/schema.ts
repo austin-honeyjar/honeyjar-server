@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, uuid, jsonb, integer, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, timestamp, uuid, jsonb, integer, pgEnum, boolean } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 // CSV Metadata table
@@ -52,6 +52,12 @@ export const stepStatusEnum = pgEnum('step_status', ['pending', 'in_progress', '
 
 // Workflow step type enum
 export const stepTypeEnum = pgEnum('step_type', ['ai_suggestion', 'user_input', 'api_call', 'data_transformation', 'asset_creation']);
+
+// Metabase compliance status enum
+export const complianceStatusEnum = pgEnum('compliance_status', ['compliant', 'overdue', 'error']);
+
+// Metabase API call type enum
+export const apiCallTypeEnum = pgEnum('api_call_type', ['articles', 'search', 'revoked', 'compliance_clicks']);
 
 // Workflow templates table
 export const workflowTemplates = pgTable('workflow_templates', {
@@ -122,6 +128,76 @@ export const assets = pgTable('assets', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+// =============================================================================
+// METABASE API INTEGRATION TABLES
+// =============================================================================
+
+// Metabase compliance status tracking
+export const metabaseComplianceStatus = pgTable('metabase_compliance_status', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  checkDate: timestamp('check_date', { withTimezone: true }).notNull(),
+  revokedArticlesCount: integer('revoked_articles_count').notNull().default(0),
+  articlesProcessed: jsonb('articles_processed').notNull().default('[]'),
+  status: complianceStatusEnum('status').notNull().default('compliant'),
+  nextScheduledCheck: timestamp('next_scheduled_check', { withTimezone: true }),
+  errors: jsonb('errors').default('[]'),
+  metadata: jsonb('metadata').default('{}'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Metabase articles storage
+export const metabaseArticles = pgTable('metabase_articles', {
+  id: text('id').primaryKey(), // Using Metabase article ID as primary key
+  title: text('title').notNull(),
+  summary: text('summary'),
+  content: text('content'),
+  url: text('url').notNull(),
+  source: text('source').notNull(),
+  publishedAt: timestamp('published_at', { withTimezone: true }),
+  estimatedPublishedDate: timestamp('estimated_published_date', { withTimezone: true }),
+  harvestDate: timestamp('harvest_date', { withTimezone: true }),
+  author: text('author'),
+  topics: jsonb('topics').notNull().default('[]'),
+  licenses: jsonb('licenses').notNull().default('[]'),
+  clickUrl: text('click_url'), // For compliance clicking
+  sequenceId: text('sequence_id'), // For pagination
+  metadata: jsonb('metadata').notNull().default('{}'), // Additional Metabase fields
+  isRevoked: boolean('is_revoked').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Metabase revoked articles tracking
+export const metabaseRevokedArticles = pgTable('metabase_revoked_articles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  articleId: text('article_id').notNull(),
+  revokedDate: timestamp('revoked_date', { withTimezone: true }).notNull(),
+  sequenceId: text('sequence_id'), // From revoked API response
+  processed: boolean('processed').notNull().default(false),
+  processedAt: timestamp('processed_at', { withTimezone: true }),
+  complianceCheckId: uuid('compliance_check_id').references(() => metabaseComplianceStatus.id),
+  metadata: jsonb('metadata').default('{}'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Metabase API calls logging for sync history
+export const metabaseApiCalls = pgTable('metabase_api_calls', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  callType: apiCallTypeEnum('call_type').notNull(),
+  endpoint: text('endpoint').notNull(),
+  parameters: jsonb('parameters').notNull().default('{}'),
+  responseStatus: integer('response_status'),
+  responseTime: integer('response_time'), // milliseconds
+  articlesReturned: integer('articles_returned').default(0),
+  errorMessage: text('error_message'),
+  errorCode: text('error_code'), // Metabase error codes (1000-9999)
+  sequenceId: text('sequence_id'), // Last sequence ID from response
+  rateLimitInfo: jsonb('rate_limit_info').default('{}'),
+  cacheHit: boolean('cache_hit').notNull().default(false),
+  metadata: jsonb('metadata').default('{}'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Define relations
 export const chatThreadsRelations = relations(chatThreads, ({ many }: { many: any }) => ({
   messages: many(chatMessages),
@@ -181,5 +257,20 @@ export const assetsRelations = relations(assets, ({ one }: { one: any }) => ({
   workflow: one(workflows, {
     fields: [assets.workflowId],
     references: [workflows.id],
+  }),
+}));
+
+// =============================================================================
+// METABASE TABLE RELATIONS
+// =============================================================================
+
+export const metabaseComplianceStatusRelations = relations(metabaseComplianceStatus, ({ many }: { many: any }) => ({
+  revokedArticles: many(metabaseRevokedArticles),
+}));
+
+export const metabaseRevokedArticlesRelations = relations(metabaseRevokedArticles, ({ one }: { one: any }) => ({
+  complianceCheck: one(metabaseComplianceStatus, {
+    fields: [metabaseRevokedArticles.complianceCheckId],
+    references: [metabaseComplianceStatus.id],
   }),
 })); 
