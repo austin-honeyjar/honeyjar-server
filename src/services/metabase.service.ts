@@ -2,6 +2,9 @@ import axios, { AxiosInstance } from 'axios';
 import logger from '../utils/logger';
 import { cacheService, withCache } from './cache.service';
 import { MetabaseComplianceService } from './metabaseCompliance.service';
+import { db } from '../db';
+import { metabaseArticles } from '../db/schema';
+import { eq, desc, sql, and } from 'drizzle-orm';
 
 export interface Article {
   id: string;
@@ -1373,59 +1376,452 @@ export class MetabaseService {
         limit
       });
 
-      // TODO: Implement actual analytics on cached data
-      // This should analyze articles stored locally without API calls
+      // Get total article count for percentage calculations
+      const totalArticlesResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(metabaseArticles)
+        .where(eq(metabaseArticles.isRevoked, false));
       
-      let mockResults: any = {
+      const totalArticles = totalArticlesResult[0]?.count || 0;
+
+      if (totalArticles === 0) {
+        logger.info('📊 No articles found in database for analytics');
+        return {
+          analysisType,
+          dataSource: 'metabase_articles',
+          totalArticles: 0,
+          generatedAt: new Date().toISOString(),
+          results: [],
+          message: 'No articles available for analysis'
+        };
+      }
+
+      let results: any = {
         analysisType,
-        dataSource: 'cached_articles',
+        dataSource: 'metabase_articles',
+        totalArticles,
         generatedAt: new Date().toISOString()
       };
 
       switch (analysisType) {
         case 'topics':
-          mockResults.results = [
-            { topic: 'Technology', count: 45, percentage: 23.5 },
-            { topic: 'Business', count: 38, percentage: 19.8 },
-            { topic: 'Politics', count: 32, percentage: 16.7 }
-          ].slice(0, limit);
+          // Analyze topics distribution from JSONB array
+          const topicsQuery = await db
+            .select({
+              topic: sql<string>`jsonb_array_elements_text(topics)`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(eq(metabaseArticles.isRevoked, false))
+            .groupBy(sql`jsonb_array_elements_text(topics)`)
+            .orderBy(desc(sql`count(*)`))
+            .limit(limit);
+
+          results.results = topicsQuery.map((row: { topic: string; count: number }) => ({
+            topic: row.topic,
+            count: row.count,
+            percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+          }));
           break;
         
         case 'sources':
-          mockResults.results = [
-            { source: 'Reuters', count: 28, percentage: 14.6 },
-            { source: 'Associated Press', count: 24, percentage: 12.5 },
-            { source: 'BBC News', count: 19, percentage: 9.9 }
-          ].slice(0, limit);
-          break;
-        
-        case 'sentiment':
-          mockResults.results = {
-            positive: 45,
-            neutral: 32,
-            negative: 23,
-            averageScore: 0.12
-          };
+          // Analyze source distribution
+          const sourcesQuery = await db
+            .select({
+              source: metabaseArticles.source,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(eq(metabaseArticles.isRevoked, false))
+            .groupBy(metabaseArticles.source)
+            .orderBy(desc(sql`count(*)`))
+            .limit(limit);
+
+          results.results = sourcesQuery.map((row: { source: string; count: number }) => ({
+            source: row.source,
+            count: row.count,
+            percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+          }));
           break;
         
         case 'timeline':
-          mockResults.results = [
-            { date: '2025-06-05', articles: 15 },
-            { date: '2025-06-04', articles: 22 },
-            { date: '2025-06-03', articles: 18 }
-          ].slice(0, limit);
+          // Analyze articles over time (by publish date)
+          const timelineQuery = await db
+            .select({
+              date: sql<string>`DATE(published_at)`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`published_at IS NOT NULL`
+            ))
+            .groupBy(sql`DATE(published_at)`)
+            .orderBy(desc(sql`DATE(published_at)`))
+            .limit(limit);
+
+          results.results = timelineQuery.map((row: { date: string; count: number }) => ({
+            date: row.date,
+            count: row.count,
+            percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+          }));
+          break;
+
+        case 'authors':
+          // Analyze top authors
+          const authorsQuery = await db
+            .select({
+              author: metabaseArticles.author,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`author IS NOT NULL AND author != ''`
+            ))
+            .groupBy(metabaseArticles.author)
+            .orderBy(desc(sql`count(*)`))
+            .limit(limit);
+
+          results.results = authorsQuery.map((row: { author: string | null; count: number }) => ({
+            author: row.author,
+            count: row.count,
+            percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+          }));
+          break;
+
+        case 'licenses':
+          // Analyze license distribution from JSONB array
+          const licensesQuery = await db
+            .select({
+              license: sql<string>`jsonb_array_elements_text(licenses)`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(eq(metabaseArticles.isRevoked, false))
+            .groupBy(sql`jsonb_array_elements_text(licenses)`)
+            .orderBy(desc(sql`count(*)`))
+            .limit(limit);
+
+          results.results = licensesQuery.map((row: { license: string; count: number }) => ({
+            license: row.license,
+            count: row.count,
+            percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+          }));
+          break;
+
+        case 'word_count':
+          // Analyze word count distribution
+          const wordCountQuery = await db
+            .select({
+              avgWordCount: sql<number>`AVG(CAST(metadata->>'wordCount' AS INTEGER))`,
+              minWordCount: sql<number>`MIN(CAST(metadata->>'wordCount' AS INTEGER))`,
+              maxWordCount: sql<number>`MAX(CAST(metadata->>'wordCount' AS INTEGER))`,
+              totalWithWordCount: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`metadata->>'wordCount' IS NOT NULL AND metadata->>'wordCount' != ''`
+            ));
+
+          const wordCountStats = wordCountQuery[0];
+          results.results = {
+            averageWordCount: Math.round(wordCountStats?.avgWordCount || 0),
+            minimumWordCount: wordCountStats?.minWordCount || 0,
+            maximumWordCount: wordCountStats?.maxWordCount || 0,
+            articlesWithWordCount: wordCountStats?.totalWithWordCount || 0,
+            percentageWithWordCount: wordCountStats?.totalWithWordCount 
+              ? Number(((wordCountStats.totalWithWordCount / totalArticles) * 100).toFixed(2))
+              : 0
+          };
+          break;
+
+        case 'recent':
+          // Analyze recent activity (last 7 days)
+          const recentQuery = await db
+            .select({
+              date: sql<string>`DATE(created_at)`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`created_at >= NOW() - INTERVAL '7 days'`
+            ))
+            .groupBy(sql`DATE(created_at)`)
+            .orderBy(desc(sql`DATE(created_at)`));
+
+          results.results = recentQuery.map((row: { date: string; count: number }) => ({
+            date: row.date,
+            count: row.count,
+            type: 'articles_added'
+          }));
+          break;
+
+        case 'compliance':
+          // Compliance statistics
+          const complianceQuery = await db
+            .select({
+              totalArticles: sql<number>`count(*)`,
+              revokedArticles: sql<number>`count(*) FILTER (WHERE is_revoked = true)`,
+              activeArticles: sql<number>`count(*) FILTER (WHERE is_revoked = false)`,
+              licensedArticles: sql<number>`count(*) FILTER (WHERE jsonb_array_length(licenses) > 0)`,
+              articlesWithClickUrl: sql<number>`count(*) FILTER (WHERE click_url IS NOT NULL AND click_url != '')`
+            })
+            .from(metabaseArticles);
+
+          const compliance = complianceQuery[0];
+          results.results = {
+            totalArticles: compliance?.totalArticles || 0,
+            activeArticles: compliance?.activeArticles || 0,
+            revokedArticles: compliance?.revokedArticles || 0,
+            revokedPercentage: compliance?.totalArticles 
+              ? Number(((compliance.revokedArticles / compliance.totalArticles) * 100).toFixed(2))
+              : 0,
+            licensedArticles: compliance?.licensedArticles || 0,
+            licensedPercentage: compliance?.totalArticles 
+              ? Number(((compliance.licensedArticles / compliance.totalArticles) * 100).toFixed(2))
+              : 0,
+            articlesWithClickUrl: compliance?.articlesWithClickUrl || 0,
+            clickUrlPercentage: compliance?.totalArticles 
+              ? Number(((compliance.articlesWithClickUrl / compliance.totalArticles) * 100).toFixed(2))
+              : 0
+          };
+          break;
+
+        case 'sentiment':
+          // Sentiment analysis from JSONB sentiment data
+          const sentimentQuery = await db
+            .select({
+              avgSentiment: sql<number>`AVG(CAST(metadata->'sentiment'->>'score' AS FLOAT))`,
+              positiveCount: sql<number>`count(*) FILTER (WHERE CAST(metadata->'sentiment'->>'score' AS FLOAT) > 0)`,
+              neutralCount: sql<number>`count(*) FILTER (WHERE CAST(metadata->'sentiment'->>'score' AS FLOAT) = 0)`,
+              negativeCount: sql<number>`count(*) FILTER (WHERE CAST(metadata->'sentiment'->>'score' AS FLOAT) < 0)`,
+              totalWithSentiment: sql<number>`count(*) FILTER (WHERE metadata->'sentiment'->>'score' IS NOT NULL)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`metadata->'sentiment'->>'score' IS NOT NULL`
+            ));
+
+          const sentimentStats = sentimentQuery[0];
+
+          // Get sentiment entity types distribution
+          const entityTypesQuery = await db
+            .select({
+              entityType: sql<string>`jsonb_array_elements(metadata->'sentiment'->'entities')->>'type'`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`metadata->'sentiment'->'entities' IS NOT NULL`
+            ))
+            .groupBy(sql`jsonb_array_elements(metadata->'sentiment'->'entities')->>'type'`)
+            .orderBy(desc(sql`count(*)`))
+            .limit(limit);
+
+          results.results = {
+            overallSentiment: {
+              averageScore: Number((sentimentStats?.avgSentiment || 0).toFixed(4)),
+              totalAnalyzed: sentimentStats?.totalWithSentiment || 0,
+              positiveArticles: sentimentStats?.positiveCount || 0,
+              neutralArticles: sentimentStats?.neutralCount || 0,
+              negativeArticles: sentimentStats?.negativeCount || 0,
+              positivePercentage: sentimentStats?.totalWithSentiment 
+                ? Number(((sentimentStats.positiveCount / sentimentStats.totalWithSentiment) * 100).toFixed(2))
+                : 0,
+              negativePercentage: sentimentStats?.totalWithSentiment 
+                ? Number(((sentimentStats.negativeCount / sentimentStats.totalWithSentiment) * 100).toFixed(2))
+                : 0
+            },
+            entityTypes: entityTypesQuery.map((row: { entityType: string; count: number }) => ({
+              entityType: row.entityType,
+              count: row.count,
+              percentage: sentimentStats?.totalWithSentiment 
+                ? Number(((row.count / sentimentStats.totalWithSentiment) * 100).toFixed(2))
+                : 0
+            }))
+          };
+          break;
+
+        case 'locations':
+          // Geographic distribution from JSONB locations data
+          const locationsQuery = await db
+            .select({
+              country: sql<string>`jsonb_array_elements(metadata->'locations')->'country'->>'name'`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`metadata->'locations' IS NOT NULL AND jsonb_array_length(metadata->'locations') > 0`
+            ))
+            .groupBy(sql`jsonb_array_elements(metadata->'locations')->'country'->>'name'`)
+            .orderBy(desc(sql`count(*)`))
+            .limit(limit);
+
+          // Get regions distribution
+          const regionsQuery = await db
+            .select({
+              region: sql<string>`jsonb_array_elements(metadata->'locations')->>'region'`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`metadata->'locations' IS NOT NULL AND jsonb_array_length(metadata->'locations') > 0`
+            ))
+            .groupBy(sql`jsonb_array_elements(metadata->'locations')->>'region'`)
+            .orderBy(desc(sql`count(*)`))
+            .limit(Math.min(limit, 10));
+
+          // Get location types distribution
+          const locationTypesQuery = await db
+            .select({
+              locationType: sql<string>`jsonb_array_elements(metadata->'locations')->>'type'`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`metadata->'locations' IS NOT NULL AND jsonb_array_length(metadata->'locations') > 0`
+            ))
+            .groupBy(sql`jsonb_array_elements(metadata->'locations')->>'type'`)
+            .orderBy(desc(sql`count(*)`))
+            .limit(10);
+
+          results.results = {
+            countries: locationsQuery.map((row: { country: string; count: number }) => ({
+              country: row.country || 'Unknown',
+              count: row.count,
+              percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+            })),
+            regions: regionsQuery.map((row: { region: string; count: number }) => ({
+              region: row.region || 'Unknown',
+              count: row.count,
+              percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+            })),
+            locationTypes: locationTypesQuery.map((row: { locationType: string; count: number }) => ({
+              type: row.locationType || 'Unknown',
+              count: row.count,
+              percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+            }))
+          };
+          break;
+
+        case 'entities':
+          // Entity analysis from semantic entities data
+          const entityTypesSemanticQuery = await db
+            .select({
+              entityType: sql<string>`jsonb_array_elements(metadata->'semantics'->'entities')->>'type'`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`metadata->'semantics'->'entities' IS NOT NULL`
+            ))
+            .groupBy(sql`jsonb_array_elements(metadata->'semantics'->'entities')->>'type'`)
+            .orderBy(desc(sql`count(*)`))
+            .limit(limit);
+
+          // Get top mentioned entities by value
+          const topEntitiesQuery = await db
+            .select({
+              entityValue: sql<string>`jsonb_array_elements(metadata->'semantics'->'entities')->>'value'`,
+              entityType: sql<string>`jsonb_array_elements(metadata->'semantics'->'entities')->>'type'`,
+              avgRelevance: sql<number>`AVG(CAST(jsonb_array_elements(metadata->'semantics'->'entities')->>'relevance' AS FLOAT))`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`metadata->'semantics'->'entities' IS NOT NULL`
+            ))
+            .groupBy(
+              sql`jsonb_array_elements(metadata->'semantics'->'entities')->>'value'`,
+              sql`jsonb_array_elements(metadata->'semantics'->'entities')->>'type'`
+            )
+            .orderBy(desc(sql`count(*)`))
+            .limit(limit);
+
+          results.results = {
+            entityTypes: entityTypesSemanticQuery.map((row: { entityType: string; count: number }) => ({
+              type: row.entityType || 'Unknown',
+              count: row.count,
+              percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+            })),
+            topEntities: topEntitiesQuery.map((row: { entityValue: string; entityType: string; avgRelevance: number; count: number }) => ({
+              entity: row.entityValue || 'Unknown',
+              type: row.entityType || 'Unknown',
+              mentions: row.count,
+              averageRelevance: Number((row.avgRelevance || 0).toFixed(3)),
+              percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+            }))
+          };
+          break;
+
+        case 'companies':
+          // Company mentions analysis from JSONB companies data
+          const companiesQuery = await db
+            .select({
+              companyName: sql<string>`jsonb_array_elements(metadata->'companies')->>'name'`,
+              symbol: sql<string>`jsonb_array_elements(metadata->'companies')->>'symbol'`,
+              exchange: sql<string>`jsonb_array_elements(metadata->'companies')->>'exchange'`,
+              avgTitleCount: sql<number>`AVG(CAST(jsonb_array_elements(metadata->'companies')->>'titleCount' AS INTEGER))`,
+              avgContentCount: sql<number>`AVG(CAST(jsonb_array_elements(metadata->'companies')->>'contentCount' AS INTEGER))`,
+              count: sql<number>`count(*)`
+            })
+            .from(metabaseArticles)
+            .where(and(
+              eq(metabaseArticles.isRevoked, false),
+              sql`metadata->'companies' IS NOT NULL AND jsonb_array_length(metadata->'companies') > 0`
+            ))
+            .groupBy(
+              sql`jsonb_array_elements(metadata->'companies')->>'name'`,
+              sql`jsonb_array_elements(metadata->'companies')->>'symbol'`,
+              sql`jsonb_array_elements(metadata->'companies')->>'exchange'`
+            )
+            .orderBy(desc(sql`count(*)`))
+            .limit(limit);
+
+          results.results = companiesQuery.map((row: { 
+            companyName: string; 
+            symbol: string; 
+            exchange: string; 
+            avgTitleCount: number; 
+            avgContentCount: number; 
+            count: number 
+          }) => ({
+            company: row.companyName || 'Unknown',
+            symbol: row.symbol || null,
+            exchange: row.exchange || null,
+            articleMentions: row.count,
+            averageTitleMentions: Math.round(row.avgTitleCount || 0),
+            averageContentMentions: Math.round(row.avgContentCount || 0),
+            percentage: Number(((row.count / totalArticles) * 100).toFixed(2))
+          }));
           break;
         
         default:
-          mockResults.results = [];
+          results.results = [];
+          results.error = `Unknown analysis type: ${analysisType}`;
+          results.availableTypes = [
+            'topics', 'sources', 'timeline', 'authors', 'licenses', 
+            'word_count', 'recent', 'compliance', 'sentiment', 'locations', 'entities', 'companies'
+          ];
       }
 
       logger.info('✅ Local analytics completed', {
         analysisType,
-        resultCount: Array.isArray(mockResults.results) ? mockResults.results.length : 1
+        totalArticles,
+        resultCount: Array.isArray(results.results) ? results.results.length : 1
       });
       
-      return mockResults;
+      return results;
     } catch (error) {
       logger.error('💥 Error in local analytics', {
         analysisType,

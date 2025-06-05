@@ -640,32 +640,46 @@ router.post('/processing/batch', authMiddleware, async (req, res) => {
  *   get:
  *     tags:
  *       - Metabase Utilities
- *     summary: Analyze cached data locally
+ *     summary: Analyze locally stored article data
  *     description: |
- *       Perform analytics on locally cached Metabase data without making API calls.
+ *       Perform analytics on articles stored in the local database from Metabase API calls.
  *       
- *       **Note**: This analyzes cached data only - does not call Metabase API.
+ *       **Analysis Types Available:**
+ *       - `topics` - Distribution of article topics from JSONB array
+ *       - `sources` - Distribution by news sources  
+ *       - `timeline` - Articles over time by publication date
+ *       - `authors` - Top authors by article count
+ *       - `licenses` - License distribution for compliance tracking
+ *       - `word_count` - Word count statistics (avg, min, max)
+ *       - `recent` - Recent activity in last 7 days
+ *       - `compliance` - Compliance statistics (revoked, licensed articles)
+ *       - `sentiment` - Sentiment analysis with positive/negative/neutral breakdown
+ *       - `locations` - Geographic distribution by countries, regions, and location types
+ *       - `entities` - Entity extraction analysis (people, companies, organizations)
+ *       - `companies` - Company mentions with stock symbols and exchange data
+ *       
+ *       **Note**: This is a local utility function - analyzes cached article data.
  *     security:
  *       - bearerAuth: []
  *     parameters:
  *       - in: query
- *         name: type
+ *         name: analysisType
+ *         required: true
  *         schema:
  *           type: string
- *           enum: [topics, sources, sentiment, timeline]
- *           default: topics
- *         description: Type of analysis to perform
+ *           enum: [topics, sources, timeline, authors, licenses, word_count, recent, compliance, sentiment, locations, entities, companies]
+ *         description: Type of analysis to perform on local article data
  *       - in: query
  *         name: limit
  *         schema:
  *           type: integer
  *           minimum: 1
  *           maximum: 100
- *           default: 20
- *         description: Number of results to return
+ *           default: 10
+ *         description: Maximum number of results to return (not applicable for word_count, recent, compliance)
  *     responses:
  *       200:
- *         description: Local analytics completed successfully
+ *         description: Analytics results retrieved successfully
  *         content:
  *           application/json:
  *             schema:
@@ -679,23 +693,162 @@ router.post('/processing/batch', authMiddleware, async (req, res) => {
  *                   properties:
  *                     analysisType:
  *                       type: string
+ *                       description: Type of analysis performed
+ *                     dataSource:
+ *                       type: string
+ *                       example: metabase_articles
+ *                     totalArticles:
+ *                       type: integer
+ *                       description: Total articles in database
+ *                     generatedAt:
+ *                       type: string
+ *                       format: date-time
+ *                       description: When analysis was generated
  *                     results:
- *                       type: array
- *                       items:
- *                         type: object
+ *                       oneOf:
+ *                         - type: array
+ *                           items:
+ *                             type: object
+ *                             properties:
+ *                               topic:
+ *                                 type: string
+ *                               count:
+ *                                 type: integer
+ *                               percentage:
+ *                                 type: number
+ *                           description: For topics, sources, timeline, authors, licenses analysis
+ *                         - type: object
+ *                           properties:
+ *                             averageWordCount:
+ *                               type: integer
+ *                             minimumWordCount:
+ *                               type: integer
+ *                             maximumWordCount:
+ *                               type: integer
+ *                           description: For word_count analysis
+ *                         - type: object
+ *                           properties:
+ *                             totalArticles:
+ *                               type: integer
+ *                             activeArticles:
+ *                               type: integer
+ *                             revokedArticles:
+ *                               type: integer
+ *                             revokedPercentage:
+ *                               type: number
+ *                           description: For compliance analysis
+ *                         - type: object
+ *                           properties:
+ *                             overallSentiment:
+ *                               type: object
+ *                               properties:
+ *                                 averageScore:
+ *                                   type: number
+ *                                   description: Average sentiment score (-1 to 1)
+ *                                 positiveArticles:
+ *                                   type: integer
+ *                                 negativeArticles:
+ *                                   type: integer
+ *                                 positivePercentage:
+ *                                   type: number
+ *                             entityTypes:
+ *                               type: array
+ *                               items:
+ *                                 type: object
+ *                                 properties:
+ *                                   entityType:
+ *                                     type: string
+ *                                   count:
+ *                                     type: integer
+ *                           description: For sentiment analysis
+ *                         - type: object
+ *                           properties:
+ *                             countries:
+ *                               type: array
+ *                               items:
+ *                                 type: object
+ *                                 properties:
+ *                                   country:
+ *                                     type: string
+ *                                   count:
+ *                                     type: integer
+ *                                   percentage:
+ *                                     type: number
+ *                             regions:
+ *                               type: array
+ *                               items:
+ *                                 type: object
+ *                                 properties:
+ *                                   region:
+ *                                     type: string
+ *                                   count:
+ *                                     type: integer
+ *                           description: For geographic locations analysis
+ *                         - type: object
+ *                           properties:
+ *                             entityTypes:
+ *                               type: array
+ *                               items:
+ *                                 type: object
+ *                                 properties:
+ *                                   type:
+ *                                     type: string
+ *                                   count:
+ *                                     type: integer
+ *                             topEntities:
+ *                               type: array
+ *                               items:
+ *                                 type: object
+ *                                 properties:
+ *                                   entity:
+ *                                     type: string
+ *                                   type:
+ *                                     type: string
+ *                                   mentions:
+ *                                     type: integer
+ *                                   averageRelevance:
+ *                                     type: number
+ *                           description: For entity analysis
+ *                         - type: array
+ *                           items:
+ *                             type: object
+ *                             properties:
+ *                               company:
+ *                                 type: string
+ *                               symbol:
+ *                                 type: string
+ *                               exchange:
+ *                                 type: string
+ *                               articleMentions:
+ *                                 type: integer
+ *                               averageTitleMentions:
+ *                                 type: integer
+ *                           description: For company mentions analysis
+ *       400:
+ *         description: Invalid analysis type or parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/analytics/local', authMiddleware, async (req, res) => {
   try {
-    const { type = 'topics', limit = 20 } = req.query;
+    const { analysisType, limit = 10 } = req.query;
 
     logger.info('🔍 Performing local analytics on cached data', {
       userId: req.user?.id,
-      analysisType: type,
+      analysisType,
       limit: parseInt(limit as string)
     });
 
     const results = await metabaseService.analyzeLocalData(
-      type as string, 
+      analysisType as string, 
       parseInt(limit as string)
     );
 
