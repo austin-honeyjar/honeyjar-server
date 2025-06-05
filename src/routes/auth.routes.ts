@@ -1,8 +1,13 @@
-import { Router } from 'express';
+import express from 'express';
+import { Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
+import { z } from 'zod';
+import { validateRequest } from '../middleware/validation.middleware';
+import logger from '../utils/logger';
 import { authController } from '../controllers/auth.controller';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { requireOrgRole } from '../middleware/org.middleware';
-import { validate } from '../middleware/validation.middleware';
+import { AuthService } from '../services/auth.service';
 import { 
   loginSchema, 
   registerSchema, 
@@ -11,13 +16,10 @@ import {
   resetPasswordSchema,
   verifyEmailSchema
 } from '../validators/auth.validator';
-import logger from '../utils/logger';
-import { AuthService } from '../services/auth.service';
 import { AuthRequest } from '../types/request';
 import { ApiError } from '../utils/error';
-import jwt from 'jsonwebtoken';
 
-const router = Router();
+const router = express.Router();
 
 // Apply logging middleware to all routes
 router.use((req, res, next) => {
@@ -175,7 +177,7 @@ router.post('/login', async (req: AuthRequest, res) => {
  *         description: Invalid refresh token
  */
 router.post('/refresh', 
-  validate(refreshTokenSchema),
+  validateRequest(refreshTokenSchema),
   authController.refreshToken
 );
 
@@ -237,7 +239,7 @@ router.post('/logout',
  *         description: Invalid token
  */
 router.post('/verify-email', 
-  validate(verifyEmailSchema),
+  validateRequest(verifyEmailSchema),
   authController.verifyEmail
 );
 
@@ -299,7 +301,7 @@ router.post('/forgot-password',
  *         description: Invalid token
  */
 router.post('/reset-password', 
-  validate(resetPasswordSchema),
+  validateRequest(resetPasswordSchema),
   authController.resetPassword
 );
 
@@ -338,7 +340,7 @@ router.post('/reset-password',
  */
 router.post('/change-password', 
   authMiddleware,
-  validate(changePasswordSchema),
+  validateRequest(changePasswordSchema),
   authController.changePassword
 );
 

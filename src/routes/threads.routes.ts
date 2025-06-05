@@ -6,7 +6,7 @@ import { Thread } from '../types/thread';
 import { db } from '../db';
 import { chatThreads, chatMessages, workflows, workflowSteps } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
-import { validate } from '../middleware/validation.middleware';
+import { validateRequest } from '../middleware/validation.middleware';
 import { createChatSchema } from '../validators/chat.validator';
 import { chatController } from '../controllers/chatController';
 import { requireOrgRole } from '../middleware/org.middleware';
@@ -14,6 +14,8 @@ import { WorkflowDBService } from '../services/workflowDB.service';
 import { ChatService } from '../services/chat.service';
 import { WorkflowService } from '../services/workflow.service';
 import { simpleCache } from '../utils/simpleCache';
+import { requirePermission } from '../middleware/permissions.middleware';
+import { ApiError } from '../utils/error';
 
 const router = Router();
 
@@ -601,7 +603,7 @@ router.delete('/:id', async (req: AuthRequest, res) => {
  */
 router.post('/:threadId/messages', 
   requireOrgRole(['admin', 'member']),
-  validate(createChatSchema), 
+  validateRequest(createChatSchema), 
   chatController.create
 );
 

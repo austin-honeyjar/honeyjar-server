@@ -13,7 +13,7 @@ import csvRoutes from './routes/csv.routes';
 import chatRoutes from './routes/chat.routes';
 import threadsRoutes from './routes/threads.routes';
 import assetRoutes from './routes/asset.routes';
-import partnersRoutes from './routes/partners.routes';
+import metabaseRoutes from './routes/metabase.routes';
 import { WorkflowService } from './services/workflow.service';
 import { db, ensureTables } from './db/index';
 import { sql } from 'drizzle-orm';
@@ -32,7 +32,7 @@ app.use(config.server.apiPrefix + '/auth', authRoutes);
 app.use(config.server.apiPrefix + '/csv', csvRoutes);
 app.use(config.server.apiPrefix + '/chat', chatRoutes);
 app.use(config.server.apiPrefix + '/threads', threadsRoutes);
-app.use(config.server.apiPrefix + '/partners', partnersRoutes);
+app.use(config.server.apiPrefix + '/metabase', metabaseRoutes);
 app.use(config.server.apiPrefix, assetRoutes);
 
 // Health check routes (unversioned)

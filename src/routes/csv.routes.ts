@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getAllTables, createTable, deleteTable } from '../controllers/csvController';
-import { validate } from '../middleware/validation.middleware';
+import { validateRequest } from '../middleware/validation.middleware';
 import { createTableSchema, deleteTableSchema } from '../validators/csv.validator';
 import { requirePermission } from '../middleware/permissions.middleware';
 import logger from '../utils/logger';
@@ -135,7 +135,7 @@ router.get('/tables',
 router.post('/tables', 
   requirePermission('admin_panel'),
   requireOrgRole(['admin']),
-  validate(createTableSchema),
+  validateRequest(createTableSchema),
   createTable
 );
 
@@ -188,7 +188,7 @@ router.post('/tables',
 router.delete('/tables', 
   requirePermission('admin_panel'),
   requireOrgRole(['admin']),
-  validate(deleteTableSchema),
+  validateRequest(deleteTableSchema),
   deleteTable
 );
 

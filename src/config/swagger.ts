@@ -181,6 +181,11 @@ const options: swaggerJsdoc.Options = {
               format: 'date-time',
               description: 'When the article was published',
             },
+            updateDate: {
+              type: 'string',
+              format: 'date-time',
+              description: 'When the article was last updated (optional)',
+            },
             author: {
               type: 'string',
               description: 'Author of the article (optional)',
@@ -192,12 +197,34 @@ const options: swaggerJsdoc.Options = {
               },
               description: 'Array of topics/categories related to the article',
             },
+            licenses: {
+              type: 'array',
+              items: {
+                type: 'string'
+              },
+              description: 'Array of license names for compliance tracking',
+              example: ['NLA', 'Reuters']
+            },
             metadata: {
               type: 'object',
               description: 'Additional metadata about the article (optional)',
+              properties: {
+                sequenceId: {
+                  type: 'string',
+                  description: 'Sequence ID for pagination and avoiding duplicates'
+                },
+                language: {
+                  type: 'string',
+                  description: 'Language of the article'
+                },
+                wordCount: {
+                  type: 'integer',
+                  description: 'Number of words in the article'
+                }
+              }
             },
           },
-          required: ['id', 'title', 'summary', 'url', 'source', 'publishedAt', 'topics'],
+          required: ['id', 'title', 'summary', 'url', 'source', 'publishedAt', 'topics', 'licenses'],
         },
         ArticleSearchResponse: {
           type: 'object',
@@ -220,6 +247,11 @@ const options: swaggerJsdoc.Options = {
             nextPage: {
               type: 'string',
               description: 'Token or URL for the next page of results (optional)',
+            },
+            lastSequenceId: {
+              type: 'string',
+              description: 'Sequence ID from the last article - use this for the next API call to avoid duplicates (optional)',
+              example: '1782454301592'
             },
           },
           required: ['articles', 'totalCount', 'hasMore'],
