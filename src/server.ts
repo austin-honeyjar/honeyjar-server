@@ -14,6 +14,7 @@ import chatRoutes from './routes/chat.routes';
 import threadsRoutes from './routes/threads.routes';
 import assetRoutes from './routes/asset.routes';
 import metabaseRoutes from './routes/metabase.routes';
+import rocketreachRoutes from './routes/rocketreach.routes';
 import { WorkflowService } from './services/workflow.service';
 import { db, ensureTables } from './db/index';
 import { sql } from 'drizzle-orm';
@@ -33,6 +34,7 @@ app.use(config.server.apiPrefix + '/csv', csvRoutes);
 app.use(config.server.apiPrefix + '/chat', chatRoutes);
 app.use(config.server.apiPrefix + '/threads', threadsRoutes);
 app.use(config.server.apiPrefix + '/metabase', metabaseRoutes);
+app.use(config.server.apiPrefix + '/rocketreach', rocketreachRoutes);
 app.use(config.server.apiPrefix, assetRoutes);
 
 // Health check routes (unversioned)

@@ -36,6 +36,84 @@ export const complianceClicksSchema = z.object({
   })).min(1).max(100) // Allow up to 100 articles per batch
 });
 
+// =============================================================================
+// ROCKETREACH API VALIDATION SCHEMAS
+// =============================================================================
+
+export const rocketReachPersonLookupSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  first_name: z.string().min(1).max(50).optional(),
+  last_name: z.string().min(1).max(50).optional(),
+  email: z.string().email().optional(),
+  current_employer: z.string().min(1).max(100).optional(),
+  current_title: z.string().min(1).max(100).optional(),
+  linkedin_url: z.string().url().optional(),
+  location: z.string().min(1).max(100).optional()
+}).refine(
+  (data) => data.name || (data.first_name && data.last_name) || data.email || data.current_employer,
+  {
+    message: "At least one identifier is required: name, first_name+last_name, email, or current_employer"
+  }
+);
+
+export const rocketReachPersonSearchSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  current_employer: z.string().min(1).max(100).optional(),
+  current_title: z.string().min(1).max(100).optional(),
+  location: z.string().min(1).max(100).optional(),
+  keyword: z.string().min(1).max(100).optional(),
+  start: z.coerce.number().min(0).default(0),
+  size: z.coerce.number().min(1).max(25).default(10)
+});
+
+export const rocketReachCompanySearchSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  domain: z.string().min(1).max(100).optional(),
+  industry: z.string().min(1).max(100).optional(),
+  location: z.string().min(1).max(100).optional(),
+  employees_min: z.coerce.number().min(1).optional(),
+  employees_max: z.coerce.number().min(1).optional(),
+  revenue_min: z.string().optional(),
+  revenue_max: z.string().optional(),
+  founded_after: z.coerce.number().min(1800).max(new Date().getFullYear()).optional(),
+  founded_before: z.coerce.number().min(1800).max(new Date().getFullYear()).optional(),
+  start: z.coerce.number().min(0).default(0),
+  size: z.coerce.number().min(1).max(25).default(10)
+});
+
+export const rocketReachCompanyLookupSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  domain: z.string().min(1).max(100).optional(),
+  linkedin_url: z.string().url().optional()
+}).refine(
+  (data) => data.name || data.domain || data.linkedin_url,
+  {
+    message: "At least one identifier is required: name, domain, or linkedin_url"
+  }
+);
+
+export const rocketReachBulkLookupSchema = z.object({
+  lookups: z.array(z.object({
+    name: z.string().min(1).max(100).optional(),
+    first_name: z.string().min(1).max(50).optional(),
+    last_name: z.string().min(1).max(50).optional(),
+    current_employer: z.string().min(1).max(100).optional(),
+    current_title: z.string().min(1).max(100).optional(),
+    email: z.string().email().optional(),
+    linkedin_url: z.string().url().optional()
+  }).refine(
+    (data) => data.name || (data.first_name && data.last_name) || data.email || data.current_employer,
+    {
+      message: "Each lookup must have at least one identifier"
+    }
+  )).min(10).max(100), // Minimum 10, maximum 100 lookups per batch
+  webhook_id: z.string().uuid().optional()
+});
+
+export const rocketReachLookupStatusSchema = z.object({
+  id: z.string().min(1, "Lookup ID is required")
+});
+
 // Validation middleware factory
 export function validateRequest(schema: z.ZodSchema) {
   return (req: Request, res: Response, next: NextFunction) => {

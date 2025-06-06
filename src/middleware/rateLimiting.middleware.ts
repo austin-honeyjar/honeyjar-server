@@ -155,6 +155,37 @@ export const authRateLimit: RateLimitRequestHandler = rateLimit({
   }
 });
 
+// RocketReach API rate limiting (based on their limits)
+export const rocketReachRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100, // Match their 100/minute limit for most endpoints
+  message: {
+    status: 'error',
+    message: 'Too many RocketReach requests, please try again later',
+    retryAfter: '60 seconds'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    // Rate limit per user for RocketReach
+    return `rocketreach:${req.user?.id || req.ip}`;
+  }
+});
+
+// Specific rate limit for person lookups (higher credit cost)
+export const rocketReachPersonLookupLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute  
+  max: 50, // More conservative for credit-consuming lookups
+  message: {
+    status: 'error',
+    message: 'Too many person lookup requests, please try again later',
+    retryAfter: '60 seconds'
+  },
+  keyGenerator: (req) => {
+    return `rocketreach:person:${req.user?.id || req.ip}`;
+  }
+});
+
 // Function to get rate limit statistics
 export function getRateLimitStats() {
   const now = new Date();

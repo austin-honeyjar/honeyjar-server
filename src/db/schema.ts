@@ -59,6 +59,9 @@ export const complianceStatusEnum = pgEnum('compliance_status', ['compliant', 'o
 // Metabase API call type enum
 export const apiCallTypeEnum = pgEnum('api_call_type', ['articles', 'search', 'revoked', 'compliance_clicks']);
 
+// RocketReach API call type enum
+export const rocketReachApiCallTypeEnum = pgEnum('rocketreach_api_call_type', ['person_lookup', 'person_search', 'company_lookup', 'company_search', 'bulk_lookup', 'account']);
+
 // Workflow templates table
 export const workflowTemplates = pgTable('workflow_templates', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -198,6 +201,97 @@ export const metabaseApiCalls = pgTable('metabase_api_calls', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+// =============================================================================
+// ROCKETREACH API INTEGRATION TABLES
+// =============================================================================
+
+// RocketReach person profiles storage
+export const rocketReachPersons = pgTable('rocketreach_persons', {
+  id: integer('id').primaryKey(), // RocketReach person ID
+  name: text('name').notNull(),
+  firstName: text('first_name'),
+  lastName: text('last_name'),
+  middleName: text('middle_name'),
+  currentEmployer: text('current_employer'),
+  currentTitle: text('current_title'),
+  linkedinUrl: text('linkedin_url'),
+  profilePic: text('profile_pic'),
+  location: text('location'),
+  city: text('city'),
+  state: text('state'),
+  country: text('country'),
+  emails: jsonb('emails').notNull().default('[]'), // Array of email objects
+  phones: jsonb('phones').notNull().default('[]'), // Array of phone objects
+  socialMedia: jsonb('social_media').default('{}'), // Social media profiles
+  workHistory: jsonb('work_history').notNull().default('[]'), // Work experience
+  education: jsonb('education').notNull().default('[]'), // Education history
+  metadata: jsonb('metadata').notNull().default('{}'), // Additional RocketReach fields
+  creditsUsed: integer('credits_used').default(1), // Credits consumed for this lookup
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// RocketReach company profiles storage
+export const rocketReachCompanies = pgTable('rocketreach_companies', {
+  id: integer('id').primaryKey(), // RocketReach company ID
+  name: text('name').notNull(),
+  domain: text('domain'),
+  linkedinUrl: text('linkedin_url'),
+  website: text('website'),
+  description: text('description'),
+  industry: text('industry'),
+  location: text('location'),
+  city: text('city'),
+  state: text('state'),
+  country: text('country'),
+  foundedYear: integer('founded_year'),
+  employees: integer('employees'),
+  revenue: text('revenue'),
+  technologyStack: jsonb('technology_stack').notNull().default('[]'), // Array of technologies
+  socialMedia: jsonb('social_media').default('{}'), // Social media profiles
+  metadata: jsonb('metadata').notNull().default('{}'), // Additional RocketReach fields
+  creditsUsed: integer('credits_used').default(1), // Credits consumed for this lookup
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// RocketReach API calls logging
+export const rocketReachApiCalls = pgTable('rocketreach_api_calls', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  callType: rocketReachApiCallTypeEnum('call_type').notNull(),
+  endpoint: text('endpoint').notNull(),
+  parameters: jsonb('parameters').notNull().default('{}'),
+  responseStatus: integer('response_status'),
+  responseTime: integer('response_time'), // milliseconds
+  recordsReturned: integer('records_returned').default(0),
+  creditsUsed: integer('credits_used').default(0), // Credits consumed
+  creditsRemaining: integer('credits_remaining'), // Credits remaining after call
+  errorMessage: text('error_message'),
+  errorCode: text('error_code'), // RocketReach error codes
+  cacheHit: boolean('cache_hit').notNull().default(false),
+  userId: text('user_id'), // Track which user made the call
+  metadata: jsonb('metadata').default('{}'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// RocketReach bulk lookup tracking
+export const rocketReachBulkLookups = pgTable('rocketreach_bulk_lookups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  rocketReachRequestId: text('rocketreach_request_id').notNull().unique(), // ID from RocketReach
+  status: text('status').notNull(), // pending, processing, complete, failed
+  lookupCount: integer('lookup_count').notNull(),
+  webhookId: text('webhook_id'),
+  estimatedCompletionTime: timestamp('estimated_completion_time', { withTimezone: true }),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  results: jsonb('results').default('[]'), // Webhook results when completed
+  creditsUsed: integer('credits_used').default(0),
+  errorMessage: text('error_message'),
+  userId: text('user_id'), // Track which user initiated the bulk lookup
+  metadata: jsonb('metadata').default('{}'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Define relations
 export const chatThreadsRelations = relations(chatThreads, ({ many }: { many: any }) => ({
   messages: many(chatMessages),
@@ -273,4 +367,16 @@ export const metabaseRevokedArticlesRelations = relations(metabaseRevokedArticle
     fields: [metabaseRevokedArticles.complianceCheckId],
     references: [metabaseComplianceStatus.id],
   }),
+}));
+
+// =============================================================================
+// ROCKETREACH TABLE RELATIONS
+// =============================================================================
+
+export const rocketReachApiCallsRelations = relations(rocketReachApiCalls, ({ one }: { one: any }) => ({
+  // Relations can be added here if needed for user tracking
+}));
+
+export const rocketReachBulkLookupsRelations = relations(rocketReachBulkLookups, ({ one }: { one: any }) => ({
+  // Relations can be added here if needed for user tracking
 })); 
