@@ -201,10 +201,50 @@ export const ROCKETREACH_ERROR_CODES = {
   503: 'Service Unavailable'
 } as const;
 
+interface RocketReachContact {
+  id?: string;
+  name?: string;
+  firstName?: string;
+  lastName?: string;
+  title?: string;
+  currentEmployer?: string;
+  email?: string;
+  personalEmail?: string;
+  workEmail?: string;
+  phone?: string;
+  personalPhone?: string;
+  workPhone?: string;
+  linkedin?: string;
+  twitter?: string;
+  facebook?: string;
+  profileUrl?: string;
+}
+
+interface RocketReachSearchResult {
+  profiles: RocketReachContact[];
+  totalCount: number;
+  hasMore: boolean;
+}
+
+interface EnrichedContact {
+  authorId: string;
+  name: string;
+  title?: string;
+  organization?: string;
+  email?: string;
+  phone?: string;
+  linkedin?: string;
+  twitter?: string;
+  confidence: 'high' | 'medium' | 'low';
+  source: 'rocketreach' | 'database' | 'fallback';
+  enrichmentScore: number;
+}
+
 export class RocketReachService {
   private client: AxiosInstance;
   private apiKey: string;
   private baseUrl: string;
+  private rateLimitDelay = 1000; // 1 second between requests
 
   constructor() {
     this.apiKey = process.env.ROCKETREACH_API_KEY || '';
@@ -217,8 +257,7 @@ export class RocketReachService {
     });
     
     if (!this.apiKey) {
-      logger.error('ROCKETREACH_API_KEY environment variable is missing');
-      throw new Error('ROCKETREACH_API_KEY environment variable is required');
+      logger.warn('RocketReach API key not configured. Contact enrichment will use fallback methods.');
     }
 
     this.client = axios.create({
@@ -682,4 +721,220 @@ export class RocketReachService {
     if (endpoint.includes('account')) return 'account';
     return 'unknown';
   }
-} 
+
+  /**
+   * Search for a contact by name and organization
+   */
+  async searchContact(name: string, organization?: string): Promise<RocketReachContact | null> {
+    if (!this.apiKey) {
+      logger.warn('RocketReach API key not available, skipping search', { name, organization });
+      return null;
+    }
+
+    try {
+      await this.enforceRateLimit();
+
+      const searchParams: any = {
+        name: name,
+        current_employer: organization,
+        start: 0,
+        size: 5 // Get top 5 results
+      };
+
+      const response = await this.client.get('/search', {
+        params: searchParams
+      });
+
+      if (response.data?.profiles && response.data.profiles.length > 0) {
+        // Return the best match (first result)
+        return response.data.profiles[0];
+      }
+
+      return null;
+
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 429) {
+          logger.warn('RocketReach rate limit exceeded', { name, organization });
+          // Increase delay for next request
+          this.rateLimitDelay = Math.min(this.rateLimitDelay * 2, 10000);
+        } else if (error.response?.status === 401) {
+          logger.error('RocketReach API authentication failed');
+        } else {
+          logger.error('RocketReach API error', { 
+            status: error.response?.status,
+            message: error.message,
+            name,
+            organization
+          });
+        }
+      } else {
+        logger.error('Unexpected error in RocketReach search', { error: (error as Error).message });
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Enrich contact information for multiple authors
+   */
+  async enrichContacts(authors: Array<{
+    id: string;
+    name: string;
+    organization?: string;
+    email?: string;
+    relevanceScore: number;
+    articleCount: number;
+    topics: string[];
+  }>): Promise<EnrichedContact[]> {
+    const enrichedContacts: EnrichedContact[] = [];
+
+    for (const author of authors) {
+      try {
+        const enrichedContact = await this.enrichSingleContact(author);
+        if (enrichedContact) {
+          enrichedContacts.push(enrichedContact);
+        }
+      } catch (error) {
+        logger.error('Failed to enrich contact', {
+          authorId: author.id,
+          name: author.name,
+          error: (error as Error).message
+        });
+        
+        // Add fallback contact info
+        enrichedContacts.push({
+          authorId: author.id,
+          name: author.name,
+          organization: author.organization,
+          email: author.email,
+          confidence: 'low',
+          source: 'database',
+          enrichmentScore: 1.0
+        });
+      }
+    }
+
+    return enrichedContacts;
+  }
+
+  /**
+   * Enrich a single contact
+   */
+  private async enrichSingleContact(author: {
+    id: string;
+    name: string;
+    organization?: string;
+    email?: string;
+    relevanceScore: number;
+  }): Promise<EnrichedContact | null> {
+    
+    const rocketReachContact = await this.searchContact(author.name, author.organization);
+    
+    if (rocketReachContact) {
+      return {
+        authorId: author.id,
+        name: rocketReachContact.name || author.name,
+        title: rocketReachContact.title,
+        organization: rocketReachContact.currentEmployer || author.organization,
+        email: rocketReachContact.workEmail || rocketReachContact.email || author.email,
+        phone: rocketReachContact.workPhone || rocketReachContact.phone,
+        linkedin: rocketReachContact.linkedin,
+        twitter: rocketReachContact.twitter,
+        confidence: this.calculateConfidence(rocketReachContact, author),
+        source: 'rocketreach',
+        enrichmentScore: this.calculateEnrichmentScore(rocketReachContact)
+      };
+    }
+
+    // Fallback to database information
+    return {
+      authorId: author.id,
+      name: author.name,
+      organization: author.organization,
+      email: author.email,
+      confidence: author.email ? 'medium' : 'low',
+      source: 'database',
+      enrichmentScore: author.email ? 5.0 : 1.0
+    };
+  }
+
+  /**
+   * Calculate confidence level based on match quality
+   */
+  private calculateConfidence(
+    rocketReachContact: RocketReachContact, 
+    author: { name: string; organization?: string }
+  ): 'high' | 'medium' | 'low' {
+    let score = 0;
+
+    // Name match quality
+    if (rocketReachContact.name?.toLowerCase() === author.name.toLowerCase()) {
+      score += 3;
+    } else if (rocketReachContact.name?.toLowerCase().includes(author.name.toLowerCase())) {
+      score += 2;
+    } else {
+      score += 1;
+    }
+
+    // Organization match
+    if (author.organization && rocketReachContact.currentEmployer) {
+      if (rocketReachContact.currentEmployer.toLowerCase().includes(author.organization.toLowerCase())) {
+        score += 2;
+      }
+    }
+
+    // Contact info completeness
+    if (rocketReachContact.email || rocketReachContact.workEmail) score += 1;
+    if (rocketReachContact.phone || rocketReachContact.workPhone) score += 1;
+    if (rocketReachContact.linkedin) score += 1;
+
+    if (score >= 6) return 'high';
+    if (score >= 4) return 'medium';
+    return 'low';
+  }
+
+  /**
+   * Calculate enrichment score based on available contact information
+   */
+  private calculateEnrichmentScore(contact: RocketReachContact): number {
+    let score = 0;
+    
+    if (contact.email || contact.workEmail) score += 3;
+    if (contact.phone || contact.workPhone) score += 2;
+    if (contact.linkedin) score += 2;
+    if (contact.twitter) score += 1;
+    if (contact.title) score += 1;
+    if (contact.currentEmployer) score += 1;
+
+    return score;
+  }
+
+  /**
+   * Enforce rate limiting
+   */
+  private async enforceRateLimit(): Promise<void> {
+    return new Promise(resolve => {
+      setTimeout(resolve, this.rateLimitDelay);
+    });
+  }
+
+  /**
+   * Get API status and usage information
+   */
+  async getApiStatus(): Promise<{
+    available: boolean;
+    rateLimitDelay: number;
+    message: string;
+  }> {
+    return {
+      available: !!this.apiKey,
+      rateLimitDelay: this.rateLimitDelay,
+      message: this.apiKey 
+        ? 'RocketReach API configured and available'
+        : 'RocketReach API key not configured'
+    };
+  }
+}
+
+export type { EnrichedContact }; 

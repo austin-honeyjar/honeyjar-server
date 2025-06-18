@@ -457,8 +457,8 @@ export class MetabaseService {
 
     // Add sequenceId if provided (for pagination)
     if (params.sequenceId) {
-      requestParams.sequenceId = params.sequenceId;
-      logger.debug('➕ Added sequenceId parameter for pagination', { sequenceId: params.sequenceId });
+      requestParams.sequence_id = params.sequenceId;
+      logger.debug('➕ Added sequence_id parameter for pagination', { sequenceId: params.sequenceId });
     }
     
     // Add format parameter (JSON is more reliable than XML)

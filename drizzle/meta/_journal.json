@@ -43,6 +43,13 @@
       "when": 1745660687290,
       "tag": "0005_loving_lady_deathstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1750145188423,
+      "tag": "0006_glossy_rocket_racer",
+      "breakpoints": true
     }
   ]
 }

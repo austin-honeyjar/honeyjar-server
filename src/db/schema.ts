@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, uuid, jsonb, integer, pgEnum, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, timestamp, uuid, jsonb, integer, pgEnum, boolean, real } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 // CSV Metadata table
@@ -61,6 +61,19 @@ export const apiCallTypeEnum = pgEnum('api_call_type', ['articles', 'search', 'r
 
 // RocketReach API call type enum
 export const rocketReachApiCallTypeEnum = pgEnum('rocketreach_api_call_type', ['person_lookup', 'person_search', 'company_lookup', 'company_search', 'bulk_lookup', 'account']);
+
+// =============================================================================
+// NEWS PIPELINE ENUMS
+// =============================================================================
+
+// News pipeline run status enum
+export const pipelineRunStatusEnum = pgEnum('pipeline_run_status', ['running', 'completed', 'failed', 'partial']);
+
+// News pipeline run type enum  
+export const pipelineRunTypeEnum = pgEnum('pipeline_run_type', ['daily_sync', 'author_scoring', 'cleanup', 'manual']);
+
+// Monitoring event severity enum
+export const monitoringEventSeverityEnum = pgEnum('monitoring_event_severity', ['low', 'medium', 'high', 'critical']);
 
 // Workflow templates table
 export const workflowTemplates = pgTable('workflow_templates', {
@@ -129,6 +142,81 @@ export const assets = pgTable('assets', {
   metadata: jsonb('metadata'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// =============================================================================
+// NEWS PIPELINE TABLES
+// =============================================================================
+
+// News author relevance tracking and scoring
+export const newsAuthors = pgTable('news_authors', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  email: text('email'),
+  organization: text('organization'),
+  domain: text('domain'), // Company domain for contact matching
+  relevanceScore: real('relevance_score').notNull().default(0.0),
+  articleCount: integer('article_count').notNull().default(0),
+  recentActivityScore: real('recent_activity_score').notNull().default(0.0),
+  topics: jsonb('topics').notNull().default('[]'), // Areas of expertise/coverage
+  locations: jsonb('locations').notNull().default('[]'), // Geographic coverage areas
+  contactInfo: jsonb('contact_info').default('{}'), // Phone, social media, etc.
+  lastArticleDate: timestamp('last_article_date', { withTimezone: true }),
+  firstSeenDate: timestamp('first_seen_date', { withTimezone: true }).defaultNow(),
+  metadata: jsonb('metadata').notNull().default('{}'), // Additional scoring factors
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// News pipeline processing runs and logs
+export const newsPipelineRuns = pgTable('news_pipeline_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runType: pipelineRunTypeEnum('run_type').notNull(),
+  status: pipelineRunStatusEnum('status').notNull(),
+  articlesProcessed: integer('articles_processed').default(0),
+  articlesFiltered: integer('articles_filtered').default(0), // Articles that passed filtering
+  authorsUpdated: integer('authors_updated').default(0),
+  authorsCreated: integer('authors_created').default(0),
+  recordsCleaned: integer('records_cleaned').default(0),
+  executionTime: integer('execution_time'), // milliseconds
+  sequenceIdStart: text('sequence_id_start'), // Starting sequence ID for sync
+  sequenceIdEnd: text('sequence_id_end'), // Ending sequence ID for sync
+  errorMessage: text('error_message'),
+  errorCode: text('error_code'),
+  filtersApplied: jsonb('filters_applied').default('{}'), // Record what filters were used
+  metadata: jsonb('metadata').default('{}'),
+  startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+});
+
+// Production monitoring and alerting events
+export const monitoringEvents = pgTable('monitoring_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  eventType: text('event_type').notNull(), // 'alert', 'error', 'performance', 'compliance', 'health'
+  severity: monitoringEventSeverityEnum('severity').notNull(),
+  source: text('source').notNull(), // 'news_pipeline', 'compliance', 'api', 'database', 'monitoring'
+  title: text('title').notNull(),
+  message: text('message').notNull(),
+  details: jsonb('details').default('{}'),
+  affectedServices: jsonb('affected_services').default('[]'), // Which services are impacted
+  resolved: boolean('resolved').default(false),
+  resolvedBy: text('resolved_by'), // User or system that resolved
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  escalated: boolean('escalated').default(false),
+  escalatedAt: timestamp('escalated_at', { withTimezone: true }),
+  notificationSent: boolean('notification_sent').default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Author-Article relationship tracking (for scoring)
+export const newsAuthorArticles = pgTable('news_author_articles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  authorId: uuid('author_id').notNull().references(() => newsAuthors.id, { onDelete: 'cascade' }),
+  articleId: text('article_id').notNull().references(() => metabaseArticles.id, { onDelete: 'cascade' }),
+  role: text('role').default('author'), // 'author', 'contributor', 'editor', 'source'
+  relevanceScore: real('relevance_score').default(1.0), // How relevant this article is to the author
+  extractedFrom: text('extracted_from').default('byline'), // 'byline', 'content', 'metadata'
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // =============================================================================
@@ -379,4 +467,31 @@ export const rocketReachApiCallsRelations = relations(rocketReachApiCalls, ({ on
 
 export const rocketReachBulkLookupsRelations = relations(rocketReachBulkLookups, ({ one }: { one: any }) => ({
   // Relations can be added here if needed for user tracking
+}));
+
+// =============================================================================
+// NEWS PIPELINE TABLE RELATIONS
+// =============================================================================
+
+export const newsAuthorsRelations = relations(newsAuthors, ({ many }: { many: any }) => ({
+  authorArticles: many(newsAuthorArticles),
+}));
+
+export const newsAuthorArticlesRelations = relations(newsAuthorArticles, ({ one }: { one: any }) => ({
+  author: one(newsAuthors, {
+    fields: [newsAuthorArticles.authorId],
+    references: [newsAuthors.id],
+  }),
+  article: one(metabaseArticles, {
+    fields: [newsAuthorArticles.articleId],
+    references: [metabaseArticles.id],
+  }),
+}));
+
+export const newsPipelineRunsRelations = relations(newsPipelineRuns, ({ one }: { one: any }) => ({
+  // Relations can be added here if needed
+}));
+
+export const monitoringEventsRelations = relations(monitoringEvents, ({ one }: { one: any }) => ({
+  // Relations can be added here if needed
 })); 
