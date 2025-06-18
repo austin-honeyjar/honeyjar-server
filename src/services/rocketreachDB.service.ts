@@ -12,12 +12,27 @@ export class RocketReachDBService {
   async storePerson(personData: any, creditsUsed: number = 1): Promise<void> {
     try {
       // Extract person data from RocketReach response
-      const rawPerson = personData.person || personData; // Handle both nested and direct structures
+      // Handle both nested (response.person) and direct response structures
+      const rawPerson = personData.person || personData;
       
       if (!rawPerson || !rawPerson.id) {
-        logger.warn('No valid person data to store', { personData });
+        logger.warn('No valid person data to store', { 
+          personData,
+          hasId: !!rawPerson?.id,
+          hasNestedPerson: !!personData.person,
+          topLevelKeys: Object.keys(personData || {})
+        });
         return;
       }
+
+      logger.info('📝 Processing person data for storage', {
+        personId: rawPerson.id,
+        name: rawPerson.name,
+        hasEmails: !!(rawPerson.emails && rawPerson.emails.length > 0),
+        hasPhones: !!(rawPerson.phones && rawPerson.phones.length > 0),
+        currentEmployer: rawPerson.current_employer,
+        structure: personData.person ? 'nested' : 'direct'
+      });
 
       const person = {
         id: rawPerson.id,
@@ -65,13 +80,16 @@ export class RocketReachDBService {
       logger.info('✅ Person data stored successfully', {
         personId: person.id,
         name: person.name,
-        creditsUsed
+        creditsUsed,
+        emailCount: person.emails.length,
+        phoneCount: person.phones.length
       });
 
     } catch (error) {
       logger.error('💥 Failed to store person data', {
         personId: personData?.id || personData?.person?.id,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
       });
       throw error;
     }
@@ -83,12 +101,27 @@ export class RocketReachDBService {
   async storeCompany(companyData: any, creditsUsed: number = 1): Promise<void> {
     try {
       // Extract company data from RocketReach response
-      const rawCompany = companyData.company || companyData; // Handle both nested and direct structures
+      // Handle both nested (response.company) and direct response structures
+      const rawCompany = companyData.company || companyData;
       
       if (!rawCompany || !rawCompany.id) {
-        logger.warn('No valid company data to store', { companyData });
+        logger.warn('No valid company data to store', { 
+          companyData,
+          hasId: !!rawCompany?.id,
+          hasNestedCompany: !!companyData.company,
+          topLevelKeys: Object.keys(companyData || {})
+        });
         return;
       }
+
+      logger.info('📝 Processing company data for storage', {
+        companyId: rawCompany.id,
+        name: rawCompany.name,
+        domain: rawCompany.domain,
+        industry: rawCompany.industry,
+        employees: rawCompany.employees,
+        structure: companyData.company ? 'nested' : 'direct'
+      });
 
       const company = {
         id: rawCompany.id,
@@ -131,13 +164,16 @@ export class RocketReachDBService {
       logger.info('✅ Company data stored successfully', {
         companyId: company.id,
         name: company.name,
-        creditsUsed
+        creditsUsed,
+        domain: company.domain,
+        employees: company.employees
       });
 
     } catch (error) {
       logger.error('💥 Failed to store company data', {
         companyId: companyData?.id || companyData?.company?.id,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
       });
       throw error;
     }
@@ -313,6 +349,7 @@ export class RocketReachDBService {
           creditsRemaining: rocketReachApiCalls.creditsRemaining,
           errorMessage: rocketReachApiCalls.errorMessage,
           userId: rocketReachApiCalls.userId,
+          metadata: rocketReachApiCalls.metadata,
           createdAt: rocketReachApiCalls.createdAt
         })
         .from(rocketReachApiCalls)
@@ -323,7 +360,8 @@ export class RocketReachDBService {
       return calls.map(call => ({
         ...call,
         success: !call.errorMessage && call.responseStatus === 200,
-        duration: call.responseTime ? `${call.responseTime}ms` : null
+        duration: call.responseTime ? `${call.responseTime}ms` : null,
+        contactInfo: (call.metadata as any)?.contactInfo || null
       }));
 
     } catch (error) {

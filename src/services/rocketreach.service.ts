@@ -585,15 +585,32 @@ export class RocketReachService {
     // Log the API call to database for analytics
     await this.logApiCall('/api/v2/person/lookup', params, response.data, 1, startTime, userId);
     
-    // Store person data if lookup was successful
-    if (response.data.status === 'success' && response.data) {
+    // Store person data if lookup was successful or in progress (person found)
+    if ((response.data.status === 'success' || response.data.status === 'progress') && response.data) {
       try {
+        logger.info('💾 Attempting to store person data', { 
+          responseData: response.data,
+          hasPersonData: !!response.data.person,
+          hasDirectPersonData: !!(response.data.name && response.data.id), // Check if person data is directly in response
+          personId: response.data.person?.id || response.data.id,
+          personName: response.data.person?.name || response.data.name,
+          status: response.data.status
+        });
+        
         const { RocketReachDBService } = await import('./rocketreachDB.service');
         const dbService = new RocketReachDBService();
         await dbService.storePerson(response.data, 1);
+        
+        logger.info('✅ Person data stored successfully');
       } catch (error) {
-        logger.warn('Failed to store person data', { error: (error as Error).message });
+        logger.error('❌ Failed to store person data', { error: (error as Error).message, stack: (error as Error).stack });
       }
+    } else {
+      logger.warn('⚠️ Person lookup was not successful or has no data', { 
+        status: response.data.status,
+        hasData: !!response.data,
+        responseKeys: Object.keys(response.data || {})
+      });
     }
     
     return response.data;
@@ -644,15 +661,33 @@ export class RocketReachService {
     // Log the API call to database for analytics
     await this.logApiCall('/api/v2/company/lookup/', params, response.data, 1, startTime, userId);
     
-    // Store company data if lookup was successful
-    if (response.data.status === 'success' && response.data.company) {
+    // Store company data if lookup was successful or in progress (company found)
+    if ((response.data.status === 'success' || response.data.status === 'progress') && (response.data.company || response.data.name)) {
       try {
+        logger.info('💾 Attempting to store company data', { 
+          responseData: response.data,
+          hasCompanyData: !!response.data.company,
+          hasDirectCompanyData: !!(response.data.name && response.data.id), // Check if company data is directly in response
+          companyId: response.data.company?.id || response.data.id,
+          companyName: response.data.company?.name || response.data.name,
+          status: response.data.status
+        });
+        
         const { RocketReachDBService } = await import('./rocketreachDB.service');
         const dbService = new RocketReachDBService();
-        await dbService.storeCompany(response.data.company, 1);
+        await dbService.storeCompany(response.data.company || response.data, 1);
+        
+        logger.info('✅ Company data stored successfully');
       } catch (error) {
-        logger.warn('Failed to store company data', { error: (error as Error).message });
+        logger.error('❌ Failed to store company data', { error: (error as Error).message, stack: (error as Error).stack });
       }
+    } else {
+      logger.warn('⚠️ Company lookup was not successful or has no company data', { 
+        status: response.data.status,
+        hasCompanyData: !!response.data.company,
+        hasDirectCompanyData: !!(response.data.name && response.data.id),
+        responseKeys: Object.keys(response.data || {})
+      });
     }
     
     return response.data;
@@ -757,7 +792,9 @@ export class RocketReachService {
         metadata: {
           rocketReachId: response.id,
           profileId: response.profile_list?.id,
-          recordsReturned: response.profiles?.length || (response.person ? 1 : 0) || (response.company ? 1 : 0) || 0
+          recordsReturned: response.profiles?.length || (response.person ? 1 : 0) || (response.company ? 1 : 0) || 0,
+          // Add contact information for display
+          contactInfo: this.extractContactInfo(response, endpoint)
         }
       };
 
@@ -1006,6 +1043,90 @@ export class RocketReachService {
         ? 'RocketReach API configured and available'
         : 'RocketReach API key not configured'
     };
+  }
+
+  /**
+   * Extract contact information for display
+   */
+  private extractContactInfo(response: any, endpoint: string): any {
+    if (!response || (response.status !== 'success' && response.status !== 'progress')) {
+      return {};
+    }
+
+    // Person lookup/search - handle both nested (response.person) and direct structures
+    if (endpoint.includes('/person/')) {
+      const person = response.person || (response.name && response.id ? response : null);
+      if (person) {
+        return {
+          type: 'person',
+          name: person.name,
+          title: person.current_title,
+          company: person.current_employer,
+          location: person.location,
+          hasEmail: !!(person.emails && person.emails.length > 0),
+          hasPhone: !!(person.phones && person.phones.length > 0),
+          emailCount: person.emails?.length || 0,
+          phoneCount: person.phones?.length || 0,
+          linkedinUrl: person.linkedin_url
+        };
+      }
+    }
+
+    // Person search (multiple results)
+    if (endpoint.includes('/person/search') && response.profiles) {
+      const firstProfile = response.profiles[0];
+      return {
+        type: 'person_search',
+        resultsCount: response.profiles.length,
+        firstResult: firstProfile ? {
+          name: firstProfile.name,
+          title: firstProfile.current_title,
+          company: firstProfile.current_employer
+        } : null
+      };
+    }
+
+    // Company lookup/search - handle both nested (response.company) and direct structures
+    if (endpoint.includes('/company/')) {
+      const company = response.company || (response.name && response.id ? response : null);
+      if (company) {
+        return {
+          type: 'company',
+          name: company.name,
+          domain: company.domain,
+          industry: company.industry,
+          location: company.location,
+          employees: company.employees,
+          website: company.website
+        };
+      }
+    }
+
+    // Company search (multiple results)
+    if (endpoint.includes('/company/search') && response.companies) {
+      const firstCompany = response.companies[0];
+      return {
+        type: 'company_search',
+        resultsCount: response.companies.length,
+        firstResult: firstCompany ? {
+          name: firstCompany.name,
+          domain: firstCompany.domain,
+          industry: firstCompany.industry
+        } : null
+      };
+    }
+
+    // Account info
+    if (endpoint.includes('/account') && response.account) {
+      return {
+        type: 'account',
+        accountName: response.account.name,
+        plan: response.account.plan,
+        creditsRemaining: response.account.credits_remaining
+      };
+    }
+
+    return {};
   }
 }
 
