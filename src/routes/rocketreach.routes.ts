@@ -182,6 +182,7 @@ router.get('/person/lookup',
   async (req, res) => {
     try {
       const lookupParams = req.validatedData;
+      const userId = req.user?.id;
 
       logger.info('🔍 Looking up person via RocketReach API', {
         userId: req.user?.id,
@@ -193,7 +194,7 @@ router.get('/person/lookup',
         }
       });
 
-      const result = await rocketReachService.lookupPerson(lookupParams);
+      const result = await rocketReachService.lookupPerson(lookupParams, userId);
 
       res.json({
         status: 'success',
@@ -322,9 +323,9 @@ router.get('/person/checkStatus',
  *                 description: Search keyword
  *               start:
  *                 type: number
- *                 minimum: 0
- *                 default: 0
- *                 description: Pagination offset
+ *                 minimum: 1
+ *                 default: 1
+ *                 description: Pagination offset (starts at 1)
  *               size:
  *                 type: number
  *                 minimum: 1
@@ -632,9 +633,9 @@ router.get('/profile-company/lookup',
  *                 description: Founded before year
  *               start:
  *                 type: number
- *                 minimum: 0
- *                 default: 0
- *                 description: Pagination offset
+ *                 minimum: 1
+ *                 default: 1
+ *                 description: Pagination offset (starts at 1)
  *               size:
  *                 type: number
  *                 minimum: 1
@@ -1718,4 +1719,222 @@ router.get('/compliance/status',
   }
 );
 
-export default router; 
+export default router;
+
+// =============================================================================
+// ROCKETREACH ADMIN DASHBOARD ENDPOINTS
+// =============================================================================
+
+/**
+ * @swagger
+ * /api/v1/rocketreach/dashboard/usage:
+ *   get:
+ *     summary: Get RocketReach usage statistics for dashboard
+ *     tags: [RocketReach Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: days
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 365
+ *           default: 30
+ *         description: Number of days to look back for statistics
+ *     responses:
+ *       200:
+ *         description: Usage statistics retrieved successfully
+ */
+router.get('/dashboard/usage', authMiddleware, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days as string) || 30;
+    const userId = req.user?.id;
+
+    logger.info('📊 Fetching RocketReach usage statistics for dashboard', { userId, days });
+
+    // Get usage stats from database service
+    const usageStats = await rocketReachDBService.getCreditUsageStats(userId, days);
+
+    logger.info('📊 Usage stats result', { 
+      statsFound: usageStats.stats.length,
+      stats: usageStats.stats
+    });
+
+    // Get account info to check current credits
+    let accountInfo = null;
+    try {
+      accountInfo = await rocketReachService.getAccount(userId);
+      logger.info('📊 Account info fetched', { accountInfo: accountInfo?.account });
+    } catch (error) {
+      logger.warn('Could not fetch RocketReach account info', { error: (error as Error).message });
+    }
+
+    res.json({
+      status: 'success',
+      data: {
+        usageStats,
+        accountInfo: accountInfo?.account || null,
+        period: `${days} days`,
+        generatedAt: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error fetching RocketReach usage statistics', { error: (error as Error).message, stack: (error as Error).stack });
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch usage statistics',
+      error: (error as Error).message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/rocketreach/dashboard/recent-calls:
+ *   get:
+ *     summary: Get recent RocketReach API calls for dashboard
+ *     tags: [RocketReach Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 50
+ *         description: Number of recent calls to return
+ *     responses:
+ *       200:
+ *         description: Recent API calls retrieved successfully
+ */
+router.get('/dashboard/recent-calls', authMiddleware, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const userId = req.user?.id;
+
+    logger.info('📋 Fetching recent RocketReach API calls for dashboard', { userId, limit });
+
+    const recentCalls = await rocketReachDBService.getRecentApiCalls(limit, userId);
+
+    logger.info('📋 Recent calls result', { 
+      callsFound: recentCalls.length,
+      sample: recentCalls.slice(0, 3) // Log first 3 calls for debugging
+    });
+
+    res.json({
+      status: 'success',
+      data: {
+        calls: recentCalls,
+        total: recentCalls.length,
+        generatedAt: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error fetching recent RocketReach API calls', { error: (error as Error).message, stack: (error as Error).stack });
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch recent API calls',
+      error: (error as Error).message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/rocketreach/dashboard/storage-metrics:
+ *   get:
+ *     summary: Get RocketReach database storage metrics
+ *     tags: [RocketReach Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Storage metrics retrieved successfully
+ */
+router.get('/dashboard/storage-metrics', authMiddleware, async (req, res) => {
+  try {
+    logger.info('📊 Fetching RocketReach storage metrics for dashboard');
+
+    const storageMetrics = await rocketReachDBService.getStorageMetrics();
+
+    logger.info('📊 Storage metrics result', { 
+      persons: storageMetrics.totalRecords.persons,
+      companies: storageMetrics.totalRecords.companies,
+      apiCalls: storageMetrics.totalRecords.apiCalls,
+      totalCredits: storageMetrics.totalCreditsUsed
+    });
+
+    res.json({
+      status: 'success',
+      data: storageMetrics
+    });
+
+  } catch (error) {
+    logger.error('Error fetching RocketReach storage metrics', { error: (error as Error).message, stack: (error as Error).stack });
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch storage metrics',
+      error: (error as Error).message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/rocketreach/dashboard/realtime-status:
+ *   get:
+ *     summary: Get real-time RocketReach status and metrics
+ *     tags: [RocketReach Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Real-time status retrieved successfully
+ */
+router.get('/dashboard/realtime-status', authMiddleware, async (req, res) => {
+  try {
+    logger.debug('🔄 Fetching RocketReach real-time status for dashboard');
+
+    // Get current account status
+    let accountStatus = null;
+    let apiHealth = 'healthy';
+    
+    try {
+      accountStatus = await rocketReachService.getAccount();
+      apiHealth = 'connected';
+    } catch (error) {
+      apiHealth = 'error';
+      logger.warn('RocketReach API connection error', { error: (error as Error).message });
+    }
+
+    // Get recent API call metrics
+    const recentMetrics = await rocketReachDBService.getRecentCallMetrics(24); // Last 24 hours
+
+    // Get storage metrics
+    const storageMetrics = await rocketReachDBService.getStorageMetrics();
+
+    res.json({
+      status: 'success',
+      data: {
+        apiHealth,
+        account: accountStatus?.account || null,
+        recentMetrics,
+        storage: storageMetrics,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error fetching RocketReach real-time status', { error: (error as Error).message });
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch real-time status',
+      error: (error as Error).message
+    });
+  }
+}); 

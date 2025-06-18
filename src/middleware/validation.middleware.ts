@@ -62,7 +62,7 @@ export const rocketReachPersonSearchSchema = z.object({
   current_title: z.string().min(1).max(100).optional(),
   location: z.string().min(1).max(100).optional(),
   keyword: z.string().min(1).max(100).optional(),
-  start: z.coerce.number().min(0).default(0),
+  start: z.coerce.number().min(1).default(1), // Must be >= 1
   size: z.coerce.number().min(1).max(25).default(10)
 });
 
@@ -77,7 +77,7 @@ export const rocketReachCompanySearchSchema = z.object({
   revenue_max: z.string().optional(),
   founded_after: z.coerce.number().min(1800).max(new Date().getFullYear()).optional(),
   founded_before: z.coerce.number().min(1800).max(new Date().getFullYear()).optional(),
-  start: z.coerce.number().min(0).default(0),
+  start: z.coerce.number().min(1).default(1), // Must be >= 1
   size: z.coerce.number().min(1).max(25).default(10)
 });
 

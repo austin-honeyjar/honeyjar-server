@@ -497,6 +497,163 @@ async function initializeDatabase() {
       // Don't fail the server startup for news pipeline table issues
     }
     
+    // =============================================================================
+    // ROCKETREACH TABLES INITIALIZATION
+    // =============================================================================
+    
+    // Check if RocketReach tables exist and create them if needed
+    logger.info('Checking for RocketReach tables...');
+    
+    try {
+      // Check if rocketreach_api_calls table exists
+      const rocketReachTableCheck = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_name = 'rocketreach_api_calls'
+        );
+      `);
+      
+      if (!rocketReachTableCheck[0]?.exists) {
+        logger.info('RocketReach tables not found, creating them...');
+        
+        // Create RocketReach enums first
+        logger.info('Creating RocketReach enums...');
+        await db.execute(sql`
+          DO $$ BEGIN
+            CREATE TYPE "rocketreach_api_call_type" AS ENUM ('person_lookup', 'person_search', 'company_lookup', 'company_search', 'bulk_lookup', 'account');
+          EXCEPTION
+            WHEN duplicate_object THEN null;
+          END $$;
+        `);
+        logger.info('RocketReach enums created successfully');
+        
+        // Create RocketReach tables
+        logger.info('Creating RocketReach tables...');
+        await db.execute(sql`
+          -- RocketReach person profiles storage
+          CREATE TABLE IF NOT EXISTS rocketreach_persons (
+            id INTEGER PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            first_name TEXT,
+            last_name TEXT,
+            middle_name TEXT,
+            current_employer TEXT,
+            current_title TEXT,
+            linkedin_url TEXT,
+            profile_pic TEXT,
+            location TEXT,
+            city TEXT,
+            state TEXT,
+            country TEXT,
+            emails JSONB NOT NULL DEFAULT '[]',
+            phones JSONB NOT NULL DEFAULT '[]',
+            social_media JSONB DEFAULT '{}',
+            work_history JSONB NOT NULL DEFAULT '[]',
+            education JSONB NOT NULL DEFAULT '[]',
+            metadata JSONB NOT NULL DEFAULT '{}',
+            credits_used INTEGER DEFAULT 1,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+          );
+          
+          -- RocketReach company profiles storage
+          CREATE TABLE IF NOT EXISTS rocketreach_companies (
+            id INTEGER PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            domain TEXT,
+            linkedin_url TEXT,
+            website TEXT,
+            description TEXT,
+            industry TEXT,
+            location TEXT,
+            city TEXT,
+            state TEXT,
+            country TEXT,
+            founded_year INTEGER,
+            employees INTEGER,
+            revenue TEXT,
+            technology_stack JSONB NOT NULL DEFAULT '[]',
+            social_media JSONB DEFAULT '{}',
+            metadata JSONB NOT NULL DEFAULT '{}',
+            credits_used INTEGER DEFAULT 1,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+          );
+          
+          -- RocketReach API calls logging
+          CREATE TABLE IF NOT EXISTS rocketreach_api_calls (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            call_type rocketreach_api_call_type NOT NULL,
+            endpoint TEXT NOT NULL,
+            parameters JSONB NOT NULL DEFAULT '{}',
+            response_status INTEGER,
+            response_time INTEGER,
+            records_returned INTEGER DEFAULT 0,
+            credits_used INTEGER DEFAULT 0,
+            credits_remaining INTEGER,
+            error_message TEXT,
+            error_code TEXT,
+            cache_hit BOOLEAN NOT NULL DEFAULT false,
+            user_id TEXT,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+          );
+          
+          -- RocketReach bulk lookup tracking
+          CREATE TABLE IF NOT EXISTS rocketreach_bulk_lookups (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            rocketreach_request_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            lookup_count INTEGER NOT NULL,
+            webhook_id TEXT,
+            estimated_completion_time TIMESTAMP WITH TIME ZONE,
+            completed_at TIMESTAMP WITH TIME ZONE,
+            results JSONB DEFAULT '[]',
+            credits_used INTEGER DEFAULT 0,
+            error_message TEXT,
+            user_id TEXT,
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+          );
+        `);
+        
+        // Create indexes for RocketReach tables
+        logger.info('Creating indexes for RocketReach tables...');
+        await db.execute(sql`
+          -- Person profiles indexes
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_persons_name ON rocketreach_persons(name);
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_persons_employer ON rocketreach_persons(current_employer) WHERE current_employer IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_persons_created ON rocketreach_persons(created_at DESC);
+          
+          -- Company profiles indexes
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_companies_name ON rocketreach_companies(name);
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_companies_domain ON rocketreach_companies(domain) WHERE domain IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_companies_industry ON rocketreach_companies(industry) WHERE industry IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_companies_created ON rocketreach_companies(created_at DESC);
+          
+          -- API calls tracking indexes
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_api_calls_type ON rocketreach_api_calls(call_type, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_api_calls_user ON rocketreach_api_calls(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_api_calls_status ON rocketreach_api_calls(response_status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_api_calls_credits ON rocketreach_api_calls(credits_used, created_at DESC);
+          
+          -- Bulk lookups indexes
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_bulk_status ON rocketreach_bulk_lookups(status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_rocketreach_bulk_user ON rocketreach_bulk_lookups(user_id, created_at DESC) WHERE user_id IS NOT NULL;
+        `);
+        
+        logger.info('RocketReach tables and indexes created successfully');
+        
+      } else {
+        logger.info('RocketReach tables already exist');
+      }
+      
+    } catch (rocketReachError) {
+      logger.error('Error creating RocketReach tables:', rocketReachError);
+      // Don't fail the server startup for RocketReach table issues
+    }
+    
     return true;
   } catch (error) {
     logger.error('Database initialization error:', error);

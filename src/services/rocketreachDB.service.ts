@@ -11,37 +11,44 @@ export class RocketReachDBService {
    */
   async storePerson(personData: any, creditsUsed: number = 1): Promise<void> {
     try {
+      // Extract person data from RocketReach response
+      const rawPerson = personData.person || personData; // Handle both nested and direct structures
+      
+      if (!rawPerson || !rawPerson.id) {
+        logger.warn('No valid person data to store', { personData });
+        return;
+      }
+
       const person = {
-        id: personData.id,
-        name: personData.name,
-        firstName: personData.first_name,
-        lastName: personData.last_name,
-        middleName: personData.middle_name,
-        currentEmployer: personData.current_employer,
-        currentTitle: personData.current_title,
-        linkedinUrl: personData.linkedin_url,
-        profilePic: personData.profile_pic,
-        location: personData.location,
-        city: personData.city,
-        state: personData.region,
-        country: personData.country,
-        emails: personData.emails || [],
-        phones: personData.phones || [],
-        socialMedia: personData.links || {},
-        workHistory: personData.job_history || [],
-        education: personData.education || [],
+        id: rawPerson.id,
+        name: rawPerson.name,
+        firstName: rawPerson.first_name,
+        lastName: rawPerson.last_name,
+        middleName: rawPerson.middle_name,
+        currentEmployer: rawPerson.current_employer,
+        currentTitle: rawPerson.current_title,
+        linkedinUrl: rawPerson.linkedin_url,
+        profilePic: rawPerson.profile_pic,
+        location: rawPerson.location,
+        city: rawPerson.city,
+        state: rawPerson.region || rawPerson.state,
+        country: rawPerson.country,
+        emails: rawPerson.emails || [],
+        phones: rawPerson.phones || [],
+        socialMedia: rawPerson.links || rawPerson.social_media || {},
+        workHistory: rawPerson.job_history || [],
+        education: rawPerson.education || [],
         metadata: {
-          birth_year: personData.birth_year,
-          recommended_email: personData.recommended_email,
-          current_work_email: personData.current_work_email,
-          current_employer_id: personData.current_employer_id,
-          current_employer_domain: personData.current_employer_domain,
-          skills: personData.skills || [],
-          tags: personData.tags || [],
-          npi_data: personData.npi_data
+          birth_year: rawPerson.birth_year,
+          recommended_email: rawPerson.recommended_email,
+          current_work_email: rawPerson.current_work_email,
+          current_employer_id: rawPerson.current_employer_id,
+          current_employer_domain: rawPerson.current_employer_domain,
+          skills: rawPerson.skills || [],
+          tags: rawPerson.tags || [],
+          npi_data: rawPerson.npi_data
         },
         creditsUsed,
-        dataRetentionDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year retention
         updatedAt: new Date()
       };
 
@@ -63,7 +70,7 @@ export class RocketReachDBService {
 
     } catch (error) {
       logger.error('💥 Failed to store person data', {
-        personId: personData.id,
+        personId: personData?.id || personData?.person?.id,
         error: error instanceof Error ? error.message : 'Unknown error'
       });
       throw error;
@@ -75,29 +82,37 @@ export class RocketReachDBService {
    */
   async storeCompany(companyData: any, creditsUsed: number = 1): Promise<void> {
     try {
+      // Extract company data from RocketReach response
+      const rawCompany = companyData.company || companyData; // Handle both nested and direct structures
+      
+      if (!rawCompany || !rawCompany.id) {
+        logger.warn('No valid company data to store', { companyData });
+        return;
+      }
+
       const company = {
-        id: companyData.id,
-        name: companyData.name,
-        domain: companyData.domain,
-        linkedinUrl: companyData.linkedin_url,
-        website: companyData.website,
-        description: companyData.description,
-        industry: companyData.industry,
-        location: companyData.location,
-        city: companyData.city,
-        state: companyData.state,
-        country: companyData.country,
-        foundedYear: companyData.founded_year,
-        employees: companyData.employees,
-        revenue: companyData.revenue,
-        technologyStack: companyData.technology_stack || [],
-        socialMedia: companyData.social_media || {},
+        id: rawCompany.id,
+        name: rawCompany.name,
+        domain: rawCompany.domain,
+        linkedinUrl: rawCompany.linkedin_url,
+        website: rawCompany.website,
+        description: rawCompany.description,
+        industry: rawCompany.industry,
+        location: rawCompany.location,
+        city: rawCompany.city,
+        state: rawCompany.state,
+        country: rawCompany.country,
+        foundedYear: rawCompany.founded_year,
+        employees: rawCompany.employees,
+        revenue: rawCompany.revenue,
+        technologyStack: rawCompany.technology_stack || [],
+        socialMedia: rawCompany.social_media || {},
         metadata: {
-          alexa_rank: companyData.alexa_rank,
-          crunchbase_url: companyData.crunchbase_url,
-          total_funding: companyData.total_funding,
-          latest_funding: companyData.latest_funding,
-          ipo_status: companyData.ipo_status
+          alexa_rank: rawCompany.alexa_rank,
+          crunchbase_url: rawCompany.crunchbase_url,
+          total_funding: rawCompany.total_funding,
+          latest_funding: rawCompany.latest_funding,
+          ipo_status: rawCompany.ipo_status
         },
         creditsUsed,
         updatedAt: new Date()
@@ -121,7 +136,7 @@ export class RocketReachDBService {
 
     } catch (error) {
       logger.error('💥 Failed to store company data', {
-        companyId: companyData.id,
+        companyId: companyData?.id || companyData?.company?.id,
         error: error instanceof Error ? error.message : 'Unknown error'
       });
       throw error;
@@ -273,6 +288,124 @@ export class RocketReachDBService {
 
     } catch (error) {
       logger.error('💥 Failed to cleanup expired data', { error });
+      throw error;
+    }
+  }
+
+  /**
+   * Get recent API calls for dashboard
+   */
+  async getRecentApiCalls(limit: number = 50, userId?: string): Promise<any[]> {
+    try {
+      const whereClause = userId 
+        ? eq(rocketReachApiCalls.userId, userId)
+        : undefined;
+
+      const calls = await db
+        .select({
+          id: rocketReachApiCalls.id,
+          callType: rocketReachApiCalls.callType,
+          endpoint: rocketReachApiCalls.endpoint,
+          responseStatus: rocketReachApiCalls.responseStatus,
+          responseTime: rocketReachApiCalls.responseTime,
+          recordsReturned: rocketReachApiCalls.recordsReturned,
+          creditsUsed: rocketReachApiCalls.creditsUsed,
+          creditsRemaining: rocketReachApiCalls.creditsRemaining,
+          errorMessage: rocketReachApiCalls.errorMessage,
+          userId: rocketReachApiCalls.userId,
+          createdAt: rocketReachApiCalls.createdAt
+        })
+        .from(rocketReachApiCalls)
+        .where(whereClause)
+        .orderBy(desc(rocketReachApiCalls.createdAt))
+        .limit(limit);
+
+      return calls.map(call => ({
+        ...call,
+        success: !call.errorMessage && call.responseStatus === 200,
+        duration: call.responseTime ? `${call.responseTime}ms` : null
+      }));
+
+    } catch (error) {
+      logger.error('💥 Failed to get recent API calls', { error });
+      return [];
+    }
+  }
+
+  /**
+   * Get storage metrics for dashboard
+   */
+  async getStorageMetrics(): Promise<any> {
+    try {
+      // Get record counts for each RocketReach table
+      const [personsCount] = await db.select({ count: sql<number>`count(*)` }).from(rocketReachPersons);
+      const [companiesCount] = await db.select({ count: sql<number>`count(*)` }).from(rocketReachCompanies);
+      const [apiCallsCount] = await db.select({ count: sql<number>`count(*)` }).from(rocketReachApiCalls);
+      const [bulkLookupsCount] = await db.select({ count: sql<number>`count(*)` }).from(rocketReachBulkLookups);
+
+      // Calculate total credits used
+      const [totalCredits] = await db.select({ 
+        total: sql<number>`COALESCE(sum(credits_used), 0)` 
+      }).from(rocketReachApiCalls);
+
+      return {
+        totalRecords: {
+          persons: personsCount?.count || 0,
+          companies: companiesCount?.count || 0,
+          apiCalls: apiCallsCount?.count || 0,
+          bulkLookups: bulkLookupsCount?.count || 0
+        },
+        totalCreditsUsed: totalCredits?.total || 0,
+        lastUpdated: new Date().toISOString()
+      };
+
+    } catch (error) {
+      logger.error('💥 Failed to get storage metrics', { error });
+      throw error;
+    }
+  }
+
+  /**
+   * Get recent call metrics for real-time dashboard
+   */
+  async getRecentCallMetrics(hours: number = 24): Promise<any> {
+    try {
+      const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+
+      // Get call statistics by type
+      const callStats = await db
+        .select({
+          callType: rocketReachApiCalls.callType,
+          totalCalls: sql<number>`count(*)`,
+          totalCredits: sql<number>`sum(credits_used)`,
+          avgResponseTime: sql<number>`avg(response_time)`,
+          successCount: sql<number>`count(*) FILTER (WHERE response_status = 200)`,
+          errorCount: sql<number>`count(*) FILTER (WHERE response_status != 200 OR error_message IS NOT NULL)`
+        })
+        .from(rocketReachApiCalls)
+        .where(gte(rocketReachApiCalls.createdAt, since))
+        .groupBy(rocketReachApiCalls.callType);
+
+      // Get total metrics
+      const [totalMetrics] = await db
+        .select({
+          totalCalls: sql<number>`count(*)`,
+          totalCredits: sql<number>`sum(credits_used)`,
+          avgResponseTime: sql<number>`avg(response_time)`,
+          successRate: sql<number>`(count(*) FILTER (WHERE response_status = 200)::float / count(*)) * 100`
+        })
+        .from(rocketReachApiCalls)
+        .where(gte(rocketReachApiCalls.createdAt, since));
+
+      return {
+        period: `${hours} hours`,
+        callStats,
+        totalMetrics: totalMetrics || { totalCalls: 0, totalCredits: 0, avgResponseTime: 0, successRate: 0 },
+        generatedAt: new Date().toISOString()
+      };
+
+    } catch (error) {
+      logger.error('💥 Failed to get recent call metrics', { error });
       throw error;
     }
   }

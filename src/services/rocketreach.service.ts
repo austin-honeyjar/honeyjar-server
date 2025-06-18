@@ -326,7 +326,7 @@ export class RocketReachService {
   /**
    * Get account details and usage information
    */
-  async getAccount(): Promise<AccountResponse> {
+  async getAccount(userId?: string): Promise<AccountResponse> {
     try {
       const cacheKey = this.generateCacheKey('account', {});
       
@@ -337,7 +337,7 @@ export class RocketReachService {
 
       return await withCache(
         cacheKey,
-        () => this.fetchAccountFromAPI(),
+        () => this.fetchAccountFromAPI(userId),
         { ttl: 300 } // 5 minutes cache
       );
     } catch (error: any) {
@@ -355,7 +355,7 @@ export class RocketReachService {
   /**
    * Lookup a person by various identifiers
    */
-  async lookupPerson(params: PersonLookupParams): Promise<PersonLookupResponse> {
+  async lookupPerson(params: PersonLookupParams, userId?: string): Promise<PersonLookupResponse> {
     try {
       const cacheKey = this.generateCacheKey('person-lookup', params);
       
@@ -369,7 +369,7 @@ export class RocketReachService {
 
       return await withCache(
         cacheKey,
-        () => this.fetchPersonLookupFromAPI(params),
+        () => this.fetchPersonLookupFromAPI(params, userId),
         { ttl: 3600 } // 1 hour cache for person lookups
       );
     } catch (error: any) {
@@ -564,45 +564,97 @@ export class RocketReachService {
   // PRIVATE API METHODS
   // =============================================================================
 
-  private async fetchAccountFromAPI(): Promise<AccountResponse> {
+  private async fetchAccountFromAPI(userId?: string): Promise<AccountResponse> {
     logger.info('🌐 Fetching account from RocketReach API (cache miss)');
 
+    const startTime = Date.now();
     const response = await this.client.get('/api/v2/account/');
+    
+    // Log the API call to database for analytics
+    await this.logApiCall('/api/v2/account/', {}, response.data, 0, startTime, userId); // Account calls don't use credits
+    
     return response.data;
   }
 
-  private async fetchPersonLookupFromAPI(params: PersonLookupParams): Promise<PersonLookupResponse> {
+  private async fetchPersonLookupFromAPI(params: PersonLookupParams, userId?: string): Promise<PersonLookupResponse> {
     logger.info('🌐 Fetching person lookup from RocketReach API (cache miss)', { params });
 
+    const startTime = Date.now();
     const response = await this.client.get('/api/v2/person/lookup', { params });
+    
+    // Log the API call to database for analytics
+    await this.logApiCall('/api/v2/person/lookup', params, response.data, 1, startTime, userId);
+    
+    // Store person data if lookup was successful
+    if (response.data.status === 'success' && response.data) {
+      try {
+        const { RocketReachDBService } = await import('./rocketreachDB.service');
+        const dbService = new RocketReachDBService();
+        await dbService.storePerson(response.data, 1);
+      } catch (error) {
+        logger.warn('Failed to store person data', { error: (error as Error).message });
+      }
+    }
+    
     return response.data;
   }
 
-  private async fetchPersonSearchFromAPI(params: PersonSearchParams): Promise<PersonSearchResponse> {
+  private async fetchPersonSearchFromAPI(params: PersonSearchParams, userId?: string): Promise<PersonSearchResponse> {
     logger.info('🌐 Fetching person search from RocketReach API (cache miss)', { params });
 
+    const startTime = Date.now();
     const response = await this.client.post('/api/v2/person/search', params);
+    
+    // Log the API call to database for analytics
+    await this.logApiCall('/api/v2/person/search', params, response.data, 1, startTime, userId);
+    
     return response.data;
   }
 
-  private async fetchPersonCompanyLookupFromAPI(params: PersonLookupParams): Promise<any> {
+  private async fetchPersonCompanyLookupFromAPI(params: PersonLookupParams, userId?: string): Promise<any> {
     logger.info('🌐 Fetching person-company lookup from RocketReach API (cache miss)', { params });
 
+    const startTime = Date.now();
     const response = await this.client.get('/api/v2/profile-company/lookup', { params });
+    
+    // Log the API call to database for analytics
+    await this.logApiCall('/api/v2/profile-company/lookup', params, response.data, 2, startTime, userId); // Person + company lookup costs more
+    
     return response.data;
   }
 
-  private async fetchCompanySearchFromAPI(params: CompanySearchParams): Promise<CompanySearchResponse> {
+  private async fetchCompanySearchFromAPI(params: CompanySearchParams, userId?: string): Promise<CompanySearchResponse> {
     logger.info('🌐 Fetching company search from RocketReach API (cache miss)', { params });
 
+    const startTime = Date.now();
     const response = await this.client.post('/api/v2/searchCompany', params);
+    
+    // Log the API call to database for analytics
+    await this.logApiCall('/api/v2/searchCompany', params, response.data, 1, startTime, userId);
+    
     return response.data;
   }
 
-  private async fetchCompanyLookupFromAPI(params: CompanyLookupParams): Promise<CompanyLookupResponse> {
+  private async fetchCompanyLookupFromAPI(params: CompanyLookupParams, userId?: string): Promise<CompanyLookupResponse> {
     logger.info('🌐 Fetching company lookup from RocketReach API (cache miss)', { params });
 
+    const startTime = Date.now();
     const response = await this.client.get('/api/v2/company/lookup/', { params });
+    
+    // Log the API call to database for analytics
+    await this.logApiCall('/api/v2/company/lookup/', params, response.data, 1, startTime, userId);
+    
+    // Store company data if lookup was successful
+    if (response.data.status === 'success' && response.data.company) {
+      try {
+        const { RocketReachDBService } = await import('./rocketreachDB.service');
+        const dbService = new RocketReachDBService();
+        await dbService.storeCompany(response.data.company, 1);
+      } catch (error) {
+        logger.warn('Failed to store company data', { error: (error as Error).message });
+      }
+    }
+    
     return response.data;
   }
 
@@ -688,38 +740,58 @@ export class RocketReachService {
   /**
    * Store API call with credit usage in database
    */
-  private async logApiCall(endpoint: string, params: any, response: any, credits: number = 1): Promise<void> {
+  private async logApiCall(endpoint: string, params: any, response: any, credits: number = 1, startTime: number = Date.now(), userId?: string): Promise<void> {
     try {
-      // TODO: Implement database storage
+      const responseTime = Date.now() - startTime;
+      
       const logData = {
         callType: this.getCallTypeFromEndpoint(endpoint),
         endpoint,
         parameters: params,
-        responseStatus: 200,
+        responseStatus: response.status === 'success' ? 200 : (response.error_code ? parseInt(response.error_code) : 500),
+        responseTime,
         creditsUsed: credits,
-        creditsRemaining: response.lookup_credit_balance,
-        userId: 'current-user', // TODO: Get from request context
-        responseTime: Date.now(),
+        creditsRemaining: response.lookup_credit_balance || response.credits_remaining,
+        userId: userId || 'system', // Use provided userId or fallback to 'system'
+        errorMessage: response.status !== 'success' ? response.message || response.error : undefined,
         metadata: {
           rocketReachId: response.id,
-          profileId: response.profile_list?.id
+          profileId: response.profile_list?.id,
+          recordsReturned: response.profiles?.length || (response.person ? 1 : 0) || (response.company ? 1 : 0) || 0
         }
       };
+
+      // Use the RocketReachDBService to log the API call
+      const { RocketReachDBService } = await import('./rocketreachDB.service');
+      const dbService = new RocketReachDBService();
+      await dbService.logApiCall(logData);
       
-      logger.info('📊 RocketReach API call logged', logData);
+      logger.info('📊 RocketReach API call logged to database', {
+        callType: logData.callType,
+        creditsUsed: logData.creditsUsed,
+        responseTime: logData.responseTime,
+        userId: logData.userId,
+        success: logData.responseStatus === 200
+      });
     } catch (error) {
-      logger.error('💥 Failed to log RocketReach API call', { error });
+      logger.error('💥 Failed to log RocketReach API call', { 
+        endpoint,
+        error: (error as Error).message 
+      });
     }
   }
 
+  /**
+   * Determine call type from endpoint for logging
+   */
   private getCallTypeFromEndpoint(endpoint: string): string {
-    if (endpoint.includes('person/lookup')) return 'person_lookup';
-    if (endpoint.includes('person/search')) return 'person_search';
-    if (endpoint.includes('company/lookup')) return 'company_lookup';
-    if (endpoint.includes('company/search')) return 'company_search';
-    if (endpoint.includes('bulkLookup')) return 'bulk_lookup';
-    if (endpoint.includes('account')) return 'account';
-    return 'unknown';
+    if (endpoint.includes('/account')) return 'account';
+    if (endpoint.includes('/person/lookup')) return 'person_lookup';
+    if (endpoint.includes('/person/search')) return 'person_search';
+    if (endpoint.includes('/company/lookup')) return 'company_lookup';
+    if (endpoint.includes('/company/search')) return 'company_search';
+    if (endpoint.includes('/bulk')) return 'bulk_lookup';
+    return 'person_lookup'; // default
   }
 
   /**
