@@ -14,5 +14,6 @@ export const WORKFLOW_TEMPLATES = {
   "Quick Press Release": QUICK_PRESS_RELEASE_TEMPLATE,
   "Test Step Transitions": TEST_STEP_TRANSITIONS_TEMPLATE,
   "Media List Generator": MEDIA_LIST_TEMPLATE,
+  "Media Matching": MEDIA_LIST_TEMPLATE,
   // Add more templates here as they are created
 }; 

@@ -16,6 +16,7 @@ import { LAUNCH_ANNOUNCEMENT_TEMPLATE } from "../templates/workflows/launch-anno
 import { JSON_DIALOG_PR_WORKFLOW_TEMPLATE } from "../templates/workflows/json-dialog-pr-workflow";
 import { TEST_STEP_TRANSITIONS_TEMPLATE } from "../templates/workflows/test-step-transitions";
 import { QUICK_PRESS_RELEASE_TEMPLATE } from "../templates/workflows/quick-press-release";
+import { MEDIA_LIST_TEMPLATE } from "../templates/workflows/media-list";
 import { db } from "../db";
 import { chatThreads, chatMessages } from "../db/schema";
 import { eq } from "drizzle-orm";
@@ -133,7 +134,8 @@ const WORKFLOW_TYPES = {
   PR_WORKFLOW: 'JSON Dialog PR Workflow',
   LAUNCH_ANNOUNCEMENT: 'Launch Announcement',
   TEST_STEP_TRANSITIONS: 'Test Step Transitions',
-  QUICK_PRESS_RELEASE: 'Quick Press Release'
+  QUICK_PRESS_RELEASE: 'Quick Press Release',
+  MEDIA_MATCHING: 'Media Matching'
 };
 
 // Workflow pattern matching configuration
@@ -142,7 +144,8 @@ const WORKFLOW_PATTERNS = {
   [WORKFLOW_TYPES.PR_WORKFLOW]: [/\b(pr|press|release|dialog)\b/i],
   [WORKFLOW_TYPES.LAUNCH_ANNOUNCEMENT]: [/\b(launch|product|announcement|feature)\b/i],
   [WORKFLOW_TYPES.TEST_STEP_TRANSITIONS]: [/\b(step|transition|test step|steps|test transitions)\b/i],
-  [WORKFLOW_TYPES.QUICK_PRESS_RELEASE]: [/\b(quick|press release|fast|simple)\b/i]
+  [WORKFLOW_TYPES.QUICK_PRESS_RELEASE]: [/\b(quick|press release|fast|simple)\b/i],
+  [WORKFLOW_TYPES.MEDIA_MATCHING]: [/\b(media|matching|media matching|media list|journalists|reporters|contacts)\b/i]
 };
 
 // Add hardcoded UUIDs for each template type
@@ -152,7 +155,8 @@ const TEMPLATE_UUIDS = {
   LAUNCH_ANNOUNCEMENT: '00000000-0000-0000-0000-000000000003',
   JSON_DIALOG_PR_WORKFLOW: '00000000-0000-0000-0000-000000000004',
   TEST_STEP_TRANSITIONS: '00000000-0000-0000-0000-000000000005',
-  QUICK_PRESS_RELEASE: '00000000-0000-0000-0000-000000000006'
+  QUICK_PRESS_RELEASE: '00000000-0000-0000-0000-000000000006',
+  MEDIA_MATCHING: '00000000-0000-0000-0000-000000000007' // Using the new UUID format
 };
 
 export class WorkflowService {
@@ -205,6 +209,12 @@ export class WorkflowService {
           ...QUICK_PRESS_RELEASE_TEMPLATE,
           id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE
         };
+      case MEDIA_LIST_TEMPLATE.name:
+      case 'Media Matching':
+        return { 
+          ...MEDIA_LIST_TEMPLATE,
+          id: TEMPLATE_UUIDS.MEDIA_MATCHING
+        };
       default:
         console.log(`Template not found for name: ${name}`);
         return null;
@@ -222,7 +232,8 @@ export class WorkflowService {
       { id: TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT, name: 'Launch Announcement' },
       { id: TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW, name: 'JSON Dialog PR Workflow' },
       { id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS, name: 'Test Step Transitions' },
-      { id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE, name: 'Quick Press Release' }
+      { id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE, name: 'Quick Press Release' },
+      { id: TEMPLATE_UUIDS.MEDIA_MATCHING, name: 'Media Matching' }
     ];
 
     for (const { id, name } of templateEntries) {
@@ -291,6 +302,11 @@ export class WorkflowService {
         ...QUICK_PRESS_RELEASE_TEMPLATE, 
         id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
       };
+    } else if (templateId === TEMPLATE_UUIDS.MEDIA_MATCHING) {
+      return { 
+        ...MEDIA_LIST_TEMPLATE, 
+        id: TEMPLATE_UUIDS.MEDIA_MATCHING 
+      };
     }
     
     // Check if templateId matches any template name directly
@@ -324,6 +340,11 @@ export class WorkflowService {
         ...QUICK_PRESS_RELEASE_TEMPLATE, 
         id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
       };
+    } else if (templateId === MEDIA_LIST_TEMPLATE.name || templateId === 'Media Matching') {
+      return { 
+        ...MEDIA_LIST_TEMPLATE, 
+        id: TEMPLATE_UUIDS.MEDIA_MATCHING 
+      };
     }
     
     // Fallback to pattern matching in templateId
@@ -356,6 +377,11 @@ export class WorkflowService {
       return { 
         ...QUICK_PRESS_RELEASE_TEMPLATE, 
         id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
+      };
+    } else if (templateId.includes("Media List") || templateId.includes("Media Matching")) {
+      return { 
+        ...MEDIA_LIST_TEMPLATE, 
+        id: TEMPLATE_UUIDS.MEDIA_MATCHING 
       };
     }
     
@@ -843,7 +869,7 @@ export class WorkflowService {
         const conversationHistory = await this.getThreadConversationHistory(workflow.threadId, 5);
         
         // Process with JsonDialogService including history
-        const jsonDialogResult = await this.jsonDialogService.processMessage(step, userInput, conversationHistory);
+        const jsonDialogResult = await this.jsonDialogService.processMessage(step, userInput, conversationHistory, workflow.threadId);
         
         logger.info('JSON Dialog processing results', {
           isStepComplete: jsonDialogResult.isStepComplete,
@@ -969,7 +995,7 @@ export class WorkflowService {
       
       if (step.stepType === StepType.JSON_DIALOG) {
         // For JSON_DIALOG, use the JsonDialogService to process the response
-        const jsonDialogResult = await this.jsonDialogService.processMessage(step, userInput);
+        const jsonDialogResult = await this.jsonDialogService.processMessage(step, userInput, [], workflow.threadId);
         
         // Extract title and subtitle from the response
         if (jsonDialogResult.collectedInformation?.threadTitle) {
@@ -1231,10 +1257,19 @@ export class WorkflowService {
           }
         });
         
-        // Add the generated asset to the chat
+        // 9. Add the generated asset as a direct message
+        const assetMessage = {
+          type: 'asset_generated',
+          assetType: assetType,
+          content: assetContent,
+          displayContent: assetContent,
+          stepId: stepId,
+          stepName: step.name
+        };
+        
         await this.addDirectMessage(
           workflow.threadId,
-          `Here's your generated ${assetType}:\n\n${assetContent}`
+          `[ASSET_DATA]${JSON.stringify(assetMessage)}[/ASSET_DATA]\n\nHere's your generated ${assetType}:\n\n${assetContent}`
         );
         
         // Continue to next step or complete workflow
@@ -1393,6 +1428,10 @@ export class WorkflowService {
             // Create a Quick Press Release workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.QUICK_PRESS_RELEASE);
           }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
+            // Create a Media Matching workflow using template ID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
+          }
           
           if (newWorkflow) {
             // Don't send a message about starting the workflow - keep it silent
@@ -1548,6 +1587,10 @@ export class WorkflowService {
           else if (selectedWorkflow.includes(WORKFLOW_TYPES.QUICK_PRESS_RELEASE)) {
             // Create a Quick Press Release workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.QUICK_PRESS_RELEASE);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
+            // Create a Media Matching workflow using template ID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
           }
           
           if (newWorkflow) {
@@ -1796,9 +1839,19 @@ export class WorkflowService {
                 }
                 
                 // Add message with revised asset
+                const revisedAssetMessage = {
+                  type: 'asset_generated',
+                  assetType: selectedAsset,
+                  content: revisedAsset,
+                  displayContent: revisedAsset,
+                  stepId: stepId,
+                  stepName: step.name,
+                  isRevision: true
+                };
+                
                 await this.addDirectMessage(
                   workflow.threadId, 
-                  `Here's your revised ${selectedAsset} with the requested changes:\n\n${revisedAsset}`
+                  `[ASSET_DATA]${JSON.stringify(revisedAssetMessage)}[/ASSET_DATA]\n\nHere's your revised ${selectedAsset} with the requested changes:\n\n${revisedAsset}`
                 );
                 
                 // Store revised asset
@@ -1913,6 +1966,10 @@ export class WorkflowService {
           else if (selectedWorkflow.includes(WORKFLOW_TYPES.QUICK_PRESS_RELEASE)) {
             // Create a Quick Press Release workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.QUICK_PRESS_RELEASE);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
+            // Create a Media Matching workflow using template ID
+            newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
           }
           
           if (newWorkflow) {
@@ -2495,8 +2552,21 @@ export class WorkflowService {
       });
       
       // 1. Get the asset type and collected information
-      const assetType = step.metadata?.assetType || "Press Release";
       const collectedInfo = step.metadata?.collectedInformation || {};
+      
+      // Get asset type from multiple possible sources - prioritize the context that was just set
+      const assetType = collectedInfo.selectedAssetType || 
+                       collectedInfo.assetType || 
+                       step.metadata?.assetType || 
+                       "Press Release";
+      
+      logger.info('Asset generation - determining asset type', {
+        stepMetadataAssetType: step.metadata?.assetType,
+        collectedSelectedAssetType: collectedInfo.selectedAssetType,
+        collectedAssetType: collectedInfo.assetType,
+        finalAssetType: assetType,
+        collectedInfoKeys: Object.keys(collectedInfo)
+      });
       
       // Get conversation history to provide context
       const conversationHistory = await this.getThreadConversationHistory(workflow.threadId, 30);
@@ -2507,10 +2577,21 @@ export class WorkflowService {
       const templateName = TEMPLATE_KEY_MAP[templateKey] || 'pressRelease';
       const template = step.metadata?.templates?.[templateName];
       
+      logger.info('Asset generation - template selection', {
+        assetType,
+        templateKey,
+        templateName,
+        templateFound: !!template,
+        availableTemplates: Object.keys(step.metadata?.templates || {}),
+        collectedInfoKeys: Object.keys(collectedInfo),
+        fullCollectedInfo: collectedInfo
+      });
+      
       if (!template) {
         logger.error('Template not found for asset generation', {
           assetType,
           templateKey,
+          templateName,
           availableTemplates: Object.keys(step.metadata?.templates || {})
         });
         throw new Error(`Template not found for asset type: ${assetType}`);
@@ -2680,8 +2761,23 @@ export class WorkflowService {
   }> {
     try {
       // 1. Get the asset type and original generated asset
-      const assetType = step.metadata?.assetType || "Press Release";
+      const collectedInfo = step.metadata?.collectedInformation || {};
+      
+      // Get asset type from multiple possible sources - prioritize the context that was just set
+      const assetType = collectedInfo.selectedAssetType || 
+                       collectedInfo.assetType || 
+                       step.metadata?.assetType || 
+                       "Press Release";
+                       
       const originalAsset = step.metadata?.generatedAsset || "";
+      
+      logger.info('Asset revision - determining asset type', {
+        stepMetadataAssetType: step.metadata?.assetType,
+        collectedSelectedAssetType: collectedInfo.selectedAssetType,
+        collectedAssetType: collectedInfo.assetType,
+        finalAssetType: assetType,
+        collectedInfoKeys: Object.keys(collectedInfo)
+      });
       
       // 2. Create a custom step for revision analysis
       const analysisStep = {
@@ -2838,9 +2934,19 @@ export class WorkflowService {
         });
                 
                 // Add the revised asset as a direct message
+                const revisedAssetMessage2 = {
+                  type: 'asset_generated',
+                  assetType: assetType,
+                  content: revisedAsset,
+                  displayContent: revisedAsset,
+                  stepId: step.id,
+                  stepName: step.name,
+                  isRevision: true
+                };
+                
                 await this.addDirectMessage(
           workflow.threadId,
-          `Here's your revised ${assetType}:\n\n${revisedAsset}`
+          `[ASSET_DATA]${JSON.stringify(revisedAssetMessage2)}[/ASSET_DATA]\n\nHere's your revised ${assetType}:\n\n${revisedAsset}`
         );
         
         // Update the step prompt for another review
@@ -2965,7 +3071,7 @@ export class WorkflowService {
       });
 
       // Process the message with the JsonDialogService, including conversation history
-      const result = await this.jsonDialogService.processMessage(step, userInput, conversationHistory);
+      const result = await this.jsonDialogService.processMessage(step, userInput, conversationHistory, workflow.threadId);
       
       logger.info('JSON dialog processed', {
         isStepComplete: result.isStepComplete,
@@ -3181,44 +3287,214 @@ export class WorkflowService {
             metadata: { ...nextStep.metadata, initialPromptSent: false }
           });
           
-          // Check if the next step is an API_CALL that should auto-execute
+          // Send the initial prompt for the next step
+          // IMPORTANT: Get the updated step after context initialization to use the new prompt
+          const updatedNextStep = await this.dbService.getStep(nextStep.id);
+          const promptToSend = updatedNextStep?.prompt || nextStep.prompt;
+          
+          // Check if this is an Asset Generation step that should auto-execute
           if (nextStep.stepType === StepType.API_CALL && nextStep.name === "Asset Generation") {
-            logger.info('Auto-executing Asset Generation step', {
+            logger.info('Auto-executing Asset Generation step with API_CALL logic', {
               stepId: nextStep.id,
               workflowId: workflow.id
             });
             
-            // Automatically execute the Asset Generation step
+            // Auto-execute the Asset Generation step using the proper API_CALL logic
             try {
-              const assetResult = await this.handleJsonAssetGeneration(workflow, nextStep, "auto-execute");
+              // Get the collected information from the previous step
+              const infoStep = refreshedWorkflow.steps.find(s => s.name === "Information Collection");
+              const collectedInfo = infoStep?.metadata?.collectedInformation || {};
               
-              // Return the result from asset generation
-              return assetResult;
-            } catch (error) {
-              logger.error('Error auto-executing Asset Generation step', {
-                error: error instanceof Error ? error.message : 'Unknown error'
+              // Get the asset type from the context
+              const assetType = collectedInfo.selectedAssetType || 
+                               collectedInfo.assetType || 
+                               "Social Post";
+              
+              logger.info('Asset Generation auto-execution - Asset type determined', {
+                assetType,
+                collectedInfoKeys: Object.keys(collectedInfo),
+                selectedAssetType: collectedInfo.selectedAssetType,
+                assetTypeField: collectedInfo.assetType
               });
               
-              // Fall back to normal step processing if auto-execution fails
-              await this.addDirectMessage(workflow.threadId, "There was an error generating your asset. Please try again.");
+              // Get the appropriate template for the asset type
+              const templateKey = assetType.toLowerCase().replace(/\s+/g, '');
+              const templateMap: Record<string, string> = {
+                'pressrelease': 'pressRelease',
+                'mediapitch': 'mediaPitch',
+                'socialpost': 'socialPost',
+                'blogpost': 'blogPost',
+                'faqdocument': 'faqDocument'
+              };
+              
+              const templateName = templateMap[templateKey] || 'socialPost';
+              const template = updatedNextStep?.metadata?.templates?.[templateName] || nextStep.metadata?.templates?.[templateName];
+              
+              logger.info('Asset Generation auto-execution - Template selection', {
+                assetType,
+                templateKey,
+                templateName,
+                templateFound: !!template,
+                availableTemplates: Object.keys(updatedNextStep?.metadata?.templates || nextStep.metadata?.templates || {})
+              });
+              
+              if (!template) {
+                throw new Error(`Template not found for asset type: ${assetType}`);
+              }
+              
+              // Create custom step with the template
+              const customStep = {
+                ...(updatedNextStep || nextStep),
+                metadata: {
+                  ...(updatedNextStep || nextStep).metadata,
+                  openai_instructions: template
+                }
+              };
+              
+              // Format the collected information for generation
+              const formattedInfo = this.formatJsonInfoForAsset(collectedInfo, assetType, conversationHistory);
+              
+              logger.info('Asset Generation auto-execution - Sending to OpenAI', {
+                assetType,
+                formattedInfoLength: formattedInfo.length,
+                templateLength: template.length
+              });
+              
+              // Generate the asset using OpenAI
+              const result = await this.openAIService.generateStepResponse(
+                customStep,
+                formattedInfo,
+                []
+              );
+              
+              logger.info('Asset Generation auto-execution - OpenAI response received', {
+                responseLength: result.responseText.length,
+                responsePreview: result.responseText.substring(0, 200) + '...'
+              });
+              
+              // Extract the asset content from the JSON response
+              let assetContent;
+              let displayContent; // What we show to the user
+              try {
+                const assetData = JSON.parse(result.responseText);
+                assetContent = assetData.asset;
+                
+                if (!assetContent) {
+                  throw new Error('Asset content not found in response');
+                }
+                
+                // For display purposes, use the clean asset content
+                displayContent = assetContent;
+                
+                logger.info('Asset Generation auto-execution - Successfully extracted asset', {
+                  assetLength: assetContent.length
+                });
+              } catch (parseError) {
+                logger.error('Asset Generation auto-execution - JSON parse error', {
+                  error: parseError instanceof Error ? parseError.message : 'Unknown error',
+                  response: result.responseText.substring(0, 200) + '...'
+              });
+              
+                // Fallback to using the entire response
+                assetContent = result.responseText;
+                displayContent = result.responseText;
+              }
+              
+              // Store the generated asset
+              await this.dbService.updateStep(nextStep.id, {
+                status: StepStatus.COMPLETE,
+                userInput: "auto-execute",
+                metadata: {
+                  ...(updatedNextStep || nextStep).metadata,
+                  generatedAsset: assetContent,
+                  assetType
+                }
+              });
+              
+              // Add the generated asset to the chat - use clean display content
+              const assetMessage = {
+                type: 'asset_generated',
+                assetType: assetType,
+                content: assetContent,
+                displayContent: displayContent,
+                stepId: step.id,
+                stepName: step.name
+              };
+              
+              await this.addDirectMessage(
+                workflow.threadId,
+                `[ASSET_DATA]${JSON.stringify(assetMessage)}[/ASSET_DATA]\n\nHere's your generated ${assetType}:\n\n${displayContent}`
+              );
+              
+              logger.info('Asset Generation auto-execution - Asset added to chat', {
+                assetType,
+                assetLength: assetContent.length
+              });
+              
+              // Move to the next step (Asset Review)
+              const assetReviewStep = refreshedWorkflow.steps.find(s => s.name === "Asset Review");
+              if (assetReviewStep) {
+                // Initialize the Asset Review step with context
+                await this.initializeStepWithContext(assetReviewStep.id, refreshedWorkflow);
+                
+                // Update the Asset Review step
+                await this.dbService.updateStep(assetReviewStep.id, {
+                  status: StepStatus.IN_PROGRESS,
+                  metadata: {
+                    ...assetReviewStep.metadata,
+                    assetType,
+                    generatedAsset: assetContent,
+                    initialPromptSent: false
+                  }
+                });
+                
+                // Update workflow to point to the Asset Review step
+                await this.dbService.updateWorkflowCurrentStep(workflow.id, assetReviewStep.id);
+                
+                // Get the updated step with the new prompt
+                const updatedReviewStep = await this.dbService.getStep(assetReviewStep.id);
+                const reviewPrompt = updatedReviewStep?.prompt || assetReviewStep.prompt;
+                
+                // Send the review prompt
+                if (reviewPrompt) {
+                  await this.addDirectMessage(workflow.threadId, reviewPrompt);
+                  
+                  // Mark prompt as sent
+                  await this.dbService.updateStep(assetReviewStep.id, {
+                    metadata: { ...assetReviewStep.metadata, initialPromptSent: true }
+                  });
+                }
               
               return {
-                response: "Error generating asset. Please try again.",
+                  response: `${assetType} generated successfully. Please review it.`,
                 nextStep: {
-                  id: nextStep.id,
-                  name: nextStep.name,
-                  prompt: nextStep.prompt,
-                  type: nextStep.stepType
+                    id: assetReviewStep.id,
+                    name: assetReviewStep.name,
+                    prompt: reviewPrompt,
+                    type: assetReviewStep.stepType
                 },
                 isComplete: false
               };
+              } else {
+                // No review step, complete the workflow
+                await this.dbService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
+                await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
+                
+                return {
+                  response: `${assetType} generated successfully.`,
+                  isComplete: true
+                };
+              }
+            } catch (autoExecError) {
+              logger.error('Error auto-executing Asset Generation step with API_CALL logic', {
+                stepId: nextStep.id,
+                error: autoExecError instanceof Error ? autoExecError.message : 'Unknown error'
+              });
+              
+              // Fall back to normal flow if auto-execution fails
+              await this.addDirectMessage(workflow.threadId, `Error generating asset. Please try again.`);
             }
           }
-          
-          // Send the initial prompt for the next step (for non-auto-executing steps)
-          // IMPORTANT: Get the updated step after context initialization to use the new prompt
-          const updatedNextStep = await this.dbService.getStep(nextStep.id);
-          const promptToSend = updatedNextStep?.prompt || nextStep.prompt;
           
           if (promptToSend) {
             await this.addDirectMessage(workflow.threadId, promptToSend);
@@ -3295,9 +3571,29 @@ export class WorkflowService {
 
         // Standard case - step not complete and not ready to generate
         const nextQuestion = result.nextQuestion || "Please provide more information.";
-        await this.addDirectMessage(workflow.threadId, nextQuestion);
         
-           return {
+        // Check if JsonDialogService already added an asset message to avoid duplication
+        // This happens when Information Collection steps incorrectly generate assets
+        const isInformationCollectionStep = step.name.includes("Information Collection") || step.name.includes("Collection");
+        const hasAssetContent = result.nextQuestion && 
+                               result.nextQuestion.length > 500 && 
+                               (result.nextQuestion.includes('**LinkedIn Post:**') || 
+                                result.nextQuestion.includes('**Twitter') ||
+                                result.nextQuestion.includes('FOR IMMEDIATE RELEASE') ||
+                                result.nextQuestion.includes('[ASSET_DATA]'));
+        
+        // Only add the message if it's not an asset message that was already added by JsonDialogService
+        if (!isInformationCollectionStep || !hasAssetContent) {
+          await this.addDirectMessage(workflow.threadId, nextQuestion);
+        } else {
+          logger.warn('Skipping duplicate message - JsonDialogService already added asset content', {
+            stepId: step.id,
+            stepName: step.name,
+            messageLength: nextQuestion.length
+          });
+        }
+        
+        return {
           response: nextQuestion,
           nextStep: {
             id: step.id,
@@ -3501,14 +3797,7 @@ export class WorkflowService {
       }
 
       // 2. Handle user input based on current step type - use standard JSON dialog for all steps
-      if (currentStep.name === "Asset Generation") {
-        return await this.handleJsonAssetGeneration(workflow, currentStep, userInput);
-      } else if (currentStep.name === "Asset Revision") {
-        return await this.handleJsonAssetRevision(workflow, currentStep, userInput);
-      } else {
-        // Handle all other JSON Dialog steps (including Information Collection) with standard processing
         return await this.handleJsonDialogStep(currentStep, userInput);
-      }
     } catch (error) {
       logger.error('Error handling JSON message', {
         error: error instanceof Error ? error.message : 'Unknown error'
@@ -3545,7 +3834,7 @@ export class WorkflowService {
           
           // Try fuzzy matching if exact match fails
           if (!nextTemplate) {
-            const availableTemplates = ["Launch Announcement", "JSON Dialog PR Workflow", "Quick Press Release", "Test Step Transitions", "Dummy Workflow"];
+            const availableTemplates = ["Launch Announcement", "JSON Dialog PR Workflow", "Quick Press Release", "Test Step Transitions", "Dummy Workflow", "Media Matching"];
             for (const templateName of availableTemplates) {
               if (templateName.toLowerCase().includes(selectedWorkflowName.toLowerCase()) || 
                   selectedWorkflowName.toLowerCase().includes(templateName.toLowerCase())) {
@@ -3809,6 +4098,16 @@ export class WorkflowService {
         ...step.metadata?.collectedInformation // Preserve any existing step-specific info
       }
     };
+    
+    logger.info('Updating step with context and prompt', {
+      stepId,
+      stepName: step.name,
+      contextKeys: Object.keys(previousContext),
+      selectedAssetType: previousContext.selectedAssetType,
+      assetType: previousContext.assetType,
+      updatedMetadataKeys: Object.keys(updatedMetadata.collectedInformation || {}),
+      finalPrompt: updatedPrompt?.substring(0, 100) + '...'
+    });
     
     // Update the step with the context and AI-generated prompt
     await this.dbService.updateStep(stepId, {

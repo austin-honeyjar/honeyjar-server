@@ -1,7 +1,7 @@
 import { WorkflowTemplate, StepType } from '../../types/workflow';
 
 export const MEDIA_LIST_TEMPLATE: WorkflowTemplate = {
-  id: "media-list-template",
+  id: "00000000-0000-0000-0000-000000000007",
   name: "Media List Generator",
   description: "Generate a prioritized media contact list based on topic relevance using news pipeline data and RocketReach API",
   steps: [
@@ -14,6 +14,8 @@ export const MEDIA_LIST_TEMPLATE: WorkflowTemplate = {
       dependencies: [],
       metadata: {
         goal: "Collect topic input from user to determine relevant media contacts",
+        essential: ["collectedInformation"],
+        initialPromptSent: false,
         baseInstructions: `You are a media list generator assistant. This is STEP 1 of 3 in the workflow.
 
 GOAL:
@@ -66,6 +68,8 @@ If the user's input is too vague or unclear:
       dependencies: ["Topic Input"],
       metadata: {
         goal: "Query the news pipeline database to find relevant authors based on the provided topic",
+        essential: ["collectedInformation"],
+        initialPromptSent: false,
         baseInstructions: `You are a media database specialist. This is STEP 2 of 3 in the workflow.
 
 GOAL:
@@ -140,6 +144,8 @@ If user needs to refine selection:
       dependencies: ["Database Query"],
       metadata: {
         goal: "Use RocketReach API to get complete contact information and generate final media list",
+        essential: ["collectedInformation"],
+        initialPromptSent: false,
         baseInstructions: `You are a contact enrichment specialist. This is STEP 3 of 3 in the workflow.
 
 GOAL:
