@@ -241,35 +241,88 @@ export class OpenAIService {
   }
 
   /**
-   * Generate an edited version of text based on instruction
+   * Generate an edited version of text based on instruction with enhanced context
    * Used specifically for asset text editing
    */
   async generateEditedText(
     originalText: string,
-    instruction: string
+    instruction: string,
+    context?: {
+      fullContent?: string;
+      assetType?: string;
+      assetTitle?: string;
+      surroundingContext?: string;
+    }
   ): Promise<string> {
     try {
       logger.info('Generating edited text with OpenAI', {
         originalTextLength: originalText.length,
-        instructionLength: instruction.length
+        instructionLength: instruction.length,
+        hasFullContent: !!context?.fullContent,
+        hasAssetType: !!context?.assetType
       });
 
-      const prompt = `Below is a portion of text that needs to be edited:
-      
-ORIGINAL TEXT:
+      // Build enhanced prompt with context
+      let prompt = `You are an expert editor working on ${context?.assetType || 'a document'}${context?.assetTitle ? ` titled "${context.assetTitle}"` : ''}.
+
+Below is a portion of text that needs to be edited:
+
+SELECTED TEXT TO EDIT:
 """
 ${originalText}
-"""
+"""`;
 
-INSTRUCTIONS:
+      // Add surrounding context if available
+      if (context?.surroundingContext) {
+        prompt += `
+
+SURROUNDING CONTEXT (for reference only - do not edit this):
+"""
+${context.surroundingContext}
+"""`;
+      }
+
+      // Add asset type specific guidance
+      if (context?.assetType) {
+        const assetType = context.assetType.toLowerCase();
+        if (assetType.includes('press release')) {
+          prompt += `
+
+This is a press release. Ensure the edited text maintains professional tone, clear messaging, and follows press release conventions.`;
+        } else if (assetType.includes('media pitch')) {
+          prompt += `
+
+This is a media pitch. Ensure the edited text is compelling, newsworthy, and maintains a persuasive tone appropriate for journalists.`;
+        } else if (assetType.includes('social')) {
+          prompt += `
+
+This is social media content. Ensure the edited text is engaging, concise, and appropriate for social media platforms.`;
+        } else if (assetType.includes('blog')) {
+          prompt += `
+
+This is blog content. Ensure the edited text maintains an engaging, informative tone appropriate for blog readers.`;
+        }
+      }
+
+      prompt += `
+
+EDITING INSTRUCTIONS:
 ${instruction}
 
-Please provide ONLY the edited version of the text, with no additional comments or explanations.`;
+IMPORTANT GUIDELINES:
+- Only edit the SELECTED TEXT portion above
+- Maintain the original meaning and intent unless specifically instructed otherwise
+- Ensure the edited text flows naturally with the surrounding context
+- Preserve any important formatting, names, dates, or specific details unless instructed to change them
+- If the instruction is unclear or would result in poor quality, make minimal conservative improvements
+- Return ONLY the edited version of the selected text, with no additional comments or explanations
+
+EDITED TEXT:`;
 
       const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { 
           role: 'system', 
-          content: 'You are an expert editor who follows instructions precisely. Provide only the edited version of the text.' 
+          content: 'You are an expert editor who follows instructions precisely while maintaining quality and context. You understand different content types and their requirements. Provide only the edited version of the specified text.' 
         },
         { role: 'user', content: prompt }
       ];
@@ -278,7 +331,7 @@ Please provide ONLY the edited version of the text, with no additional comments 
         model: this.model,
         messages,
         temperature: 0.3, // Lower temperature for more precise edits
-        max_tokens: 2000,
+        max_tokens: 4000, // Increased token limit for better handling of longer content
         presence_penalty: 0,
         frequency_penalty: 0,
       });
@@ -289,18 +342,145 @@ Please provide ONLY the edited version of the text, with no additional comments 
         throw new Error('No response generated from OpenAI');
       }
 
+      // Clean up the response - remove any potential wrapper text
+      let cleanedResponse = response.trim();
+      
+      // Remove common wrapper patterns that might appear despite instructions
+      const wrapperPatterns = [
+        /^Here's the edited text:\s*/i,
+        /^Edited text:\s*/i,
+        /^The edited version is:\s*/i,
+        /^Here is the edited version:\s*/i,
+        /^"(.+)"$/s, // Remove quotes if the entire response is wrapped in quotes
+      ];
+      
+      for (const pattern of wrapperPatterns) {
+        cleanedResponse = cleanedResponse.replace(pattern, '$1').trim();
+      }
+
       logger.info('Generated edited text', {
-        responseLength: response.length,
+        responseLength: cleanedResponse.length,
+        originalLength: originalText.length,
         usage: completion.usage
       });
 
-      return response;
+      return cleanedResponse;
     } catch (error) {
       logger.error('Error generating edited text:', {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined
       });
       throw error;
+    }
+  }
+
+  /**
+   * Generate a contextual prompt for a workflow step based on previous steps context
+   * @param step The workflow step that needs a contextual prompt
+   * @param context Information gathered from previous completed steps
+   * @returns A personalized prompt that acknowledges previous context
+   */
+  async generateContextualPrompt(
+    step: WorkflowStep,
+    context: Record<string, any>
+  ): Promise<string> {
+    try {
+      logger.info('Generating contextual prompt', {
+        stepName: step.name,
+        contextKeys: Object.keys(context),
+        originalPromptLength: step.prompt?.length || 0,
+        contextValues: {
+          announcementType: context.announcementType,
+          assetType: context.assetType || context.selectedAssetType,
+          selectedAssetType: context.selectedAssetType
+        }
+      });
+
+      // If there's no context, use the original prompt
+      if (!context || Object.keys(context).length === 0) {
+        return step.prompt || "";
+      }
+
+      // Create a system prompt for generating contextual step prompts
+      const systemPrompt = `You are a workflow prompt generator. Your task is to create a personalized, contextual prompt for a workflow step based on information from previous steps.
+
+STEP INFORMATION:
+- Step Name: ${step.name}
+- Step Description: ${step.description}
+- Original Prompt: ${step.prompt}
+
+CONTEXT FROM PREVIOUS STEPS (JSON):
+\`\`\`json
+${JSON.stringify(context, null, 2)}
+\`\`\`
+
+TASK:
+Generate a new prompt for this step that:
+1. Uses the EXACT values from the context JSON above
+2. Replaces any placeholder text with actual values from the context
+3. Is specific and personalized based on the context
+4. Maintains a conversational, helpful tone
+5. Avoids asking for information that's already been provided
+
+CONTEXT INTERPRETATION RULES:
+- If context contains "announcementType": use that exact value (e.g., "Product Launch", "Funding Round")
+- If context contains "selectedAssetType" or "assetType": use that exact value
+- Replace placeholders like [announcement type], [asset type], etc. with actual values
+- If original prompt has placeholder text in brackets, replace it with context values
+
+EXAMPLES:
+
+Original: "Based on your announcement type of [Announcement Type Selection], I recommend..."
+Context: {"announcementType": "Product Launch"}
+Generated: "Based on your Product Launch announcement, I recommend..."
+
+Original: "Now I'll collect information for your [asset type selected in previous step]"
+Context: {"selectedAssetType": "Press Release", "announcementType": "Product Launch"}
+Generated: "Now I'll collect the specific information needed for your Product Launch press release"
+
+RESPONSE FORMAT:
+Return ONLY the new prompt text. Do not include any explanations, metadata, or formatting - just the prompt that should be shown to the user.`;
+
+      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Generate a contextual prompt for the "${step.name}" step.` }
+      ];
+
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        temperature: 0.7,
+        max_tokens: 500, // Prompts should be concise
+        presence_penalty: 0,
+        frequency_penalty: 0,
+      });
+
+      const response = completion.choices[0]?.message?.content;
+      if (!response) {
+        logger.error('No contextual prompt generated from OpenAI', {
+          stepName: step.name
+        });
+        // Fallback to original prompt
+        return step.prompt || "";
+      }
+
+      logger.info('Generated contextual prompt', {
+        stepName: step.name,
+        originalPromptLength: step.prompt?.length || 0,
+        newPromptLength: response.length,
+        usage: completion.usage
+      });
+
+      return response.trim();
+    } catch (error) {
+      logger.error('Error generating contextual prompt:', {
+        stepName: step.name,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      
+      // Fallback to original prompt if AI generation fails
+      return step.prompt || "";
     }
   }
 } 

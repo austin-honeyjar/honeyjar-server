@@ -18,7 +18,8 @@ export class JsonDialogService {
   async processMessage(
     step: WorkflowStep, 
     userInput: string,
-    conversationHistory: string[] = []
+    conversationHistory: string[] = [],
+    threadId?: string
   ): Promise<{
     isStepComplete: boolean;
     nextQuestion?: string;
@@ -32,8 +33,40 @@ export class JsonDialogService {
         stepId: step.id,
         stepName: step.name,
         historyLength: conversationHistory.length,
-        userInputLength: userInput.length
+        userInputLength: userInput.length,
+        threadId: threadId || 'not provided'
       });
+
+      // If threadId is not provided, try to get it from the workflow
+      let actualThreadId = threadId;
+      if (!actualThreadId) {
+        try {
+          // Import dependencies without causing circular imports
+          const { db } = await import('../db');
+          const { workflows } = await import('../db/schema');
+          const { eq } = await import('drizzle-orm');
+          
+          const workflow = await db.query.workflows.findFirst({
+            where: eq(workflows.id, step.workflowId)
+          });
+          
+          if (workflow) {
+            actualThreadId = workflow.threadId;
+            logger.info('Retrieved threadId from workflow', {
+              workflowId: step.workflowId,
+              threadId: actualThreadId
+            });
+          } else {
+            logger.error('Could not find workflow to get threadId', {
+              workflowId: step.workflowId
+            });
+          }
+        } catch (error) {
+          logger.error('Error retrieving workflow for threadId', {
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+        }
+      }
 
       // Special handling for the "Generate an Asset" step - send a "generating" message
       if ((step.name === "Generate an Asset" || step.name === "Asset Generation") && !userInput.includes("INTERNAL_SYSTEM_PROMPT")) {
@@ -44,22 +77,26 @@ export class JsonDialogService {
         const { db } = await import('../db');
         const { chatMessages } = await import('../db/schema');
         
-        try {
-          // Insert a "generating" message before starting the process
-          await db.insert(chatMessages)
-            .values({
-              threadId: step.workflowId, // In this context workflowId is used as threadId
-              content: "Generating your PR asset now. This may take a moment...",
-              role: "assistant",
-              userId: "system"
+        if (actualThreadId) {
+          try {
+            // Insert a "generating" message before starting the process
+            await db.insert(chatMessages)
+              .values({
+                threadId: actualThreadId, // Use the actual thread ID
+                content: "Generating your PR asset now. This may take a moment...",
+                role: "assistant",
+                userId: "system"
+              });
+              
+            logger.info('Added generating message to chat', { threadId: actualThreadId });
+          } catch (error) {
+            logger.error('Error adding generating message to chat', {
+              error: error instanceof Error ? error.message : 'Unknown error'
             });
-            
-          logger.info('Added generating message to chat', { threadId: step.workflowId });
-        } catch (error) {
-          logger.error('Error adding generating message to chat', {
-            error: error instanceof Error ? error.message : 'Unknown error'
-          });
-          // Continue even if the message couldn't be added
+            // Continue even if the message couldn't be added
+          }
+        } else {
+          logger.warn('Could not add generating message - no threadId available');
         }
         
         // Use the modified prompt
@@ -180,51 +217,297 @@ export class JsonDialogService {
       }
 
       // Special handling for asset generation - add the generated asset to the chat directly
-      if ((step.name === "Generate an Asset" || step.name === "Asset Generation") && 
-          (responseData.isComplete || responseData.isStepComplete) && 
-          (responseData.collectedInformation?.asset || responseData.asset)) {
-        logger.info('Generated asset detected, adding to chat', {
+      // ONLY for steps explicitly named for asset generation, NOT for information collection steps
+      const isAssetGenerationStep = (step.name === "Generate an Asset" || step.name === "Asset Generation") && 
+                                   !step.name.includes("Information Collection") && 
+                                   !step.name.includes("Collection") &&
+                                   (responseData.isComplete || responseData.isStepComplete);
+      
+      // Log potential issues with Information Collection steps generating assets
+      if ((step.name.includes("Information Collection") || step.name.includes("Collection")) && 
+          (responseData.isComplete || responseData.isStepComplete)) {
+        logger.warn('Information Collection step marked as complete - checking for asset content', {
           stepId: step.id,
           stepName: step.name,
-          // Handle both response formats
-          assetLength: (responseData.collectedInformation?.asset || responseData.asset || '').length
+          isComplete: responseData.isComplete,
+          isStepComplete: responseData.isStepComplete,
+          hasAssetContent: !!(responseData.collectedInformation?.asset || responseData.asset),
+          responseKeys: Object.keys(responseData),
+          collectedInfoKeys: Object.keys(responseData.collectedInformation || {})
         });
         
-        try {
-          // Import dependencies without causing circular imports
-          const { db } = await import('../db');
-          const { chatMessages } = await import('../db/schema');
-          
-          // Get the asset from either location
-          const assetContent = responseData.collectedInformation?.asset || responseData.asset;
-          const assetType = responseData.collectedInformation?.assetType || responseData.assetType || "PR Asset";
-          
-          // Add the generated asset as a direct message
-          await db.insert(chatMessages)
-            .values({
-              threadId: step.workflowId, // In this context workflowId is used as threadId
-              content: `Here's your generated ${assetType}:\n\n${assetContent}`,
-              role: "assistant",
-              userId: "system"
-            });
-          
-          logger.info('Successfully added PR asset to chat', {
-            threadId: step.workflowId,
-            assetLength: assetContent.length
+        // Check if the response incorrectly contains asset content
+        const hasAssetContent = responseData.collectedInformation?.asset || 
+                               responseData.asset ||
+                               responseData.collectedInformation?.generatedAsset ||
+                               responseData.generatedAsset ||
+                               (responseData.nextQuestion && 
+                                responseData.nextQuestion.length > 500 && 
+                                (responseData.nextQuestion.includes('**LinkedIn Post:**') || 
+                                 responseData.nextQuestion.includes('**Twitter') ||
+                                 responseData.nextQuestion.includes('FOR IMMEDIATE RELEASE')));
+        
+        if (hasAssetContent) {
+          logger.error('Information Collection step incorrectly generated asset content', {
+            stepId: step.id,
+            stepName: step.name,
+            assetFound: true,
+            responsePreview: openAIResult.responseText.substring(0, 200) + '...'
           });
           
-          // If the asset was directly on responseData, move it to collectedInformation for consistency
-          if (!responseData.collectedInformation?.asset && responseData.asset) {
-            responseData.collectedInformation = responseData.collectedInformation || {};
-            responseData.collectedInformation.asset = responseData.asset;
-            responseData.collectedInformation.assetType = responseData.assetType;
+          // SAFETY FIX: Remove asset content from Information Collection responses
+          if (responseData.collectedInformation?.asset) {
+            delete responseData.collectedInformation.asset;
           }
-        } catch (error) {
-          logger.error('Error adding press release to chat', {
-            error: error instanceof Error ? error.message : 'Unknown error',
-            stack: error instanceof Error ? error.stack : undefined
+          if (responseData.asset) {
+            delete responseData.asset;
+          }
+          if (responseData.collectedInformation?.generatedAsset) {
+            delete responseData.collectedInformation.generatedAsset;
+          }
+          if (responseData.generatedAsset) {
+            delete responseData.generatedAsset;
+          }
+          
+          // If the nextQuestion contains asset content, replace it with a proper collection question
+          if (responseData.nextQuestion && responseData.nextQuestion.length > 500) {
+            responseData.nextQuestion = "I need to collect more information about your announcement. Could you provide additional details about your company, the announcement, and any key messaging you'd like to include?";
+            responseData.isComplete = false;
+            responseData.isStepComplete = false;
+          }
+          
+          logger.info('Cleaned asset content from Information Collection response', {
+            stepId: step.id,
+            stepName: step.name
           });
-          // Continue with normal response even if adding to chat failed
+        }
+      }
+      
+      if (isAssetGenerationStep) {
+        logger.info('Asset generation step detected', {
+          stepId: step.id,
+          stepName: step.name,
+          isComplete: responseData.isComplete,
+          isStepComplete: responseData.isStepComplete,
+          responseDataKeys: Object.keys(responseData),
+          collectedInfoKeys: Object.keys(responseData.collectedInformation || {}),
+          rawResponseLength: openAIResult.responseText.length,
+          rawResponsePreview: openAIResult.responseText.substring(0, 300) + '...'
+        });
+        
+        // Get the asset content from multiple possible locations
+        let assetContent = responseData.collectedInformation?.asset || 
+                          responseData.asset ||
+                          responseData.collectedInformation?.generatedAsset ||
+                          responseData.generatedAsset;
+        
+        // If no asset content found in structured fields, try to extract from the response text
+        if (!assetContent && responseData.nextQuestion) {
+          // Sometimes the asset content is in the nextQuestion field
+          assetContent = responseData.nextQuestion;
+        }
+        
+        // If still no content, try to extract from the raw API response
+        if (!assetContent && openAIResult.responseText) {
+          try {
+            // First try to parse the entire response as JSON and extract the asset field
+            try {
+              const parsedResponse = JSON.parse(openAIResult.responseText);
+              if (parsedResponse.asset) {
+                assetContent = parsedResponse.asset;
+                logger.info('Extracted asset from parsed JSON response', { contentLength: assetContent.length });
+              }
+            } catch (jsonParseError) {
+              // If full JSON parsing fails, try regex extraction
+              const rawResponse = openAIResult.responseText;
+              
+              logger.info('Full JSON parse failed, attempting regex extraction', {
+                responseLength: rawResponse.length,
+                responsePreview: rawResponse.substring(0, 200) + '...'
+              });
+              
+              // Look for JSON with asset field (more flexible pattern)
+              const assetMatch = rawResponse.match(/"asset":\s*"([^"]*(?:\\.[^"]*)*)"/s);
+              if (assetMatch) {
+                assetContent = assetMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+                logger.info('Extracted asset from JSON pattern', { contentLength: assetContent.length });
+              } else {
+                // Try to find content between specific markers
+                const contentPatterns = [
+                  // Look for content after "Here's your" or similar
+                  /Here's your.*?:\s*\n\n(.*)/is,
+                  // Look for content after asset type mention
+                  /Social Post.*?:\s*\n\n(.*)/is,
+                  /Press Release.*?:\s*\n\n(.*)/is,
+                  /Media Pitch.*?:\s*\n\n(.*)/is,
+                  /Blog Post.*?:\s*\n\n(.*)/is,
+                  /FAQ.*?:\s*\n\n(.*)/is,
+                  // Look for any substantial content block
+                  /\n\n([^\n]{100,}(?:\n[^\n]{50,})*)/s
+                ];
+                
+                for (const pattern of contentPatterns) {
+                  const match = rawResponse.match(pattern);
+                  if (match && match[1]) {
+                    assetContent = match[1].trim();
+                    logger.info('Extracted asset using pattern matching', { 
+                      pattern: pattern.source,
+                      contentLength: assetContent.length 
+                    });
+                    break;
+                  }
+                }
+                
+                // Last resort: if response looks like it contains actual content, use it all
+                if (!assetContent && rawResponse.length > 200 && !rawResponse.includes('I want to make sure')) {
+                  assetContent = rawResponse;
+                  logger.info('Using entire response as asset content (fallback)', { 
+                    contentLength: assetContent.length 
+                  });
+                }
+              }
+            }
+          } catch (error) {
+            logger.warn('Could not extract asset from raw response', { error });
+          }
+        }
+        
+        // Final check: if assetContent still contains JSON structure, try to extract the asset field
+        if (assetContent && typeof assetContent === 'string' && assetContent.trim().startsWith('{')) {
+          try {
+            const parsedAsset = JSON.parse(assetContent);
+            if (parsedAsset.asset) {
+              logger.info('Extracted clean asset content from JSON structure', {
+                originalLength: assetContent.length,
+                cleanLength: parsedAsset.asset.length
+              });
+              assetContent = parsedAsset.asset;
+            }
+          } catch (finalParseError) {
+            // If it looks like JSON but doesn't parse, try regex extraction one more time
+            const finalAssetMatch = assetContent.match(/"asset":\s*"([^"]*(?:\\.[^"]*)*)"/s);
+            if (finalAssetMatch) {
+              const extractedContent = finalAssetMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+              logger.info('Final regex extraction successful', {
+                originalLength: assetContent.length,
+                cleanLength: extractedContent.length
+              });
+              assetContent = extractedContent;
+            }
+          }
+        }
+        
+        if (assetContent) {
+          logger.info('Generated asset detected, adding to chat', {
+            stepId: step.id,
+            stepName: step.name,
+            assetLength: assetContent.length,
+            extractionMethod: responseData.collectedInformation?.asset ? 'collectedInformation.asset' :
+                             responseData.asset ? 'responseData.asset' :
+                             responseData.nextQuestion ? 'nextQuestion' : 'rawResponse'
+          });
+          
+          if (actualThreadId) {
+            try {
+              // Import dependencies without causing circular imports
+              const { db } = await import('../db');
+              const { chatMessages } = await import('../db/schema');
+              
+              // Get asset type from multiple sources with better fallback logic
+              let assetType = responseData.collectedInformation?.selectedAssetType ||
+                             responseData.collectedInformation?.assetType || 
+                             responseData.assetType ||
+                             collectedInfo?.selectedAssetType ||
+                             collectedInfo?.assetType ||
+                             step.metadata?.collectedInformation?.selectedAssetType ||
+                             step.metadata?.collectedInformation?.assetType ||
+                             "Press Release"; // Default fallback
+              
+              // Clean up the asset type name if needed
+              if (assetType === "PR Asset") {
+                assetType = "Press Release";
+              }
+              
+              logger.info('JsonDialogService - Asset type determination', {
+                responseAssetType: responseData.assetType,
+                responseCollectedAssetType: responseData.collectedInformation?.assetType,
+                responseSelectedAssetType: responseData.collectedInformation?.selectedAssetType,
+                collectedInfoAssetType: collectedInfo?.assetType,
+                collectedInfoSelectedAssetType: collectedInfo?.selectedAssetType,
+                stepMetadataAssetType: step.metadata?.collectedInformation?.assetType,
+                stepMetadataSelectedAssetType: step.metadata?.collectedInformation?.selectedAssetType,
+                finalAssetType: assetType
+              });
+              
+              // Add the generated asset as a direct message
+              const assetMessage = {
+                type: 'asset_generated',
+                assetType: assetType,
+                content: assetContent,
+                displayContent: assetContent,
+                stepId: step.id,
+                stepName: step.name
+              };
+              
+              // Extract clean display content for the chat message
+              let cleanDisplayContent = assetContent;
+              
+              // If assetContent is JSON with an "asset" field, extract just the asset content for display
+              if (typeof assetContent === 'string' && assetContent.trim().startsWith('{')) {
+                try {
+                  const parsedAsset = JSON.parse(assetContent);
+                  if (parsedAsset.asset) {
+                    cleanDisplayContent = parsedAsset.asset;
+                    logger.info('Extracted clean display content from JSON wrapper for chat display');
+                  }
+                } catch (parseError) {
+                  logger.info('Asset content looks like JSON but failed to parse, using as-is for display');
+                }
+              }
+              
+              await db.insert(chatMessages)
+                .values({
+                  threadId: actualThreadId, // Use the actual thread ID
+                  content: `[ASSET_DATA]${JSON.stringify(assetMessage)}[/ASSET_DATA]\n\nHere's your generated ${assetType}:\n\n${cleanDisplayContent}`,
+                  role: "assistant",
+                  userId: "system"
+                });
+              
+              logger.info('Successfully added asset to chat', {
+                threadId: actualThreadId,
+                assetLength: assetContent.length,
+                assetType
+              });
+              
+              // Store the asset in the response data for consistency
+              if (!responseData.collectedInformation) {
+                responseData.collectedInformation = {};
+              }
+              responseData.collectedInformation.asset = assetContent;
+              responseData.collectedInformation.assetType = assetType;
+              
+            } catch (error) {
+              logger.error('Error adding asset to chat', {
+                error: error instanceof Error ? error.message : 'Unknown error',
+                stack: error instanceof Error ? error.stack : undefined
+              });
+              // Continue with normal response even if adding to chat failed
+            }
+          } else {
+            logger.warn('Cannot add asset to chat - no threadId available', {
+              stepId: step.id,
+              stepName: step.name,
+              assetLength: assetContent.length
+            });
+          }
+        } else {
+          logger.warn('No asset content found in response for asset generation step', {
+            stepId: step.id,
+            stepName: step.name,
+            responseKeys: Object.keys(responseData),
+            collectedInfoKeys: Object.keys(responseData.collectedInformation || {}),
+            hasNextQuestion: !!responseData.nextQuestion
+          });
         }
       }
 
@@ -263,8 +546,18 @@ export class JsonDialogService {
       };
     }
     
-    // For any information collection step - use generic fields
+    // For Information Collection steps, prioritize step metadata over hardcoded values
     if (step.name.includes("Information Collection") || step.name.includes("Collection")) {
+      // First check if the step has its own essential fields defined
+      if (step.metadata?.essential && step.metadata.essential.length > 0) {
+        return {
+          essential: step.metadata.essential,
+          important: step.metadata.important || [],
+          optional: step.metadata.optional || []
+        };
+      }
+      
+      // Fallback to generic fields only if no step-specific fields are defined
       return {
         essential: ["companyName", "announcementType"],
         important: ["productName", "keyFeatures"],
@@ -272,7 +565,7 @@ export class JsonDialogService {
       };
     }
     
-    // Default structure for other steps
+    // Default structure for other steps - always respect step metadata first
     return {
       essential: step.metadata?.essential || [],
       important: step.metadata?.important || [],
@@ -339,7 +632,7 @@ If the user has clearly selected a workflow:
 {
   "isComplete": true,
   "collectedInformation": {
-    "selectedWorkflow": "EXACT WORKFLOW NAME"
+    "selectedWorkflow": "EXACT WORKFLOWS NAME"
   },
   "nextQuestion": null,
   "suggestedNextStep": "Thread Title and Summary"
@@ -398,6 +691,19 @@ If the user is asking a question or needs help:
     }
     // Default case for other steps - particularly important for information gathering steps
     else {
+      // Special handling for Information Collection steps - use their baseInstructions but include context
+      if (step.name.includes("Information Collection") || step.name.includes("Collection")) {
+        const baseInstructions = step.metadata?.baseInstructions;
+        if (baseInstructions) {
+          // Include the collected information context in the baseInstructions
+          const contextSection = Object.keys(collectedInfo).length > 0 
+            ? `\n\nCONTEXT FROM PREVIOUS STEPS:\n${JSON.stringify(collectedInfo, null, 2)}\n\nCRITICAL INSTRUCTIONS FOR INFORMATION COLLECTION:\n- You are in the INFORMATION COLLECTION phase, NOT the asset generation phase\n- Your task is ONLY to collect information needed for future asset generation\n- DO NOT generate any assets (press releases, social posts, media pitches, etc.)\n- DO NOT create any final content - only gather the required information\n- Ask follow-up questions to collect missing information\n- Use the context above to understand what has already been established (announcement type, asset type, etc.)\n- Once you have sufficient information, mark the step as complete to move to the Asset Generation phase\n- NEVER include generated asset content in your response`
+            : '';
+          
+          return baseInstructions + contextSection + formattedHistory;
+        }
+      }
+      
       // Calculate what information we already have vs what we still need
       const infoTracking = this.generateInfoTrackingStatus(collectedInfo, requiredFields);
       
@@ -433,7 +739,7 @@ If all essential information is collected:
     // All collected information including new info from this message
   },
   "nextQuestion": null,
-  "suggestedNextStep": "Asset Generation",
+  "suggestedNextStep": null,
   "completionPercentage": 100
 }
 

@@ -18,6 +18,17 @@ A Node.js server for the Honeyjar application, providing API endpoints for CSV p
 NODE_ENV=development
 DATABASE_URL=postgres://postgres:Password1@localhost:5432/client_db
 CLERK_SECRET_KEY=your_clerk_secret_key
+
+# Metabase/LexisNexis API Configuration
+METABASE_API_KEY=your_metabase_api_key_from_lexisnexis
+METABASE_BASE_URL=http://metabase.moreover.com
+
+# Source Changes API (for monitoring source additions/removals)
+METABASE_USERNAME=your_lexisnexis_portal_username
+METABASE_PASSWORD=your_lexisnexis_portal_password
+
+# JWT Configuration (for dev tokens)
+JWT_SECRET=your_jwt_secret_for_development
 ```
 
 ### Running with Docker Compose
@@ -104,7 +115,9 @@ gcloud run deploy honeyjar-server \
   --platform managed \
   --region us-central1 \
   --allow-unauthenticated
-```## API Documentation
+```
+
+## API Documentation
 
 The API documentation is available at:
 - Local: http://localhost:3005/api-docs
@@ -279,3 +292,177 @@ MIT
 The following environment variables are required:
 
 - `NODE_ENV`: The environment to run in (development, production) 
+
+## Metabase/LexisNexis Integration
+
+### Overview
+This server provides a comprehensive integration with the LexisNexis Metabase API for news data consumption, following the official documentation specifications.
+
+### Features Implemented ✅
+
+#### Core Endpoints
+- **Articles Retrieval**: `/api/v1/partners/articles` - Basic article fetching
+- **Article Search**: `/api/v1/partners/articles/search` - Advanced search with query parameters
+- **Trending Topics**: `/api/v1/partners/trending-topics` - Popular topics analysis
+- **Revoked Articles**: `/api/v1/partners/revoked-articles` - **Daily compliance requirement**
+- **News Sources**: `/api/v1/partners/sources` - Available news sources
+- **Source Changes**: `/api/v1/partners/sources/changes` - Monitor source additions/removals
+
+#### Advanced Features
+- **Sequential Processing**: `sequenceId` parameter to avoid duplicate articles
+- **Load Balancing**: `numberOfSlices` and `sliceIndex` for parallel downloaders
+- **Rate Limiting**: 20-second minimum between calls (validated)
+- **License Compliance**: Automatic article clicking for royalty payments
+- **Multiple Formats**: XML (default), JSON, RSS, Atom support
+- **Compression**: `compact=true` parameter for smaller responses
+- **Error Handling**: Complete Metabase error code coverage (1000-9999)
+
+#### Developer Features
+- **Dev Authentication**: `/api/v1/partners/dev-login` (dev/dev, admin/admin)
+- **Rate Limit Checking**: `/api/v1/partners/rate-limit/check`
+- **Compliance Processing**: `/api/v1/partners/articles/compliance`
+- **Comprehensive Logging**: Detailed debug output with emojis
+- **Swagger Documentation**: Complete API docs at `/api-docs`
+
+### Usage Examples
+
+#### Basic Article Retrieval
+```bash
+# Get latest articles
+curl "http://localhost:3005/api/v1/partners/articles" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Sequential processing (recommended)
+curl "http://localhost:3005/api/v1/partners/articles?sequenceId=12345&limit=500" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+#### Load Balancing (Multiple Clients)
+```bash
+# Client 1 of 3
+curl "http://localhost:3005/api/v1/partners/articles?numberOfSlices=3&sliceIndex=0" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Client 2 of 3  
+curl "http://localhost:3005/api/v1/partners/articles?numberOfSlices=3&sliceIndex=1" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+#### Format Options
+```bash
+# JSON format with compression
+curl "http://localhost:3005/api/v1/partners/articles?format=json&compact=true" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+#### Source Monitoring
+```bash
+# Check daily source changes
+curl "http://localhost:3005/api/v1/partners/sources/changes?date=2025-06-04" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Production Requirements ⚠️
+
+#### **Critical Missing Features for Production:**
+
+1. **Database Persistence**
+   - No storage for `sequenceId` tracking between calls
+   - No rate limiting history storage
+   - No compliance click tracking
+   - No revoked articles storage
+
+2. **Scheduled Operations**
+   - No continuous polling (should run every 20-60 seconds)
+   - No daily revoked articles compliance checks
+   - No automated source changes monitoring
+
+3. **Error Recovery & Resilience**
+   - No retry logic for failed API calls
+   - No circuit breakers for API failures
+   - No specific error code handling workflows
+   - No failover mechanisms
+
+4. **Monitoring & Alerting**
+   - No compliance tracking dashboards
+   - No rate limit violation alerts
+   - No API health monitoring
+   - No article volume monitoring
+
+5. **Advanced Data Processing**
+   - Limited XML field extraction (missing 80%+ of available fields)
+   - No sentiment analysis processing
+   - No entity extraction
+   - No company/stock ticker extraction
+   - No media (images/videos) processing
+   - No duplicate detection handling
+
+#### **Next Steps for Production:**
+
+1. **Database Schema Design**
+   ```sql
+   -- Example tables needed
+   CREATE TABLE metabase_sequences (api_key VARCHAR, last_sequence_id BIGINT);
+   CREATE TABLE rate_limit_history (api_key VARCHAR, last_call TIMESTAMP);
+   CREATE TABLE compliance_clicks (article_id VARCHAR, clicked_at TIMESTAMP);
+   CREATE TABLE revoked_articles (article_id VARCHAR, revoked_at TIMESTAMP);
+   ```
+
+2. **Background Job System**
+   - Implement job scheduler (e.g., node-cron, Bull queue)
+   - Set up continuous polling with 20-60 second intervals
+   - Add daily compliance job for revoked articles
+
+3. **Enhanced Data Models**
+   - Expand Article interface to capture all available XML fields
+   - Add sentiment, entity, and company extraction
+   - Implement media processing for images/videos
+
+4. **Monitoring Infrastructure**
+   - Set up APM (e.g., New Relic, DataDog)
+   - Create compliance dashboards
+   - Add health check endpoints
+   - Implement alert systems
+
+### Technical Specifications
+
+#### Rate Limiting
+- **Minimum**: 20 seconds between calls
+- **High Volume**: 30+ seconds recommended
+- **Maximum**: 500 articles per call
+- **Monitoring**: Can call every 60 minutes
+
+#### Data Processing
+- **Formats**: XML (default), JSON, RSS, Atom
+- **Compression**: gzip + compact parameter
+- **Size**: ~0.7MB compressed (5MB uncompressed) for 500 articles
+- **Daily Volume**: ~4GB compressed (30GB uncompressed)
+
+#### Authentication
+- **Main API**: Metabase API key
+- **Source Changes**: LexisNexis portal username/password
+- **Development**: JWT tokens for local testing
+
+### Compliance Notes
+
+1. **Daily Revoked Articles**: Must call `/revoked-articles` daily for compliance
+2. **Article Clicking**: Must click article URLs for royalty payments when content is displayed
+3. **License Tracking**: Monitor `licenses[]` field for compliance requirements
+4. **Rate Limiting**: Strictly enforce 20-second minimum between calls
+
+### Testing
+
+```bash
+# Dev login for testing
+curl -X POST "http://localhost:3005/api/v1/partners/dev-login" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "dev", "password": "dev"}'
+
+# Check rate limiting
+curl "http://localhost:3005/api/v1/partners/rate-limit/check" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+See `/api-docs` for complete API documentation.
+
+### Running with Docker Compose 

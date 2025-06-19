@@ -54,7 +54,7 @@ If the user enters anything else:
       type: StepType.JSON_DIALOG,
       name: "Step 2",
       description: "The second step",
-      prompt: "This is STEP 2. Previous inputs sum: 1. Please enter the number '2' to continue.",
+      prompt: "This is STEP 2. Previous inputs sum: [previous inputs sum]. Please enter the number '2' to continue.",
       order: 1,
       dependencies: ["Step 1"],
       metadata: {
@@ -100,7 +100,7 @@ If the user enters anything else:
       type: StepType.JSON_DIALOG,
       name: "Step 3",
       description: "The third step",
-      prompt: "This is STEP 3. Previous inputs sum: 3. Please enter the number '3' to continue.",
+      prompt: "This is STEP 3. Previous inputs sum: [previous inputs sum]. Please enter the number '3' to continue.",
       order: 2,
       dependencies: ["Step 2"],
       metadata: {
@@ -146,7 +146,7 @@ If the user enters anything else:
       type: StepType.JSON_DIALOG,
       name: "Step 4",
       description: "The fourth and final step",
-      prompt: "This is STEP 4. Previous inputs sum: 6. Please enter the number '4' to complete the workflow.",
+      prompt: "This is STEP 4. Previous inputs sum: [previous inputs sum]. Please enter the number '4' to complete the workflow.",
       order: 3,
       dependencies: ["Step 3"],
       metadata: {
