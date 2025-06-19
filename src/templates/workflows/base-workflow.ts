@@ -9,7 +9,7 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
       type: StepType.JSON_DIALOG,
       name: "Workflow Selection",
       description: "Select the type of workflow you'd like to create",
-      prompt: "Which workflow would you like to use? Please choose from:\n\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Quick Press Release - For creating a press release in just two steps\n• Test Step Transitions - For testing step transitions and workflow completion\n• Dummy Workflow - For testing purposes",
+      prompt: "Which workflow would you like to use? Please choose from:\n\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Quick Press Release - For creating a press release in just two steps\n• Test Step Transitions - For testing step transitions and workflow completion\n• Dummy Workflow - For testing purposes\n• Media Matching - For generating prioritized media contact lists based on topic relevance",
       order: 0,
       dependencies: [],
       metadata: {
@@ -19,7 +19,8 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
           "Dummy Workflow",
           "JSON Dialog PR Workflow",
           "Test Step Transitions",
-          "Quick Press Release"
+          "Quick Press Release",
+          "Media Matching"
         ],
         baseInstructions: `You are a workflow selection assistant. Your task is to match the user's input to one of the available workflows.
 
@@ -30,6 +31,7 @@ Match user input to one of these workflows:
 - Quick Press Release: For creating a press release in just two simple steps
 - Test Step Transitions: For testing step transitions and workflow completion
 - Dummy Workflow: For testing and demonstration purposes
+- Media Matching: For generating prioritized media contact lists based on topic relevance
 
 MATCHING RULES:
 - If user mentions "PR", "press release", "press", choose "JSON Dialog PR Workflow"
@@ -37,6 +39,7 @@ MATCHING RULES:
 - If user mentions "test", "dummy", "sample", "demo", choose "Dummy Workflow"
 - If user mentions "step", "transition", "test steps", choose "Test Step Transitions"
 - If user mentions "quick", "fast", "simple", "easy", choose "Quick Press Release"
+- If user mentions "media matching", "media contacts", "media list", "journalists", "reporters", choose "Media Matching"
 - If no clear match, ask user to clarify with choices
 
 RESPONSE FORMAT:
