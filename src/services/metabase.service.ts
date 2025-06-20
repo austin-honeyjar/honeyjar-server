@@ -610,11 +610,11 @@ export class MetabaseService {
     // Validate limit parameter (search API has different limits)
     let limit = params.limit || 1;
     if (limit < 1 || limit > 200) {
-      logger.warn(`⚠️ Invalid search limit ${limit}, defaulting to 1`, {
+      logger.warn(`⚠️ Invalid search limit ${limit}, defaulting to 200`, {
         requestedLimit: params.limit,
         maxAllowed: 200
       });
-      limit = 1;
+      limit = 200; // Default to maximum allowed instead of 1
     }
 
     // Build request parameters for search API

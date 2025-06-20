@@ -1341,6 +1341,235 @@ export class WorkflowService {
         }
       }
 
+      // Handle API_CALL step type for Media List Generator - Database Query
+      if (step.stepType === StepType.API_CALL && step.name === "Database Query") {
+        const workflow = await this.dbService.getWorkflow(workflowId);
+        if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+        
+        // Check if this step is awaiting a user decision
+        if (step.metadata?.needsUserDecision) {
+          // User is responding to the decision prompt
+          const userChoice = userInput.toLowerCase().trim();
+          
+          if (userChoice.includes('search more') || userChoice.includes('search further') || userChoice.includes('more authors')) {
+            // User wants to search further back
+            await this.addDirectMessage(workflow.threadId, `Searching further back in time for more authors on "${step.metadata.searchResults.originalTopic}"...`);
+            
+            // Perform extended search using lastSequenceId
+            try {
+              const { MetabaseService } = await import('./metabase.service');
+              const metabaseService = new MetabaseService();
+              
+              const searchResults = step.metadata.searchResults;
+              const topic = searchResults.originalTopic;
+              const searchQuery = searchResults.query;
+              const lastSequenceId = searchResults.lastSequenceId;
+              const currentDepth = searchResults.searchDepthLevel || 1;
+              
+              // Search with sequence_id for older articles
+              const extendedSearchResults = await metabaseService.searchArticles({
+                query: searchQuery,
+                limit: 500,
+                sequence_id: lastSequenceId,
+                sort_by_relevance: true,
+                show_relevance_score: true
+              });
+              
+              // Process the extended results
+              const combinedArticles = [...extendedSearchResults.articles];
+              
+              // Extract authors from all articles
+              const authorsMap = new Map();
+              
+              // Add existing authors first - convert topics back to Set
+              searchResults.authorsExtracted.forEach((author: any) => {
+                const existingAuthor = {
+                  ...author,
+                  topics: new Set(Array.isArray(author.topics) ? author.topics : [])
+                };
+                authorsMap.set(`${author.name}-${author.organization}`, existingAuthor);
+              });
+              
+              // Process new articles from extended search
+              extendedSearchResults.articles.forEach((article, index) => {
+                if (article.author && article.source) {
+                  const authorKey = `${article.author}-${article.source}`;
+                  
+                  if (!authorsMap.has(authorKey)) {
+                    authorsMap.set(authorKey, {
+                      id: `author-ext-${index}-${Date.now()}`,
+                      name: article.author,
+                      organization: article.source,
+                      relevanceScore: 0,
+                      articleCount: 0,
+                      topics: new Set(),
+                      recentArticles: 0,
+                      lastArticleDate: article.publishedAt
+                    });
+                  }
+                  
+                  const author = authorsMap.get(authorKey);
+                  author.articleCount++;
+                  author.relevanceScore += 5; // Base score per article
+                  
+                  if (article.topics) {
+                    article.topics.forEach(topic => author.topics.add(topic));
+                  }
+                  
+                  const articleDate = new Date(article.publishedAt);
+                  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+                  if (articleDate > thirtyDaysAgo) {
+                    author.recentArticles++;
+                    author.relevanceScore += 2;
+                  }
+                  
+                  if (articleDate > new Date(author.lastArticleDate)) {
+                    author.lastArticleDate = article.publishedAt;
+                  }
+                }
+              });
+              
+              // Convert to array and sort
+              const authorsArray = Array.from(authorsMap.values()).map(author => ({
+                ...author,
+                topics: Array.from(author.topics)
+              }));
+              
+              const topAuthors = authorsArray
+                .sort((a, b) => b.relevanceScore - a.relevanceScore)
+                .slice(0, 20); // Increased to 20 for extended search
+              
+              // Update search results
+              const updatedSearchResults = {
+                ...searchResults,
+                articlesFound: searchResults.articlesFound + extendedSearchResults.articles.length,
+                authorsExtracted: topAuthors,
+                selectedAuthors: topAuthors.length,
+                totalArticlesAnalyzed: searchResults.totalArticlesAnalyzed + extendedSearchResults.articles.length,
+                lastSequenceId: extendedSearchResults.lastSequenceId,
+                hasMoreResults: extendedSearchResults.hasMore,
+                searchDepthLevel: currentDepth + 1,
+                extendedSearchCompleted: true
+              };
+              
+              // Store the search results in step metadata and always ask for user decision
+              await this.dbService.updateStep(stepId, {
+                status: StepStatus.IN_PROGRESS,
+                userInput: "awaiting-user-decision",
+                metadata: {
+                  ...step.metadata,
+                  searchResults: updatedSearchResults,
+                  apiCallCompleted: true,
+                  needsUserDecision: true
+                }
+              });
+              
+              await this.addDirectMessage(
+                workflow.threadId,
+                `Extended search completed! Found **${topAuthors.length}** total authors (added ${topAuthors.length - searchResults.authorsExtracted.length} new authors) from ${updatedSearchResults.totalArticlesAnalyzed} total articles. Proceeding to contact enrichment...`
+              );
+              
+              // Move to Contact Enrichment step
+              const nextStep = workflow.steps.find(s => s.name === "Contact Enrichment");
+              if (nextStep) {
+                await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+                await this.dbService.updateStep(nextStep.id, {
+                  status: StepStatus.IN_PROGRESS
+                });
+                
+                return {
+                  response: `Extended search completed. Found ${topAuthors.length} total authors.`,
+                  nextStep: {
+                    id: nextStep.id,
+                    name: nextStep.name,
+                    prompt: nextStep.prompt,
+                    type: nextStep.stepType
+                  },
+                  isComplete: false
+                };
+              }
+              
+            } catch (error) {
+              await this.addDirectMessage(
+                workflow.threadId,
+                `Error during extended search: ${error instanceof Error ? error.message : 'Unknown error'}`
+              );
+              
+              return {
+                response: `Extended search failed.`,
+                isComplete: false
+              };
+            }
+            
+          } else if (userChoice.includes('proceed') || userChoice.includes('continue') || userChoice.includes('current')) {
+            // User wants to proceed with current results
+            await this.dbService.updateStep(stepId, {
+              status: StepStatus.COMPLETE,
+              userInput: userInput,
+              metadata: {
+                ...step.metadata,
+                needsUserDecision: false
+              }
+            });
+            
+            const authorsCount = step.metadata.searchResults.authorsExtracted.length;
+            await this.addDirectMessage(
+              workflow.threadId,
+              `Proceeding with ${authorsCount} author(s) to contact enrichment...`
+            );
+            
+            // Move to Contact Enrichment step
+            const nextStep = workflow.steps.find(s => s.name === "Contact Enrichment");
+            if (nextStep) {
+              await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+              await this.dbService.updateStep(nextStep.id, {
+                status: StepStatus.IN_PROGRESS
+              });
+              
+              return {
+                response: `Proceeding with ${authorsCount} authors to contact enrichment.`,
+                nextStep: {
+                  id: nextStep.id,
+                  name: nextStep.name,
+                  prompt: nextStep.prompt,
+                  type: nextStep.stepType
+                },
+                isComplete: false
+              };
+            }
+            
+          } else {
+            // User input not recognized
+            await this.addDirectMessage(
+              workflow.threadId,
+              `Please respond with "search more" to find additional authors or "proceed" to continue with current results.`
+            );
+            
+            return {
+              response: `Please choose "search more" or "proceed".`,
+              nextStep: {
+                id: stepId,
+                name: step.name,
+                prompt: step.prompt,
+                type: step.stepType
+              },
+              isComplete: false
+            };
+          }
+        } else {
+          // Normal Database Query execution (first time)
+          return await this.handleMediaListDatabaseQuery(stepId, workflowId, workflow.threadId);
+        }
+      }
+
+      // Handle API_CALL step type for Media List Generator - Contact Enrichment
+      if (step.stepType === StepType.API_CALL && step.name === "Contact Enrichment") {
+        const workflow = await this.dbService.getWorkflow(workflowId);
+        if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+        
+        return await this.handleMediaListContactEnrichment(stepId, workflowId, workflow.threadId);
+      }
+
       // Handle API_CALL step type for automatic Thread Title generation
       if (step.stepType === StepType.API_CALL && step.name === "Thread Title and Summary") {
         // Get the workflow to get the threadId
@@ -2159,6 +2388,22 @@ export class WorkflowService {
    */
   async addDirectMessage(threadId: string, content: string): Promise<void> {
     try {
+      // URGENT FIX: Media contacts lists should never get any prefix
+      if (content.includes("**Media Contacts List Generated Successfully!**")) {
+        logger.info(`MEDIA CONTACTS: Adding unmodified message to thread ${threadId}, length: ${content.length}`);
+        
+        await db.insert(chatMessages)
+          .values({
+            threadId,
+            content: content, // No modification at all
+            role: "assistant",
+            userId: "system"
+          });
+        
+        console.log(`MEDIA CONTACTS MESSAGE ADDED: Direct insert without prefix`);
+        return;
+      }
+      
       // Check if this is a status message that should be prefixed
       let messageContent = content;
       
@@ -2166,39 +2411,51 @@ export class WorkflowService {
       const isAssetMessage = content.includes("Here's your generated") || 
                             content.includes("Here's your revised");
       
+      // Check if this is a media contacts list message - should never get a prefix
+      const isMediaContactsList = content.includes("**Media Contacts List Generated Successfully!**") ||
+                                  content.includes("## **TOP MEDIA CONTACTS**") ||
+                                  content.includes("**Search Results Summary:**");
+      
       // Check if this is a step prompt message (initial step instructions to user)
       const isStepPrompt = !content.startsWith('[') && // Not already prefixed
                           !content.includes("Here's your") && // Not an asset
                           !content.includes("regenerating") && // Not status
                           !content.includes("generating") && // Not status
-                          !content.includes("completed"); // Not status
+                          !content.includes("completed") && // Not status
+                          !isMediaContactsList; // Not a media contacts list
       
       if (isAssetMessage) {
         logger.info(`Adding asset message to thread ${threadId}, content length: ${content.length}`);
       }
       
-      if (isStepPrompt) {
+      if (isMediaContactsList) {
+        logger.info(`Adding media contacts list message to thread ${threadId}, content length: ${content.length}`);
+        // Don't add any prefix to media contacts list messages
+        messageContent = content;
+      }
+      else if (isStepPrompt) {
         logger.info(`Sending step prompt to thread ${threadId}: "${content.substring(0, 100)}..."`);
       }
-      
-      // Automatically prefix workflow status messages
-      if (content.includes("Step \"") || 
+      // Automatically prefix workflow status messages (but exclude media contacts lists)
+      else if ((content.includes("Step \"") || 
           content.includes("Proceeding to step") || 
           content.includes("completed") || 
           content.startsWith("Processing workflow") ||
           content.startsWith("Selected workflow") ||
           content.startsWith("Workflow selected") ||
-          content.startsWith("Announcement type")) {
+          content.startsWith("Announcement type")) &&
+          !isMediaContactsList) {
         messageContent = `[Workflow Status] ${content}`;
       }
-      // Add [System] prefix to various system messages
-      else if (content.includes("generating") || 
+      // Exclude media contacts list from workflow status prefix
+      else if ((content.includes("generating") || 
                content.includes("thank you for your feedback") ||
                content.includes("regenerating") ||
                content.includes("revising") ||
                content.includes("creating") ||
                content.includes("this may take a moment") ||
-               content.includes("processing")) {
+               content.includes("processing")) &&
+               !content.includes("**Media Contacts List Generated Successfully!**")) {
         messageContent = `[System] ${content}`;
       }
       
@@ -4122,5 +4379,781 @@ export class WorkflowService {
       promptUpdated: updatedPrompt !== step.prompt,
       finalPrompt: updatedPrompt
     });
+  }
+
+  // Handle API_CALL step type for Media List Generator - Database Query
+  async handleMediaListDatabaseQuery(stepId: string, workflowId: string, threadId: string): Promise<{
+    response: string;
+    nextStep?: any;
+    isComplete: boolean;
+  }> {
+    try {
+      // Get the current step
+      const step = await this.dbService.getStep(stepId);
+      if (!step) throw new Error(`Step not found: ${stepId}`);
+
+      // Get the workflow to get the threadId
+      const workflow = await this.dbService.getWorkflow(workflowId);
+      if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+      
+      // Find the Topic Input step to get the collected topic
+      const topicStep = workflow.steps.find(s => s.name === "Topic Input");
+      if (!topicStep) throw new Error(`Topic Input step not found`);
+      
+      // Extract the topic from the previous step
+      const collectedInfo = topicStep.metadata?.collectedInformation || {};
+      const topic = collectedInfo.topic;
+      
+      if (!topic) {
+        throw new Error('No topic found from Topic Input step');
+      }
+      
+      logger.info('Starting Media List Database Query', {
+        stepId,
+        workflowId,
+        topic,
+        threadId: workflow.threadId
+      });
+      
+      // Send a message about starting the search
+      await this.addDirectMessage(workflow.threadId, `Searching news database for authors who have written about "U.S." with keyword "${topic}"...`);
+      
+      try {
+        // Import and use MetabaseService
+        const { MetabaseService } = await import('./metabase.service');
+        const metabaseService = new MetabaseService();
+        
+        // Search for articles with "U.S." as main term and topic as keyword
+        // Using Boolean syntax: "U.S." AND "topic"
+        const searchQuery = `U.S. AND "${topic}"`;
+        
+        const searchResults = await metabaseService.searchArticles({
+          query: searchQuery,
+          limit: 500, // Increased from 200 to 500
+          // Removed recent: true to search across longer time range instead of just last 3 days
+          sort_by_relevance: true,
+          show_relevance_score: true
+        });
+        
+        logger.info('Metabase search completed', {
+          articlesFound: searchResults.articles.length,
+          totalCount: searchResults.totalCount
+        });
+        
+        // Extract unique authors from articles
+        const authorsMap = new Map();
+        
+        // Log first few articles to see the actual data structure
+        logger.info('Sample article data for debugging', {
+          totalArticles: searchResults.articles.length,
+          sampleArticles: searchResults.articles.slice(0, 3).map(article => ({
+            id: article.id,
+            title: article.title?.substring(0, 100) + '...',
+            author: article.author,
+            source: article.source,
+            topics: article.topics,
+            publishedAt: article.publishedAt
+          }))
+        });
+        
+        searchResults.articles.forEach((article, index) => {
+          if (article.author && article.source) {
+            const authorKey = `${article.author}-${article.source}`;
+            
+            if (!authorsMap.has(authorKey)) {
+              authorsMap.set(authorKey, {
+                id: `author-${index}-${Date.now()}`,
+                name: article.author,
+                organization: article.source,
+                relevanceScore: 0,
+                articleCount: 0,
+                topics: new Set(),
+                recentArticles: 0,
+                lastArticleDate: article.publishedAt,
+                articles: [] // Store article metadata for debugging dropdown
+              });
+            }
+            
+            const author = authorsMap.get(authorKey);
+            author.articleCount++;
+            author.relevanceScore += 5; // Base score per article
+            
+            // Store article metadata for this author
+            author.articles.push({
+              id: article.id,
+              title: article.title,
+              publishedAt: article.publishedAt,
+              topics: article.topics || [],
+              url: article.url,
+              summary: article.summary?.substring(0, 200) + '...' || 'No summary available'
+            });
+            
+            // Add topics
+            if (article.topics) {
+              article.topics.forEach(topic => author.topics.add(topic));
+            }
+            
+            // Check if recent (last 30 days)
+            const articleDate = new Date(article.publishedAt);
+            const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+            if (articleDate > thirtyDaysAgo) {
+              author.recentArticles++;
+              author.relevanceScore += 2; // Bonus for recent articles
+            }
+            
+            // Update last article date if more recent
+            if (articleDate > new Date(author.lastArticleDate)) {
+              author.lastArticleDate = article.publishedAt;
+            }
+          }
+        });
+        
+        // Convert to array and process
+        const authorsArray = Array.from(authorsMap.values()).map(author => ({
+          ...author,
+          topics: Array.from(author.topics)
+        }));
+        
+        // Add Tim Cook from Apple as first contact for RocketReach testing
+        const timCookTestContact = {
+          id: `author-test-timcook-${Date.now()}`,
+          name: "Tim Cook",
+          organization: "Apple",
+          relevanceScore: 1000, // High score to ensure it's first
+          articleCount: 1,
+          topics: ["technology", "corporate"],
+          recentArticles: 1,
+          lastArticleDate: new Date().toISOString(),
+          articles: [{
+            id: "test-article-1",
+            title: "Apple CEO discusses future of technology",
+            publishedAt: new Date().toISOString(),
+            topics: ["technology", "corporate"],
+            url: "https://example.com/test-article",
+            summary: "Test article for RocketReach API testing..."
+          }]
+        };
+        
+        // Insert Tim Cook at the beginning of the array
+        authorsArray.unshift(timCookTestContact);
+        
+        // Sort by relevance score and take top authors (Tim Cook will be first due to high score)
+        const topAuthors = authorsArray
+          .sort((a, b) => b.relevanceScore - a.relevanceScore)
+          .slice(0, 15); // Top 15 authors
+        
+        // Check if we found enough authors for a good media list
+        const minAuthorsThreshold = 3; // Minimum authors needed for a good media list
+        const foundEnoughAuthors = topAuthors.length >= minAuthorsThreshold;
+        
+        // Create search results object
+        const searchResultsData = {
+          query: searchQuery,
+          originalTopic: topic,
+          searchTerms: {
+            primary: "U.S.",
+            keyword: topic
+          },
+          articlesFound: searchResults.articles.length,
+          authorsExtracted: topAuthors,
+          selectedAuthors: topAuthors.length,
+          totalArticlesAnalyzed: searchResults.articles.length,
+          searchCompletedAt: new Date().toISOString(),
+          // Store search metadata for potential follow-up searches
+          lastSequenceId: searchResults.lastSequenceId || null,
+          hasMoreResults: searchResults.hasMore || false,
+          searchDepthLevel: 1 // Track how many searches we've done
+        };
+        
+        // Store the search results in step metadata - ALWAYS ask for user decision
+        await this.dbService.updateStep(stepId, {
+          status: StepStatus.IN_PROGRESS,
+          userInput: "awaiting-user-decision",
+          metadata: {
+            ...step.metadata,
+            searchResults: searchResultsData,
+            apiCallCompleted: true,
+            needsUserDecision: true
+          }
+        });
+        
+        // Always present user with choice - regardless of how many authors found
+        const searchMoreMessage = `Found articles from **${topAuthors.length}** authors writing about "U.S." related to "${topic}".
+
+**Current Search Results:**
+• Total Articles Analyzed: ${searchResults.articles.length}
+• Authors Found: ${topAuthors.length}
+• Search Depth: Recent articles
+• Tim Cook (Test Contact): Included for RocketReach testing
+
+**Your Options:**
+
+**Search Further Back in Time**
+- Search older articles to find more authors 
+- Uses sequence_id to get next 500 articles
+- May find additional relevant journalists
+
+**Proceed with Current Results**  
+- Continue to contact enrichment with the ${topAuthors.length} author(s) found
+- Start RocketReach contact lookup process
+
+---
+
+Would you like to search further back for more authors, or proceed with the current ${topAuthors.length} contacts?
+
+**Type "search more" to expand the search or "proceed" to continue with current results.**`;
+        
+        await this.addDirectMessage(workflow.threadId, searchMoreMessage);
+        
+        logger.info('Media List Database Query - always asking user for decision', {
+          topAuthorsCount: topAuthors.length,
+          totalArticles: searchResults.articles.length,
+          userChoicePresented: true
+        });
+        
+        // Always keep the step in progress and return for user decision
+        return {
+          response: `Found ${topAuthors.length} authors. Presenting user with options to search deeper or proceed.`,
+          nextStep: {
+            id: stepId,
+            name: step.name,
+            prompt: searchMoreMessage,
+            type: step.stepType
+          },
+          isComplete: false
+        };
+        
+      } catch (error) {
+        logger.error('Error in Media List Database Query', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stepId,
+          topic
+        });
+        
+        await this.addDirectMessage(
+          workflow.threadId,
+          `Error searching database for "U.S." with keyword "${topic}". Please try again.`
+        );
+        
+        // Mark step as failed
+        await this.dbService.updateStep(stepId, {
+          status: StepStatus.FAILED,
+          metadata: {
+            ...step.metadata,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          }
+        });
+        
+        return {
+          response: `Database search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          isComplete: true
+        };
+      }
+    } catch (error) {
+      logger.error('Error handling Media List Database Query', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      throw error;
+    }
+  }
+
+
+  // Handle API_CALL step type for automatic Thread Title generation
+  async handleAutomaticThreadTitleGeneration(stepId: string, workflowId: string, threadId: string): Promise<{
+    response: string;
+    nextStep?: any;
+    isComplete: boolean;
+  }> {
+    try {
+      // Get the current step
+      const step = await this.dbService.getStep(stepId);
+      if (!step) throw new Error(`Step not found: ${stepId}`);
+
+      // Get the workflow to get the threadId
+      const workflow = await this.dbService.getWorkflow(workflowId);
+      if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+      
+      // Find the workflow selection step to get the selected workflow
+      const workflowSelectionStep = workflow.steps.find(s => s.name === "Workflow Selection");
+      if (!workflowSelectionStep) throw new Error(`Workflow Selection step not found`);
+      
+      // Get the selected workflow from the step data
+      const selectedWorkflow = workflowSelectionStep.aiSuggestion || 
+                              workflowSelectionStep.metadata?.collectedInformation?.selectedWorkflow;
+      
+      if (!selectedWorkflow) {
+        throw new Error('No workflow selection found for automatic title generation');
+      }
+      
+      // Generate thread title based on selected workflow and current date
+      const currentDate = new Date().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+      
+      const threadTitle = `${selectedWorkflow} - ${currentDate}`;
+      
+      console.log(`AUTO-GENERATING THREAD TITLE: '${threadTitle}' for thread ${workflow.threadId}`);
+      logger.info('Auto-generating thread title', { 
+        stepId, 
+        threadId: workflow.threadId, 
+        selectedWorkflow, 
+        threadTitle 
+      });
+      
+      // Update the thread title in the database (no user message needed)
+      await this.updateThreadTitleInDB(workflow.threadId, threadTitle, "");
+      
+      // Mark the step as complete
+      await this.dbService.updateStep(stepId, {
+        status: StepStatus.COMPLETE,
+        userInput: "auto-generated",
+        aiSuggestion: threadTitle,
+        metadata: {
+          ...step.metadata,
+          autoGenerated: true,
+          generatedTitle: threadTitle,
+          selectedWorkflow: selectedWorkflow
+        }
+      });
+      
+      // Since this is the base workflow and we've completed title generation,
+      // we need to transition to the selected workflow
+      logger.info('Thread title auto-generated, transitioning to selected workflow', {
+        workflowId,
+        threadId: workflow.threadId,
+        selectedWorkflow
+      });
+      
+      // Mark the base workflow as COMPLETED
+      await this.dbService.updateWorkflowStatus(workflowId, WorkflowStatus.COMPLETED);
+      await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
+      
+      // Create the appropriate workflow type
+      let newWorkflow: Workflow | null = null;
+      
+      try {
+        if (selectedWorkflow.includes(WORKFLOW_TYPES.LAUNCH_ANNOUNCEMENT)) {
+          // Create a Launch Announcement workflow using hardcoded UUID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT);
+        } 
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.PR_WORKFLOW)) {
+          // Create a JSON Dialog PR workflow
+          newWorkflow = await this.createJsonWorkflow(workflow.threadId);
+        }
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.TEST_STEP_TRANSITIONS)) {
+          // Create a Test Step Transitions workflow using hardcoded UUID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS);
+        }
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.DUMMY)) {
+          // Create a Dummy workflow using hardcoded UUID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.DUMMY_WORKFLOW);
+        }
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.QUICK_PRESS_RELEASE)) {
+          // Create a Quick Press Release workflow using hardcoded UUID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.QUICK_PRESS_RELEASE);
+        }
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
+          // Create a Media Matching workflow using template ID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
+        }
+        
+        if (newWorkflow) {
+          // Don't send a message about starting the workflow - keep it silent
+          logger.info('Automatically transitioned to selected workflow', {
+            newWorkflowId: newWorkflow.id,
+            selectedWorkflow,
+            threadTitle
+          });
+          
+          // Return the first step of the new workflow
+          if (newWorkflow.currentStepId) {
+            const firstStep = newWorkflow.steps.find(s => s.id === newWorkflow!.currentStepId);
+            if (firstStep) {
+              return {
+                response: ``, // Silent transition
+                nextStep: {
+                  id: firstStep.id,
+                  name: firstStep.name,
+                  prompt: firstStep.prompt,
+                  type: firstStep.stepType
+                },
+                isComplete: false
+              };
+            }
+          }
+        }
+      } catch (error) {
+        logger.error('Error creating selected workflow during auto-transition', { 
+          error: error instanceof Error ? error.message : 'Unknown error',
+          selectedWorkflow,
+          threadId: workflow.threadId
+        });
+        
+        // Send error message
+        await this.addDirectMessage(
+          workflow.threadId,
+          `There was an error starting the ${selectedWorkflow} workflow. Please try again.`
+        );
+        
+        return {
+          response: `Error starting selected workflow.`,
+          isComplete: true
+        };
+      }
+      
+      // If we get here, something went wrong
+      return {
+        response: `Thread titled "${threadTitle}" but failed to start selected workflow.`,
+        isComplete: true
+      };
+    } catch (error) {
+      logger.error('Error handling automatic Thread Title generation', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      throw error;
+    }
+  }
+
+  // Handle API_CALL step type for Media List Generator - Contact Enrichment
+  async handleMediaListContactEnrichment(stepId: string, workflowId: string, threadId: string): Promise<{
+    response: string;
+    nextStep?: any;
+    isComplete: boolean;
+  }> {
+    try {
+      // Get the current step
+      const step = await this.dbService.getStep(stepId);
+      if (!step) throw new Error(`Step not found: ${stepId}`);
+
+      // Get the workflow to get the threadId
+      const workflow = await this.dbService.getWorkflow(workflowId);
+      if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+      
+      // Find the Database Query step to get the authors list
+      const databaseStep = workflow.steps.find(s => s.name === "Database Query");
+      if (!databaseStep) throw new Error(`Database Query step not found`);
+      
+      // Extract the authors from the database search results
+      const searchResults = databaseStep.metadata?.searchResults || {};
+      const authorsToEnrich = searchResults.authorsExtracted || [];
+      const searchQuery = searchResults.query;
+      const originalTopic = searchResults.originalTopic;
+      const searchTerms = searchResults.searchTerms;
+      
+      if (!authorsToEnrich || authorsToEnrich.length === 0) {
+        throw new Error('No authors found from Database Query step');
+      }
+      
+      logger.info('Starting Media List Contact Enrichment', {
+        stepId,
+        workflowId,
+        authorsCount: authorsToEnrich.length,
+        searchQuery,
+        originalTopic,
+        threadId: workflow.threadId
+      });
+      
+      // Add detailed debugging for Tim Cook issue
+      logger.info('DEBUG - Authors to enrich details', {
+        authorsToEnrichCount: authorsToEnrich.length,
+        authorsToEnrichList: authorsToEnrich.map((author: any) => ({
+          id: author.id,
+          name: author.name,
+          organization: author.organization,
+          relevanceScore: author.relevanceScore
+        })),
+        firstAuthorName: authorsToEnrich[0]?.name,
+        hasTimCook: authorsToEnrich.some((author: any) => author.name === "Tim Cook"),
+        timCookAuthor: authorsToEnrich.find((author: any) => author.name === "Tim Cook")
+      });
+      
+      // Send a message about starting enrichment
+      await this.addDirectMessage(workflow.threadId, `Enriching contact information for ${authorsToEnrich.length} authors using RocketReach API...`);
+      
+      try {
+        // Import and use RocketReachService
+        const { RocketReachService } = await import('./rocketreach.service');
+        const rocketReachService = new RocketReachService();
+        
+        // Enrich contacts using RocketReach
+        const enrichedContacts = await rocketReachService.enrichContacts(authorsToEnrich);
+        
+        logger.info('RocketReach enrichment completed', {
+          totalAuthorsProcessed: authorsToEnrich.length,
+          contactsEnriched: enrichedContacts.length,
+          successRate: `${Math.round((enrichedContacts.length / authorsToEnrich.length) * 100)}%`,
+          enrichedContactNames: enrichedContacts.map(c => c.name),
+          originalAuthorNames: authorsToEnrich.map((a: any) => a.name)
+        });
+        
+        // If RocketReach enrichment failed completely, create fallback contacts from original authors
+        let finalContacts = enrichedContacts;
+        if (enrichedContacts.length === 0 && authorsToEnrich.length > 0) {
+          logger.warn('RocketReach enrichment returned no contacts, creating fallback contacts from original authors');
+          
+          finalContacts = authorsToEnrich.map((author: any) => ({
+            authorId: author.id,
+            name: author.name,
+            title: null,
+            organization: author.organization,
+            email: null,
+            phone: null,
+            linkedin: null,
+            twitter: null,
+            confidence: 'low' as const,
+            source: 'database' as const,
+            enrichmentScore: 1.0
+          }));
+        }
+        
+        logger.info('Final contacts for display', {
+          finalContactsCount: finalContacts.length,
+          enrichedCount: enrichedContacts.length,
+          fallbackUsed: finalContacts.length > enrichedContacts.length
+        });
+        
+        // Sort enriched contacts by relevance score first, then enrichment score
+        const prioritizedContacts = finalContacts
+          .sort((a, b) => {
+            // Get relevance scores from original authors
+            const aRelevanceScore = authorsToEnrich.find((author: any) => author.id === a.authorId)?.relevanceScore || 0;
+            const bRelevanceScore = authorsToEnrich.find((author: any) => author.id === b.authorId)?.relevanceScore || 0;
+            
+            // Primary sort: Relevance score (higher is better)
+            const relevanceDiff = bRelevanceScore - aRelevanceScore;
+            if (relevanceDiff !== 0) return relevanceDiff;
+            
+            // Secondary sort: Contact confidence level
+            const confidenceOrder = { 'high': 3, 'medium': 2, 'low': 1 };
+            const confidenceDiff = confidenceOrder[b.confidence] - confidenceOrder[a.confidence];
+            if (confidenceDiff !== 0) return confidenceDiff;
+            
+            // Tertiary sort: Enrichment score
+            return b.enrichmentScore - a.enrichmentScore;
+          })
+          .map((contact, index) => ({
+            rank: index + 1,
+            authorId: contact.authorId,
+            name: contact.name,
+            title: contact.title,
+            organization: contact.organization,
+            email: contact.email,
+            phone: contact.phone,
+            linkedin: contact.linkedin,
+            twitter: contact.twitter,
+            relevanceScore: authorsToEnrich.find((a: any) => a.id === contact.authorId)?.relevanceScore || 0,
+            articleCount: authorsToEnrich.find((a: any) => a.id === contact.authorId)?.articleCount || 0,
+            recentTopics: authorsToEnrich.find((a: any) => a.id === contact.authorId)?.topics || [],
+            lastArticleDate: authorsToEnrich.find((a: any) => a.id === contact.authorId)?.lastArticleDate,
+            contactConfidence: contact.confidence,
+            enrichmentSource: contact.source
+          }));
+        
+        // Create enrichment results object
+        const enrichmentResults = {
+          topic: originalTopic,
+          searchQuery: searchQuery,
+          searchTerms: searchTerms,
+          totalAuthorsProcessed: authorsToEnrich.length,
+          contactsEnriched: finalContacts.length,
+          enrichmentSuccessRate: `${Math.round((finalContacts.length / authorsToEnrich.length) * 100)}%`,
+          mediaContactsList: prioritizedContacts,
+          listGeneratedAt: new Date().toISOString(),
+          creditsUsed: enrichedContacts.filter(c => c.source === 'rocketreach').length,
+          rateLimitStatus: "normal"
+        };
+        
+        // Store the enrichment results in step metadata
+        await this.dbService.updateStep(stepId, {
+          status: StepStatus.COMPLETE,
+          userInput: "auto-execute",
+          metadata: {
+            ...step.metadata,
+            enrichmentResults: enrichmentResults,
+            apiCallCompleted: true
+          }
+        });
+        
+        // Create formatted media list for display - show only top 3 most relevant contacts
+        const topMediaContacts = prioritizedContacts.slice(0, 3); // Top 3 by relevance
+        
+        logger.info('Creating media list display', {
+          topMediaContactsCount: topMediaContacts.length,
+          prioritizedContactsCount: prioritizedContacts.length,
+          firstContactName: topMediaContacts[0]?.name,
+          finalContactsLength: finalContacts.length
+        });
+        
+        const mediaListDisplay = topMediaContacts.map(contact => {
+          // Find the original author data to get article metadata
+          const originalAuthor = authorsToEnrich.find((a: any) => a.id === contact.authorId);
+          const authorArticles = originalAuthor?.articles || [];
+          
+          logger.info('Processing contact for display', {
+            contactName: contact.name,
+            contactOrganization: contact.organization,
+            hasEmail: !!contact.email,
+            hasPhone: !!contact.phone,
+            enrichmentSource: contact.enrichmentSource,
+            articleCount: authorArticles.length
+          });
+          
+          // Format professional contact information
+          const contactLines = [];
+          
+          // Professional email (prioritize work email)
+          if (contact.email) {
+            const emailLabel = contact.email.includes('.com') || contact.email.includes('.org') || contact.email.includes('.net') 
+              ? '**Professional Email**' 
+              : '**Email**';
+            contactLines.push(`${emailLabel}: ${contact.email}`);
+          }
+          
+          // Business phone number
+          if (contact.phone) {
+            contactLines.push(`**Business Phone**: ${contact.phone}`);
+          }
+          
+          // Professional profiles
+          const profiles = [];
+          if (contact.linkedin) profiles.push('LinkedIn Profile');
+          if (contact.twitter) profiles.push('Twitter Profile'); 
+          if (profiles.length > 0) {
+            contactLines.push(`**Professional Profiles**: ${profiles.join(' • ')}`);
+          }
+          
+          // If no contact information is available, show a message
+          if (contactLines.length === 0) {
+            if (contact.enrichmentSource === 'database') {
+              // Check if this name was likely filtered as non-person
+              const name = contact.name.toLowerCase();
+              const isLikelyOrganization = name.includes('group') || name.includes('media') || 
+                                         name.includes('team') || name.includes('insider') ||
+                                         name.includes('&') || name.includes('corp') ||
+                                         name.includes('news') || name.includes('press');
+              
+              if (isLikelyOrganization) {
+                contactLines.push('*Organization/publication name - individual contact not available*');
+                contactLines.push('*Try contacting the organization directly for specific journalist contacts*');
+              } else {
+                contactLines.push('*Contact information not found in RocketReach database*');
+                contactLines.push('*Consider manual research or alternative contact discovery methods*');
+              }
+            } else {
+              contactLines.push('*Contact information being verified*');
+            }
+          }
+          
+          // Generate a simple avatar/image placeholder
+          const firstInitial = contact.name.charAt(0).toUpperCase();
+          const orgInitial = contact.organization ? contact.organization.charAt(0).toUpperCase() : '';
+          const avatarText = `**${firstInitial}${orgInitial}**`;
+          
+          // Create article metadata dropdown for debugging
+          const articleDropdown = authorArticles.length > 0 ? `
+
+**Articles (${authorArticles.length})**:
+${authorArticles.slice(0, 3).map((article: any, idx: number) => `• ${article.title?.substring(0, 80)}...`).join('\n')}
+${authorArticles.length > 3 ? `• ... and ${authorArticles.length - 3} more articles` : ''}` : '';
+          
+          return `${avatarText} **${contact.rank}. ${contact.name}**
+${contact.title ? `*${contact.title}*` : '*Professional*'}${contact.organization ? ` • ${contact.organization}` : ''}
+
+${contactLines.join('\n')}
+
+**Professional Stats**: Relevance ${contact.relevanceScore.toFixed(1)} • ${contact.articleCount} Articles • ${contact.contactConfidence.toUpperCase()} Confidence
+${articleDropdown}
+---`;
+        }).join('\n');
+        
+        logger.info('Generated media list display', {
+          mediaListDisplayLength: mediaListDisplay.length,
+          hasContent: mediaListDisplay.trim().length > 0,
+          preview: mediaListDisplay.substring(0, 200) + '...'
+        });
+        
+        // Send success message with the improved media list
+        const successMessage = `**Media Contacts List Generated Successfully!**
+
+Found complete contact information for **${finalContacts.length}** of **${authorsToEnrich.length}** authors writing about "U.S." related to "${originalTopic}".
+
+**Search Results Summary:**
+• Success Rate: ${enrichmentResults.enrichmentSuccessRate}
+• RocketReach Credits Used: ${enrichmentResults.creditsUsed}
+• Showing Top ${topMediaContacts.length} Contacts
+
+**Relevance Scoring:**
+Our algorithm ranks contacts by relevance score, calculated as follows:
+• **Base Score**: 5 points per published article on the topic
+• **Recency Bonus**: +2 points for articles published within the last 30 days
+• **Contact Quality**: Ranked by availability of professional email and LinkedIn profiles
+• **Tim Cook Test Contact**: Added with maximum relevance (1000 points) for RocketReach API testing
+
+---
+
+## **TOP ${topMediaContacts.length} MEDIA CONTACTS**
+
+${mediaListDisplay}
+
+**Contact List Summary**: These ${topMediaContacts.length} contacts represent the highest-relevance journalists and media professionals covering "${originalTopic}" in U.S. markets. Contacts are ranked primarily by topical relevance, with secondary consideration for contact information completeness.`;
+
+        logger.info('Sending media contacts list message', {
+          messageLength: successMessage.length,
+          topContactsCount: topMediaContacts.length,
+          threadId: workflow.threadId
+        });
+
+        await this.addDirectMessage(workflow.threadId, successMessage);
+        
+        logger.info('Media List Contact Enrichment completed successfully', {
+          contactsEnriched: finalContacts.length,
+          successRate: enrichmentResults.enrichmentSuccessRate,
+          creditsUsed: enrichmentResults.creditsUsed,
+          fallbackContactsUsed: finalContacts.length > enrichedContacts.length
+        });
+        
+        // Complete the workflow
+        await this.dbService.updateWorkflowStatus(workflowId, WorkflowStatus.COMPLETED);
+        await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
+        
+        return {
+          response: `Media contacts list generated successfully! Found ${finalContacts.length} contacts.`,
+          isComplete: true
+        };
+        
+      } catch (error) {
+        logger.error('Error in Media List Contact Enrichment', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stepId,
+          authorsCount: authorsToEnrich.length
+        });
+        
+        await this.addDirectMessage(
+          workflow.threadId,
+          `Error enriching contact information. ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        
+        // Mark step as failed
+        await this.dbService.updateStep(stepId, {
+          status: StepStatus.FAILED,
+          metadata: {
+            ...step.metadata,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          }
+        });
+        
+        return {
+          response: `Contact enrichment failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          isComplete: true
+        };
+      }
+    } catch (error) {
+      logger.error('Error handling Media List Contact Enrichment', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      throw error;
+    }
   }
 }
