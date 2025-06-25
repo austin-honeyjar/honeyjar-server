@@ -155,15 +155,15 @@ export interface SearchArticlesParams {
   query: string; // Required search query
   limit?: number; // 1-200, default 1
   format?: 'xml' | 'json' | 'rss' | 'atom'; // Default json
-  recent?: boolean; // Search only last 3 days for faster queries
+  recent?: string; // Search only last 3 days for faster queries - API expects "true"/"false" strings
   sequence_id?: string; // Pagination
-  filter_duplicates?: boolean; // Remove duplicate articles
+  filter_duplicates?: string; // Remove duplicate articles - API expects "true"/"false" strings
   duplicate_order?: 'latest' | 'oldest'; // Which duplicate to show
   sort?: 'asc' | 'desc'; // Sort order, default desc
   relevance_percent?: number; // Filter by relevance 1-100
-  sort_by_relevance?: boolean; // Sort by relevance instead of sequenceId
-  show_relevance_score?: boolean; // Include relevance scores
-  show_matching_keywords?: boolean; // Show matching keywords
+  sort_by_relevance?: string; // Sort by relevance instead of sequenceId - API expects "true"/"false" strings
+  show_relevance_score?: string; // Include relevance scores - API expects "true"/"false" strings
+  show_matching_keywords?: string; // Show matching keywords - API expects "true"/"false" strings
 }
 
 export interface RevokedArticlesParams {
@@ -400,7 +400,7 @@ export class MetabaseService {
 
       // Use caching with appropriate TTL based on search type
       const cacheOptions = {
-        ttl: params.recent ? 300 : 900 // 5 minutes for recent, 15 minutes for full search
+        ttl: params.recent === 'true' ? 300 : 900 // 5 minutes for recent, 15 minutes for full search
       };
 
       return await withCache(
@@ -628,7 +628,7 @@ export class MetabaseService {
     };
 
     // Add optional parameters
-    if (params.recent) {
+    if (params.recent === 'true') {
       requestParams.recent = 'true';
       logger.debug('➕ Added recent=true for faster 3-day search');
     }
@@ -638,7 +638,7 @@ export class MetabaseService {
       logger.debug('➕ Added sequence_id for pagination', { sequence_id: params.sequence_id });
     }
 
-    if (params.filter_duplicates) {
+    if (params.filter_duplicates === 'true') {
       requestParams.filter_duplicates = 'true';
       logger.debug('➕ Added filter_duplicates=true');
     }
@@ -659,18 +659,18 @@ export class MetabaseService {
     }
 
     if (params.sort_by_relevance) {
-      requestParams.sort_by_relevance = 'true';
-      logger.debug('➕ Added sort_by_relevance=true');
+      requestParams.sort_by_relevance = params.sort_by_relevance;
+      logger.debug('➕ Added sort_by_relevance', { sort_by_relevance: params.sort_by_relevance });
     }
 
     if (params.show_relevance_score) {
-      requestParams.show_relevance_score = 'true';
-      logger.debug('➕ Added show_relevance_score=true');
+      requestParams.show_relevance_score = params.show_relevance_score;
+      logger.debug('➕ Added show_relevance_score', { show_relevance_score: params.show_relevance_score });
     }
 
     if (params.show_matching_keywords) {
-      requestParams.show_matching_keywords = 'true';
-      logger.debug('➕ Added show_matching_keywords=true');
+      requestParams.show_matching_keywords = params.show_matching_keywords;
+      logger.debug('➕ Added show_matching_keywords', { show_matching_keywords: params.show_matching_keywords });
     }
 
     logger.info('📋 Final search request parameters', {

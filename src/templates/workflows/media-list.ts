@@ -161,7 +161,7 @@ If no relevant articles/authors found:
       type: StepType.JSON_DIALOG,
       name: "Author Ranking & Selection",
       description: "AI-powered analysis and optimization of author ranking algorithm",
-      prompt: "I found 96 authors writing about your topic. To create the best media contacts list, what would you like to prioritize most when ranking these authors?\n\nOptions:\n• **Editorial Quality** - Focus on top-tier sources (New York Times, BBC, CNN)\n• **Topic Expertise** - Authors who write frequently about this specific topic\n• **Recent Activity** - Authors who have published recently on this topic\n• **Balanced Mix** - Combine all factors for well-rounded coverage\n\nOr tell me your specific preferences for ranking these media contacts.",
+      prompt: "I found authors writing about your topic. To create the best media contacts list, what would you like to prioritize most when ranking these authors?\n\nOptions:\n• **Editorial Quality** - Focus on top-tier sources (New York Times, BBC, CNN)\n• **Topic Expertise** - Authors who write frequently about this specific topic\n• **Recent Activity** - Authors who have published recently on this topic\n• **Balanced Mix** - Combine all factors for well-rounded coverage\n\nOr tell me your specific preferences for ranking these media contacts.",
       order: 2,
       dependencies: ["Database Query"],
       metadata: {
@@ -199,7 +199,7 @@ RESPONSE FORMAT (VALID JSON ONLY):
   "isComplete": true,
   "collectedInformation": {
     "userPreference": "Editorial Quality",
-    "rankingAlgorithm": "Applied Editorial Quality weighting (60% editorial rank, 25% article count, 15% recent activity) to filter 96 authors to top 25, then manually reviewed for topic relevance",
+    "rankingAlgorithm": "Applied Editorial Quality weighting (60% editorial rank, 25% article count, 15% recent activity) to filter authors to top 25, then manually reviewed for topic relevance",
     "rankingFactors": {
       "editorialRank": 60,
       "articleCount": 25,
@@ -218,7 +218,7 @@ RESPONSE FORMAT (VALID JSON ONLY):
         "topicRelevance": "High - writes extensively about this specific topic"
       }
     ],
-    "algorithmSummary": "Pre-filtered 96 authors to top 25 using preference weights, then selected 10 most topic-relevant contacts",
+    "algorithmSummary": "Pre-filtered authors to top 25 using preference weights, then selected 10 most topic-relevant contacts",
     "totalAnalyzed": 25,
     "selectionCriteria": "Top editorial quality + verified topic relevance + recent activity"
   },
