@@ -9,7 +9,7 @@ export const LAUNCH_ANNOUNCEMENT_TEMPLATE: WorkflowTemplate = {
       type: StepType.JSON_DIALOG,
       name: "Announcement Type Selection",
       description: "Determine what type of announcement the user is planning",
-      prompt: "Let's start by determining what type of announcement you're planning. Please describe your announcement (e.g., product launch, partnership, funding round, executive hire, etc.).",
+      prompt: "Let's start by determining what type of announcement you're planning. Please describe your announcement (e.g., product launch, partnership, funding round, executive hire, industry award etc.).",
       order: 0,
       dependencies: [],
       metadata: {

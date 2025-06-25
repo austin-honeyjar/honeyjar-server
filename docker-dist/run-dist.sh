@@ -28,7 +28,7 @@ NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key_here
 
 # OpenAI API
 OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_MODEL=gpt-4-turbo-preview
+OPENAI_MODEL=gpt-4o
 
 # Database (automatically configured)
 PG_USER=postgres

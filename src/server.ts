@@ -392,6 +392,61 @@ async function initializeDatabase() {
       // Create news pipeline tables
       logger.info('Creating news pipeline tables...');
       await db.execute(sql`
+        -- Metabase articles cache table for media matching
+        CREATE TABLE IF NOT EXISTS metabase_articles (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          author TEXT,
+          source TEXT,
+          published_at TIMESTAMP WITH TIME ZONE,
+          url TEXT,
+          summary TEXT,
+          content TEXT,
+          topics JSONB NOT NULL DEFAULT '[]',
+          metadata JSONB NOT NULL DEFAULT '{}',
+          language TEXT DEFAULT 'English',
+          source_rank INTEGER DEFAULT 5,
+          source_country TEXT DEFAULT 'United States',
+          relevance_score FLOAT DEFAULT 0.0,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+        );
+      `);
+      
+      // Handle migration for existing metabase_articles table - add missing columns
+      logger.info('Checking and adding missing columns to metabase_articles table...');
+      try {
+        // Add language column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'English';
+        `);
+        
+        // Add source_rank column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS source_rank INTEGER DEFAULT 5;
+        `);
+        
+        // Add source_country column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS source_country TEXT DEFAULT 'United States';
+        `);
+        
+        // Add relevance_score column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS relevance_score FLOAT DEFAULT 0.0;
+        `);
+        
+        logger.info('Missing columns added to metabase_articles table successfully');
+      } catch (columnError) {
+        logger.error('Error adding missing columns to metabase_articles:', columnError);
+      }
+      
+      // Continue with other tables
+      await db.execute(sql`
         -- News author relevance tracking and scoring
         CREATE TABLE IF NOT EXISTS news_authors (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -467,6 +522,16 @@ async function initializeDatabase() {
       // Create indexes for news pipeline tables
       logger.info('Creating indexes for news pipeline tables...');
       await db.execute(sql`
+        -- Metabase articles indexes for fast searching
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_title_search ON metabase_articles USING gin(to_tsvector('english', title));
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_content_search ON metabase_articles USING gin(to_tsvector('english', content));
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_author ON metabase_articles(author) WHERE author IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_source ON metabase_articles(source) WHERE source IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_published ON metabase_articles(published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_language_rank ON metabase_articles(language, source_rank, source_country);
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_topics ON metabase_articles USING gin(topics);
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_relevance ON metabase_articles(relevance_score DESC);
+        
         -- Author scoring and retrieval indexes
         CREATE INDEX IF NOT EXISTS idx_authors_relevance ON news_authors(relevance_score DESC, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_authors_activity ON news_authors(recent_activity_score DESC, last_article_date DESC);

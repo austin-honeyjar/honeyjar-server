@@ -600,6 +600,8 @@ export class MetabaseService {
    * Implements the Metabase Search API
    */
   private async fetchSearchResultsFromAPI(params: SearchArticlesParams): Promise<ArticleSearchResponse> {
+    const startTime = Date.now();
+    
     logger.info('🌐 Fetching search results from Metabase Search API (cache miss)', {
       query: params.query,
       limit: params.limit,
@@ -708,6 +710,37 @@ export class MetabaseService {
       lastSequenceId: searchData.lastSequenceId,
       sampleTitles: searchData.articles.slice(0, 3).map(a => a.title)
     });
+
+    const responseTime = Date.now() - startTime;
+
+    // Log API call to database for compliance tracking
+    await metabaseDBService.logApiCall({
+      callType: 'search',
+      endpoint: '/api/v10/searchArticles',
+      parameters: requestParams,
+      responseStatus: response.status,
+      responseTime,
+      articlesReturned: searchData.articles.length,
+      sequenceId: searchData.lastSequenceId,
+      cacheHit: false,
+      metadata: {
+        requestedLimit: limit,
+        hasSequenceId: !!params.sequence_id,
+        searchQuery: params.query,
+        isMediaMatchingSearch: true // Flag to identify media matching searches
+      }
+    });
+
+    // Store articles in database for compliance
+    if (searchData.articles.length > 0) {
+      await metabaseDBService.storeArticles(searchData.articles);
+      
+      logger.info('📝 Stored search articles for compliance', {
+        storedCount: searchData.articles.length,
+        searchQuery: params.query,
+        endpoint: '/api/v10/searchArticles'
+      });
+    }
 
     return searchData;
   }
@@ -1110,6 +1143,53 @@ export class MetabaseService {
       sampleIds: transformedArticles.slice(0, 3).map(a => a.id),
       sampleTitles: transformedArticles.slice(0, 3).map(a => a.title)
     });
+    
+    // ✅ DEBUG: Analyze what editorial ranks are actually being returned
+    const rankAnalysis = transformedArticles.map(article => {
+      const source = article.metadata?.source;
+      const editorialRank = source?.editorialRank || 'unknown';
+      return {
+        title: article.title.substring(0, 50),
+        source: article.source,
+        editorialRank: editorialRank,
+        hasSourceMetadata: !!source
+      };
+    });
+    
+    const rankBreakdown = rankAnalysis.reduce((acc: any, article) => {
+      const rank = article.editorialRank;
+      acc[rank] = (acc[rank] || 0) + 1;
+      return acc;
+    }, {});
+    
+    logger.info('🔍 DEBUG: Editorial rank analysis from Metabase API response', {
+      totalArticles: transformedArticles.length,
+      rankBreakdown,
+      sampleArticles: rankAnalysis.slice(0, 5),
+      nonRank1Count: rankAnalysis.filter(a => 
+        a.editorialRank !== '1' && 
+        a.editorialRank !== 1 && 
+        a.editorialRank !== 'unknown'
+      ).length
+    });
+    
+    // ✅ ADD: Check if API is honoring sourceRank:1 filter
+    const nonRank1Sources = rankAnalysis.filter(a => 
+      a.editorialRank !== '1' && 
+      a.editorialRank !== 1 && 
+      a.editorialRank !== 'unknown'
+    );
+    
+    if (nonRank1Sources.length > 0) {
+      logger.warn('⚠️ FILTER FAILURE: sourceRank:1 filter not working properly', {
+        nonRank1Count: nonRank1Sources.length,
+        totalArticles: transformedArticles.length,
+        filterEffectiveness: `${Math.round(((transformedArticles.length - nonRank1Sources.length) / transformedArticles.length) * 100)}%`,
+        problemSources: nonRank1Sources.slice(0, 10) // Show first 10 problem sources
+      });
+    } else {
+      logger.info('✅ sourceRank:1 filter working correctly - all sources are Rank 1 or unknown');
+    }
 
     return {
       articles: transformedArticles,

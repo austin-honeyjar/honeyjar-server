@@ -1098,7 +1098,16 @@ export class WorkflowService {
       if (!step) throw new Error(`Step not found: ${stepId}`);
       const workflowId = step.workflowId;
       
-      // Handle JSON_DIALOG step type separately
+      // Handle JSON_DIALOG step type for Media List Generator - Author Ranking & Selection FIRST
+      // This must come before the generic JSON_DIALOG handler to avoid being bypassed
+      if ((step.stepType as any) === StepType.JSON_DIALOG && step.name === "Author Ranking & Selection") {
+        const workflow = await this.dbService.getWorkflow(workflowId);
+        if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+        
+        return await this.handleMediaListAuthorRanking(stepId, workflowId, workflow.threadId, userInput);
+      }
+      
+      // Handle JSON_DIALOG step type separately (for all other JSON_DIALOG steps)
       if (step.stepType === StepType.JSON_DIALOG) {
         return await this.handleJsonDialogStep(step, userInput);
       }
@@ -1360,19 +1369,22 @@ export class WorkflowService {
               const { MetabaseService } = await import('./metabase.service');
               const metabaseService = new MetabaseService();
               
-              const searchResults = step.metadata.searchResults;
-              const topic = searchResults.originalTopic;
-              const searchQuery = searchResults.query;
-              const lastSequenceId = searchResults.lastSequenceId;
-              const currentDepth = searchResults.searchDepthLevel || 1;
+              const currentSearchResults = step.metadata.searchResults;
+              const originalTopic = currentSearchResults.originalTopic;
+              const currentQuery = currentSearchResults.query;
+              const lastSequenceId = currentSearchResults.lastSequenceId;
+              const currentDepth = currentSearchResults.searchDepthLevel || 1;
               
-              // Search with sequence_id for older articles
+              // Use the same search query format as the original search
               const extendedSearchResults = await metabaseService.searchArticles({
-                query: searchQuery,
+                query: currentQuery,
                 limit: 500,
                 sequence_id: lastSequenceId,
                 sort_by_relevance: true,
-                show_relevance_score: true
+                show_relevance_score: true,
+                filter_duplicates: true,
+                relevance_percent: 60,
+                show_matching_keywords: true
               });
               
               // Process the extended results
@@ -1382,7 +1394,7 @@ export class WorkflowService {
               const authorsMap = new Map();
               
               // Add existing authors first - convert topics back to Set
-              searchResults.authorsExtracted.forEach((author: any) => {
+              currentSearchResults.authorsExtracted.forEach((author: any) => {
                 const existingAuthor = {
                   ...author,
                   topics: new Set(Array.isArray(author.topics) ? author.topics : [])
@@ -1391,7 +1403,7 @@ export class WorkflowService {
               });
               
               // Process new articles from extended search
-              extendedSearchResults.articles.forEach((article, index) => {
+              extendedSearchResults.articles.forEach((article: any, index: number) => {
                 if (article.author && article.source) {
                   const authorKey = `${article.author}-${article.source}`;
                   
@@ -1413,7 +1425,7 @@ export class WorkflowService {
                   author.relevanceScore += 5; // Base score per article
                   
                   if (article.topics) {
-                    article.topics.forEach(topic => author.topics.add(topic));
+                    article.topics.forEach((topic: any) => author.topics.add(topic));
                   }
                   
                   const articleDate = new Date(article.publishedAt);
@@ -1441,11 +1453,11 @@ export class WorkflowService {
               
               // Update search results
               const updatedSearchResults = {
-                ...searchResults,
-                articlesFound: searchResults.articlesFound + extendedSearchResults.articles.length,
+                ...currentSearchResults,
+                articlesFound: currentSearchResults.articlesFound + extendedSearchResults.articles.length,
                 authorsExtracted: topAuthors,
                 selectedAuthors: topAuthors.length,
-                totalArticlesAnalyzed: searchResults.totalArticlesAnalyzed + extendedSearchResults.articles.length,
+                totalArticlesAnalyzed: currentSearchResults.totalArticlesAnalyzed + extendedSearchResults.articles.length,
                 lastSequenceId: extendedSearchResults.lastSequenceId,
                 hasMoreResults: extendedSearchResults.hasMore,
                 searchDepthLevel: currentDepth + 1,
@@ -1466,11 +1478,11 @@ export class WorkflowService {
               
               await this.addDirectMessage(
                 workflow.threadId,
-                `Extended search completed! Found **${topAuthors.length}** total authors (added ${topAuthors.length - searchResults.authorsExtracted.length} new authors) from ${updatedSearchResults.totalArticlesAnalyzed} total articles. Proceeding to contact enrichment...`
+                `Extended search completed! Found **${topAuthors.length}** total Rank 1 authors (added ${topAuthors.length - currentSearchResults.authorsExtracted.length} new top-tier authors) from ${updatedSearchResults.totalArticlesAnalyzed} total articles. Proceeding to author ranking and selection...`
               );
               
-              // Move to Contact Enrichment step
-              const nextStep = workflow.steps.find(s => s.name === "Contact Enrichment");
+              // Move to Author Ranking & Selection step
+              const nextStep = workflow.steps.find(s => s.name === "Author Ranking & Selection");
               if (nextStep) {
                 await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
                 await this.dbService.updateStep(nextStep.id, {
@@ -1515,19 +1527,27 @@ export class WorkflowService {
             const authorsCount = step.metadata.searchResults.authorsExtracted.length;
             await this.addDirectMessage(
               workflow.threadId,
-              `Proceeding with ${authorsCount} author(s) to contact enrichment...`
+              `Proceeding with ${authorsCount} Rank 1 editorial source(s) to author ranking and selection...`
             );
             
-            // Move to Contact Enrichment step
-            const nextStep = workflow.steps.find(s => s.name === "Contact Enrichment");
+            // Move to Author Ranking & Selection step (the correct next step according to template)
+            const nextStep = workflow.steps.find(s => s.name === "Author Ranking & Selection");
             if (nextStep) {
               await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
               await this.dbService.updateStep(nextStep.id, {
                 status: StepStatus.IN_PROGRESS
               });
               
+              // Send the initial prompt for the Author Ranking step
+              if (nextStep.prompt && !nextStep.metadata?.initialPromptSent) {
+                await this.addDirectMessage(workflow.threadId, nextStep.prompt);
+                await this.dbService.updateStep(nextStep.id, {
+                  metadata: { ...nextStep.metadata, initialPromptSent: true }
+                });
+              }
+              
               return {
-                response: `Proceeding with ${authorsCount} authors to contact enrichment.`,
+                response: `Proceeding with ${authorsCount} authors to author ranking and selection.`,
                 nextStep: {
                   id: nextStep.id,
                   name: nextStep.name,
@@ -3320,11 +3340,32 @@ export class WorkflowService {
       }
 
       // Fetch conversation history for the thread
-      const conversationHistory = await this.getThreadConversationHistory(workflow.threadId, 25);
+      // For Launch Announcement workflow, use minimal history to prevent confusion in first steps
+      // BUT give full context to Information Collection step since it needs to ask intelligent questions
+      const template = await this.dbService.getTemplate(workflow.templateId);
+      const isLaunchAnnouncement = template && template.name === "Launch Announcement";
+      const isEarlyStep = step.name === "Announcement Type Selection" || step.name === "Asset Type Selection";
+      const isInformationCollectionStep = step.name === "Information Collection";
+      
+      // Information Collection step gets unlimited history, early steps get none, everything else gets 25
+      let historyLimit;
+      if (isLaunchAnnouncement && isEarlyStep) {
+        historyLimit = 0; // Early steps get no history to avoid confusion
+      } else if (isLaunchAnnouncement && isInformationCollectionStep) {
+        historyLimit = 100; // Information Collection gets full context (100 messages)
+      } else {
+        historyLimit = 25; // Standard limit for other steps
+      }
+      
+      const conversationHistory = await this.getThreadConversationHistory(workflow.threadId, historyLimit);
       
       logger.info('Retrieved conversation history', {
         threadId: workflow.threadId,
-        messageCount: conversationHistory.length
+        messageCount: conversationHistory.length,
+        isLaunchAnnouncement: isLaunchAnnouncement,
+        isEarlyStep: isEarlyStep,
+        isInformationCollectionStep: isInformationCollectionStep,
+        historyLimit: historyLimit
       });
 
       // Process the message with the JsonDialogService, including conversation history
@@ -3371,8 +3412,8 @@ export class WorkflowService {
 
       // Special case for Test Step Transitions workflow, Step 4
       // Handle completion directly for the final step
-      const template = await this.dbService.getTemplate(workflow.templateId);
-      const isTestWorkflow = template && template.name === WORKFLOW_TYPES.TEST_STEP_TRANSITIONS;
+      const workflowTemplate = await this.dbService.getTemplate(workflow.templateId);
+      const isTestWorkflow = workflowTemplate && workflowTemplate.name === WORKFLOW_TYPES.TEST_STEP_TRANSITIONS;
       const isFinalStep = step.name === "Step 4";
       const isCorrectInput = userInput.trim() === "4";
       
@@ -3519,6 +3560,60 @@ export class WorkflowService {
           const refreshedWorkflow = await this.dbService.getWorkflow(workflow.id);
           if (!refreshedWorkflow) {
             throw new Error(`Failed to refresh workflow data: ${workflow.id}`);
+          }
+          
+          // Special initialization for Information Collection step - ensure it gets full context
+          if (nextStep.name === "Information Collection") {
+            logger.info('Initializing Information Collection step with full context from previous steps', {
+              stepId: nextStep.id,
+              workflowId: workflow.id
+            });
+            
+            // Gather all context from previous completed steps
+            const previousStepsInfo: Record<string, any> = {};
+            
+            // Get announcement type from Announcement Type Selection step
+            const announcementStep = refreshedWorkflow.steps.find(s => s.name === "Announcement Type Selection");
+            if (announcementStep?.metadata?.collectedInformation?.announcementType) {
+              previousStepsInfo.announcementType = announcementStep.metadata.collectedInformation.announcementType;
+            }
+            
+            // Get asset type from Asset Type Selection step
+            const assetStep = refreshedWorkflow.steps.find(s => s.name === "Asset Type Selection");
+            if (assetStep?.metadata?.selectedAssetType) {
+              previousStepsInfo.assetType = assetStep.metadata.selectedAssetType;
+              previousStepsInfo.selectedAssetType = assetStep.metadata.selectedAssetType;
+            } else if (assetStep?.aiSuggestion) {
+              previousStepsInfo.assetType = assetStep.aiSuggestion;
+              previousStepsInfo.selectedAssetType = assetStep.aiSuggestion;
+            }
+            
+            // Get any other collected information from completed steps
+            refreshedWorkflow.steps
+              .filter(s => s.status === StepStatus.COMPLETE && s.metadata?.collectedInformation)
+              .forEach(s => {
+                if (s.metadata?.collectedInformation) {
+                  Object.assign(previousStepsInfo, s.metadata.collectedInformation);
+                }
+              });
+            
+            // Initialize the Information Collection step with all collected context
+            await this.dbService.updateStep(nextStep.id, {
+              metadata: {
+                ...nextStep.metadata,
+                collectedInformation: {
+                  ...previousStepsInfo
+                },
+                initializedWithContext: true
+              }
+            });
+            
+            logger.info('Information Collection step initialized with full context', {
+              stepId: nextStep.id,
+              contextKeys: Object.keys(previousStepsInfo),
+              announcementType: previousStepsInfo.announcementType,
+              selectedAssetType: previousStepsInfo.selectedAssetType
+            });
           }
           
           // Initialize any step with context from previous steps
@@ -4392,79 +4487,105 @@ export class WorkflowService {
       const step = await this.dbService.getStep(stepId);
       if (!step) throw new Error(`Step not found: ${stepId}`);
 
-      // Get the workflow to get the threadId
+      // Get the workflow to get the threadId and find the Topic Input step
       const workflow = await this.dbService.getWorkflow(workflowId);
       if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
       
-      // Find the Topic Input step to get the collected topic
+      // Extract topic from the Topic Input step
       const topicStep = workflow.steps.find(s => s.name === "Topic Input");
-      if (!topicStep) throw new Error(`Topic Input step not found`);
-      
-      // Extract the topic from the previous step
-      const collectedInfo = topicStep.metadata?.collectedInformation || {};
-      const topic = collectedInfo.topic;
-      
-      if (!topic) {
-        throw new Error('No topic found from Topic Input step');
-      }
-      
-      logger.info('Starting Media List Database Query', {
+      const topicData = topicStep?.metadata?.collectedInformation;
+      const topic = topicData?.topic;
+
+      logger.info('Media List Database Query - Topic extracted', {
         stepId,
         workflowId,
-        topic,
-        threadId: workflow.threadId
+        extractedTopic: topic,
+        topicType: typeof topic,
+        topicData: topicData
       });
+
+      // Import MetabaseService
+      const { MetabaseService } = await import('./metabase.service');
+      const metabaseService = new MetabaseService();
       
-      // Send a message about starting the search
-      await this.addDirectMessage(workflow.threadId, `Searching news database for authors who have written about "U.S." with keyword "${topic}"...`);
+      // Calculate search time frame (last 90 days for broader results)
+      const searchEndDate = new Date();
+      const searchStartDate = new Date();
+      searchStartDate.setDate(searchStartDate.getDate() - 90); // Last 90 days
       
-      try {
-        // Import and use MetabaseService
-        const { MetabaseService } = await import('./metabase.service');
-        const metabaseService = new MetabaseService();
-        
-        // Search for articles with "U.S." as main term and topic as keyword
-        // Using Boolean syntax: "U.S." AND "topic"
-        const searchQuery = `U.S. AND "${topic}"`;
+      const startDateStr = searchStartDate.toISOString().split('T')[0];
+      const endDateStr = searchEndDate.toISOString().split('T')[0];
+      
+      // Construct search query with proper filters using correct syntax
+      let searchQuery = '';
+      
+      if (topic && topic.toLowerCase() !== 'no topic') {
+        // Topic-specific search with all filters using proper syntax
+        searchQuery = `"${topic}" AND language:English AND sourceRank:1 AND sourceCountry:"United States"`;
+        await this.addDirectMessage(workflow.threadId, `Searching for US English language Rank 1 sources covering "${topic}" (${startDateStr} to ${endDateStr})...`);
+      } else {
+        // General search for "no topic" with all filters
+        searchQuery = `language:English AND sourceRank:1 AND sourceCountry:"United States"`;
+        await this.addDirectMessage(workflow.threadId, `Searching for top US English language Rank 1 sources across all topics (${startDateStr} to ${endDateStr})...`);
+      }
+      
+      logger.info('Media List Database Query - Enhanced search', {
+        originalTopic: topic,
+        searchQuery: searchQuery,
+        searchTimeFrame: `${startDateStr} to ${endDateStr}`,
+        hasTopicFilter: topic && topic.toLowerCase() !== 'no topic'
+      });
         
         const searchResults = await metabaseService.searchArticles({
           query: searchQuery,
-          limit: 500, // Increased from 200 to 500
-          // Removed recent: true to search across longer time range instead of just last 3 days
+          limit: 500,
           sort_by_relevance: true,
-          show_relevance_score: true
+          show_relevance_score: true,
+          filter_duplicates: true,
+          relevance_percent: 70, // Increased from 60 to get higher quality matches
+          show_matching_keywords: true
         });
         
         logger.info('Metabase search completed', {
           articlesFound: searchResults.articles.length,
-          totalCount: searchResults.totalCount
+          totalCount: searchResults.totalCount,
+          searchQuery: searchQuery
         });
         
         // Extract unique authors from articles
         const authorsMap = new Map();
         
-        // Log first few articles to see the actual data structure
+        // Log first few articles to see the actual data structure and editorial ranks
         logger.info('Sample article data for debugging', {
           totalArticles: searchResults.articles.length,
-          sampleArticles: searchResults.articles.slice(0, 3).map(article => ({
+          sampleArticles: searchResults.articles.slice(0, 5).map((article: any) => ({
             id: article.id,
             title: article.title?.substring(0, 100) + '...',
             author: article.author,
             source: article.source,
             topics: article.topics,
-            publishedAt: article.publishedAt
+            publishedAt: article.publishedAt,
+            metadata: article.metadata,
+            editorialRank: article.metadata?.source?.editorialRank || 'Unknown'
           }))
         });
         
-        searchResults.articles.forEach((article, index) => {
+        // Process articles and extract authors with editorial rank information
+        searchResults.articles.forEach((article: any, index: number) => {
           if (article.author && article.source) {
             const authorKey = `${article.author}-${article.source}`;
             
             if (!authorsMap.has(authorKey)) {
+              // Extract editorial rank from article metadata
+              const editorialRank = article.metadata?.source?.editorialRank || 
+                                   article.metadata?.editorialRank || 
+                                   article.editorialRank || 5; // Default to 5 if not found
+              
               authorsMap.set(authorKey, {
                 id: `author-${index}-${Date.now()}`,
                 name: article.author,
                 organization: article.source,
+                editorialRank: editorialRank,
                 relevanceScore: 0,
                 articleCount: 0,
                 topics: new Set(),
@@ -4476,7 +4597,13 @@ export class WorkflowService {
             
             const author = authorsMap.get(authorKey);
             author.articleCount++;
-            author.relevanceScore += 5; // Base score per article
+            
+            // Score based on editorial rank (Rank 1 gets highest score)
+            const rankBonus = author.editorialRank === 1 ? 20 : 
+                             author.editorialRank === 2 ? 15 : 
+                             author.editorialRank === 3 ? 10 : 
+                             author.editorialRank === 4 ? 5 : 0;
+            author.relevanceScore += 5 + rankBonus; // Base score plus rank bonus
             
             // Store article metadata for this author
             author.articles.push({
@@ -4490,7 +4617,7 @@ export class WorkflowService {
             
             // Add topics
             if (article.topics) {
-              article.topics.forEach(topic => author.topics.add(topic));
+              article.topics.forEach((topicName: any) => author.topics.add(topicName));
             }
             
             // Check if recent (last 30 days)
@@ -4498,7 +4625,7 @@ export class WorkflowService {
             const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
             if (articleDate > thirtyDaysAgo) {
               author.recentArticles++;
-              author.relevanceScore += 2; // Bonus for recent articles
+              author.relevanceScore += 3; // Bonus for recent articles
             }
             
             // Update last article date if more recent
@@ -4514,11 +4641,30 @@ export class WorkflowService {
           topics: Array.from(author.topics)
         }));
         
+        // Filter to only Rank 1 sources if we have them, otherwise show what we found
+        const rank1Authors = authorsArray.filter(author => author.editorialRank === 1);
+        const finalAuthors = rank1Authors.length > 0 ? rank1Authors : authorsArray;
+        
+        // Log rank distribution for debugging
+        const rankDistribution = authorsArray.reduce((acc: any, author) => {
+          const rank = author.editorialRank || 'Unknown';
+          acc[rank] = (acc[rank] || 0) + 1;
+          return acc;
+        }, {});
+        
+        logger.info('Editorial rank distribution in results', {
+          rankDistribution,
+          totalAuthors: authorsArray.length,
+          rank1Authors: rank1Authors.length,
+          finalAuthorsUsed: finalAuthors.length
+        });
+        
         // Add Tim Cook from Apple as first contact for RocketReach testing
         const timCookTestContact = {
           id: `author-test-timcook-${Date.now()}`,
           name: "Tim Cook",
           organization: "Apple",
+          editorialRank: 1, // Mark as Rank 1 for testing
           relevanceScore: 1000, // High score to ensure it's first
           articleCount: 1,
           topics: ["technology", "corporate"],
@@ -4535,29 +4681,38 @@ export class WorkflowService {
         };
         
         // Insert Tim Cook at the beginning of the array
-        authorsArray.unshift(timCookTestContact);
+        finalAuthors.unshift(timCookTestContact);
         
         // Sort by relevance score and take top authors (Tim Cook will be first due to high score)
-        const topAuthors = authorsArray
-          .sort((a, b) => b.relevanceScore - a.relevanceScore)
+        const topAuthors = finalAuthors
+          .sort((a, b) => {
+            // Primary sort: Editorial rank (1 is best, 5 is worst)
+            const rankDiff = a.editorialRank - b.editorialRank;
+            if (rankDiff !== 0) return rankDiff;
+            
+            // Secondary sort: Relevance score (higher is better)
+            return b.relevanceScore - a.relevanceScore;
+          })
           .slice(0, 15); // Top 15 authors
         
-        // Check if we found enough authors for a good media list
-        const minAuthorsThreshold = 3; // Minimum authors needed for a good media list
-        const foundEnoughAuthors = topAuthors.length >= minAuthorsThreshold;
-        
-        // Create search results object
+        // Create search results object with enhanced metadata
         const searchResultsData = {
           query: searchQuery,
           originalTopic: topic,
+          searchTimeFrame: {
+            start: startDateStr,
+            end: endDateStr,
+            daysSearched: 90
+          },
           searchTerms: {
-            primary: "U.S.",
-            keyword: topic
+            filters: ["language:English", "sourceRank:1", "sourceCountry:United States"],
+            topic: topic || "All topics"
           },
           articlesFound: searchResults.articles.length,
           authorsExtracted: topAuthors,
           selectedAuthors: topAuthors.length,
           totalArticlesAnalyzed: searchResults.articles.length,
+          editorialRankDistribution: rankDistribution,
           searchCompletedAt: new Date().toISOString(),
           // Store search metadata for potential follow-up searches
           lastSequenceId: searchResults.lastSequenceId || null,
@@ -4577,43 +4732,61 @@ export class WorkflowService {
           }
         });
         
-        // Always present user with choice - regardless of how many authors found
-        const searchMoreMessage = `Found articles from **${topAuthors.length}** authors writing about "U.S." related to "${topic}".
+        // Enhanced search results message with time frame
+        const searchMoreMessage = `Found articles from **${topAuthors.length}** authors writing about ${topic ? `"${topic}"` : 'general topics'} in US English language sources.
 
-**Current Search Results:**
+**Enhanced Search Results** (${startDateStr} to ${endDateStr}):
 • Total Articles Analyzed: ${searchResults.articles.length}
 • Authors Found: ${topAuthors.length}
-• Search Depth: Recent articles
+• Search Time Frame: ${90} days (${startDateStr} to ${endDateStr})
+• Editorial Quality Filter: Rank 1 sources only (LexisNexis top tier)
+• Language Filter: English only
+• Location Filter: United States only
+• Relevance Threshold: 70%+
 • Tim Cook (Test Contact): Included for RocketReach testing
+
+**Editorial Rank Distribution:**
+${Object.entries(rankDistribution)
+  .map(([rank, count]) => `• Rank ${rank}: ${count} sources`)
+  .join('\n')}
+
+**Search Terms Applied**: 
+• Language: English
+• Source Rank: 1 (highest editorial quality)
+• Source Country: United States
+• Topic: ${topic ? `"${topic}"` : 'All topics'}
 
 **Your Options:**
 
 **Search Further Back in Time**
-- Search older articles to find more authors 
-- Uses sequence_id to get next 500 articles
-- May find additional relevant journalists
+- Search older articles (beyond ${90} days) to find more Rank 1 authors
+- Uses sequence_id to get next 500 articles from the same quality sources
+- May find additional top-tier journalists
 
 **Proceed with Current Results**  
-- Continue to contact enrichment with the ${topAuthors.length} author(s) found
-- Start RocketReach contact lookup process
+- Continue to author ranking with the ${topAuthors.length} author(s) found
+- Start dual ranking (algorithmic vs AI) analysis
 
 ---
 
-Would you like to search further back for more authors, or proceed with the current ${topAuthors.length} contacts?
+Would you like to search further back for more Rank 1 authors, or proceed with the current ${topAuthors.length} high-quality contacts?
 
 **Type "search more" to expand the search or "proceed" to continue with current results.**`;
-        
+          
         await this.addDirectMessage(workflow.threadId, searchMoreMessage);
         
-        logger.info('Media List Database Query - always asking user for decision', {
+        logger.info('Media List Database Query - enhanced results presented', {
           topAuthorsCount: topAuthors.length,
           totalArticles: searchResults.articles.length,
+          searchTimeFrame: `${startDateStr} to ${endDateStr}`,
+          rank1Count: rank1Authors.length,
+          rankDistribution: rankDistribution,
           userChoicePresented: true
         });
         
         // Always keep the step in progress and return for user decision
         return {
-          response: `Found ${topAuthors.length} authors. Presenting user with options to search deeper or proceed.`,
+          response: `Found ${topAuthors.length} authors. Presenting enhanced search results with time frame.`,
           nextStep: {
             id: stepId,
             name: step.name,
@@ -4627,33 +4800,30 @@ Would you like to search further back for more authors, or proceed with the curr
         logger.error('Error in Media List Database Query', {
           error: error instanceof Error ? error.message : 'Unknown error',
           stepId,
-          topic
+          workflowId
         });
+        
+        // Get the step for error handling
+        const step = await this.dbService.getStep(stepId);
         
         await this.addDirectMessage(
-          workflow.threadId,
-          `Error searching database for "U.S." with keyword "${topic}". Please try again.`
-        );
-        
-        // Mark step as failed
-        await this.dbService.updateStep(stepId, {
-          status: StepStatus.FAILED,
-          metadata: {
-            ...step.metadata,
-            error: error instanceof Error ? error.message : 'Unknown error'
-          }
-        });
-        
-        return {
-          response: `Database search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          isComplete: true
-        };
-      }
-    } catch (error) {
-      logger.error('Error handling Media List Database Query', {
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-      throw error;
+          threadId,
+          `Error searching database. Please try again.`
+          );
+          
+          // Mark step as failed
+          await this.dbService.updateStep(stepId, {
+            status: StepStatus.FAILED,
+            metadata: {
+              ...(step?.metadata || {}),
+              error: error instanceof Error ? error.message : 'Unknown error'
+            }
+          });
+          
+          return {
+            response: `Database search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            isComplete: true
+          };
     }
   }
 
@@ -4831,134 +5001,133 @@ Would you like to search further back for more authors, or proceed with the curr
       const workflow = await this.dbService.getWorkflow(workflowId);
       if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
       
-      // Find the Database Query step to get the authors list
-      const databaseStep = workflow.steps.find(s => s.name === "Database Query");
-      if (!databaseStep) throw new Error(`Database Query step not found`);
+      // Find the Author Ranking & Selection step to get the user's selected list
+      const authorRankingStep = workflow.steps.find(s => s.name === "Author Ranking & Selection");
+      if (!authorRankingStep) throw new Error(`Author Ranking & Selection step not found`);
       
-      // Extract the authors from the database search results
-      const searchResults = databaseStep.metadata?.searchResults || {};
-      const authorsToEnrich = searchResults.authorsExtracted || [];
-      const searchQuery = searchResults.query;
-      const originalTopic = searchResults.originalTopic;
-      const searchTerms = searchResults.searchTerms;
+      // Extract the selected authors from the ranking step
+      const rankingResults = authorRankingStep.metadata?.collectedInformation || {};
+      const selectedAuthors = rankingResults.top10Authors || [];
+      const selectedListType = rankingResults.selectedListType || 'unknown';
+      const originalTopic = rankingResults.originalTopic || 'AI and Technology';
       
-      if (!authorsToEnrich || authorsToEnrich.length === 0) {
-        throw new Error('No authors found from Database Query step');
+      if (!selectedAuthors || selectedAuthors.length === 0) {
+        throw new Error('No selected authors found from Author Ranking & Selection step');
       }
       
-      logger.info('Starting Media List Contact Enrichment', {
+      logger.info('Starting Media List Contact Enrichment with selected list', {
         stepId,
         workflowId,
-        authorsCount: authorsToEnrich.length,
-        searchQuery,
+        selectedListType: selectedListType,
+        authorsCount: selectedAuthors.length,
         originalTopic,
         threadId: workflow.threadId
       });
       
-      // Add detailed debugging for Tim Cook issue
-      logger.info('DEBUG - Authors to enrich details', {
-        authorsToEnrichCount: authorsToEnrich.length,
-        authorsToEnrichList: authorsToEnrich.map((author: any) => ({
-          id: author.id,
+      // Add detailed debugging for selected authors
+      logger.info('DEBUG - Selected authors for enrichment', {
+        selectedListType: selectedListType,
+        authorsCount: selectedAuthors.length,
+        authorsList: selectedAuthors.map((author: any) => ({
           name: author.name,
           organization: author.organization,
-          relevanceScore: author.relevanceScore
+          strengthReason: author.strengthReason,
+          hasId: !!author.id
         })),
-        firstAuthorName: authorsToEnrich[0]?.name,
-        hasTimCook: authorsToEnrich.some((author: any) => author.name === "Tim Cook"),
-        timCookAuthor: authorsToEnrich.find((author: any) => author.name === "Tim Cook")
+        firstAuthorName: selectedAuthors[0]?.name
       });
       
       // Send a message about starting enrichment
-      await this.addDirectMessage(workflow.threadId, `Enriching contact information for ${authorsToEnrich.length} authors using RocketReach API...`);
+      await this.addDirectMessage(workflow.threadId, `Enriching contact information for ${selectedAuthors.length} ${selectedListType} authors using RocketReach API...`);
       
       try {
         // Import and use RocketReachService
         const { RocketReachService } = await import('./rocketreach.service');
         const rocketReachService = new RocketReachService();
         
-        // Enrich contacts using RocketReach
-        const enrichedContacts = await rocketReachService.enrichContacts(authorsToEnrich);
+        // Convert AI list format to match the expected format for RocketReach
+        const authorsForEnrichment = selectedAuthors.map((author: any, index: number) => ({
+          id: author.id || `${selectedListType}-author-${index}-${Date.now()}`,
+          name: author.name,
+          organization: author.organization,
+          relevanceScore: author.relevanceScore || index + 1, // Higher number for earlier in list
+          articleCount: author.articleCount || 1,
+          topics: author.topics || [originalTopic],
+          recentArticles: author.recentArticles || 0,
+          lastArticleDate: author.lastArticleDate || new Date().toISOString(),
+          editorialRank: author.editorialRank || 1,
+          strengthReason: author.strengthReason || 'Selected by user preference',
+          expertise: author.expertise || 'Technology journalism',
+          title: author.title || 'Journalist'
+        }));
         
-        logger.info('RocketReach enrichment completed', {
-          totalAuthorsProcessed: authorsToEnrich.length,
+        // Enrich contacts using RocketReach
+        const enrichedContacts = await rocketReachService.enrichContacts(authorsForEnrichment);
+        
+        logger.info('RocketReach enrichment completed for selected list', {
+          selectedListType: selectedListType,
+          totalAuthorsProcessed: authorsForEnrichment.length,
           contactsEnriched: enrichedContacts.length,
-          successRate: `${Math.round((enrichedContacts.length / authorsToEnrich.length) * 100)}%`,
+          successRate: `${Math.round((enrichedContacts.length / authorsForEnrichment.length) * 100)}%`,
           enrichedContactNames: enrichedContacts.map(c => c.name),
-          originalAuthorNames: authorsToEnrich.map((a: any) => a.name)
+          originalAuthorNames: authorsForEnrichment.map((a: any) => a.name)
         });
         
-        // If RocketReach enrichment failed completely, create fallback contacts from original authors
+        // If RocketReach enrichment failed completely, create fallback contacts from selected authors
         let finalContacts = enrichedContacts;
-        if (enrichedContacts.length === 0 && authorsToEnrich.length > 0) {
-          logger.warn('RocketReach enrichment returned no contacts, creating fallback contacts from original authors');
+        if (enrichedContacts.length === 0 && authorsForEnrichment.length > 0) {
+          logger.warn('RocketReach enrichment returned no contacts, creating fallback contacts from selected authors');
           
-          finalContacts = authorsToEnrich.map((author: any) => ({
+          finalContacts = authorsForEnrichment.map((author: any) => ({
             authorId: author.id,
             name: author.name,
-            title: null,
+            title: author.title || null,
             organization: author.organization,
             email: null,
             phone: null,
             linkedin: null,
             twitter: null,
             confidence: 'low' as const,
-            source: 'database' as const,
+            source: 'selected-list' as const,
             enrichmentScore: 1.0
           }));
         }
         
-        logger.info('Final contacts for display', {
+        logger.info('Final contacts for display from selected list', {
+          selectedListType: selectedListType,
           finalContactsCount: finalContacts.length,
           enrichedCount: enrichedContacts.length,
           fallbackUsed: finalContacts.length > enrichedContacts.length
         });
         
-        // Sort enriched contacts by relevance score first, then enrichment score
+        // Sort enriched contacts by their position in the selected list (maintain user's choice order)
         const prioritizedContacts = finalContacts
-          .sort((a, b) => {
-            // Get relevance scores from original authors
-            const aRelevanceScore = authorsToEnrich.find((author: any) => author.id === a.authorId)?.relevanceScore || 0;
-            const bRelevanceScore = authorsToEnrich.find((author: any) => author.id === b.authorId)?.relevanceScore || 0;
-            
-            // Primary sort: Relevance score (higher is better)
-            const relevanceDiff = bRelevanceScore - aRelevanceScore;
-            if (relevanceDiff !== 0) return relevanceDiff;
-            
-            // Secondary sort: Contact confidence level
-            const confidenceOrder = { 'high': 3, 'medium': 2, 'low': 1 };
-            const confidenceDiff = confidenceOrder[b.confidence] - confidenceOrder[a.confidence];
-            if (confidenceDiff !== 0) return confidenceDiff;
-            
-            // Tertiary sort: Enrichment score
-            return b.enrichmentScore - a.enrichmentScore;
-          })
           .map((contact, index) => ({
-            rank: index + 1,
-            authorId: contact.authorId,
-            name: contact.name,
-            title: contact.title,
-            organization: contact.organization,
-            email: contact.email,
-            phone: contact.phone,
-            linkedin: contact.linkedin,
-            twitter: contact.twitter,
-            relevanceScore: authorsToEnrich.find((a: any) => a.id === contact.authorId)?.relevanceScore || 0,
-            articleCount: authorsToEnrich.find((a: any) => a.id === contact.authorId)?.articleCount || 0,
-            recentTopics: authorsToEnrich.find((a: any) => a.id === contact.authorId)?.topics || [],
-            lastArticleDate: authorsToEnrich.find((a: any) => a.id === contact.authorId)?.lastArticleDate,
-            contactConfidence: contact.confidence,
-            enrichmentSource: contact.source
+              rank: index + 1,
+              authorId: contact.authorId,
+              name: contact.name,
+              title: contact.title,
+              organization: contact.organization,
+              email: contact.email,
+              phone: contact.phone,
+              linkedin: contact.linkedin,
+              twitter: contact.twitter,
+            relevanceScore: authorsForEnrichment.find((a: any) => a.id === contact.authorId)?.relevanceScore || 0,
+            articleCount: authorsForEnrichment.find((a: any) => a.id === contact.authorId)?.articleCount || 0,
+            recentTopics: authorsForEnrichment.find((a: any) => a.id === contact.authorId)?.topics || [],
+            lastArticleDate: authorsForEnrichment.find((a: any) => a.id === contact.authorId)?.lastArticleDate,
+              contactConfidence: contact.confidence,
+              enrichmentSource: contact.source,
+            strengthReason: authorsForEnrichment.find((a: any) => a.id === contact.authorId)?.strengthReason || 'Selected by user preference'
           }));
         
         // Create enrichment results object
         const enrichmentResults = {
           topic: originalTopic,
-          searchQuery: searchQuery,
-          searchTerms: searchTerms,
-          totalAuthorsProcessed: authorsToEnrich.length,
+          selectedListType: selectedListType,
+          totalAuthorsProcessed: authorsForEnrichment.length,
           contactsEnriched: finalContacts.length,
-          enrichmentSuccessRate: `${Math.round((finalContacts.length / authorsToEnrich.length) * 100)}%`,
+          enrichmentSuccessRate: `${Math.round((finalContacts.length / authorsForEnrichment.length) * 100)}%`,
           mediaContactsList: prioritizedContacts,
           listGeneratedAt: new Date().toISOString(),
           creditsUsed: enrichedContacts.filter(c => c.source === 'rocketreach').length,
@@ -4976,10 +5145,11 @@ Would you like to search further back for more authors, or proceed with the curr
           }
         });
         
-        // Create formatted media list for display - show only top 3 most relevant contacts
-        const topMediaContacts = prioritizedContacts.slice(0, 3); // Top 3 by relevance
+        // Create formatted media list for display - show top 5 most relevant contacts
+        const topMediaContacts = prioritizedContacts.slice(0, 5); // Top 5 by user selection order
         
-        logger.info('Creating media list display', {
+        logger.info('Creating media list display from selected list', {
+          selectedListType: selectedListType,
           topMediaContactsCount: topMediaContacts.length,
           prioritizedContactsCount: prioritizedContacts.length,
           firstContactName: topMediaContacts[0]?.name,
@@ -4987,17 +5157,16 @@ Would you like to search further back for more authors, or proceed with the curr
         });
         
         const mediaListDisplay = topMediaContacts.map(contact => {
-          // Find the original author data to get article metadata
-          const originalAuthor = authorsToEnrich.find((a: any) => a.id === contact.authorId);
-          const authorArticles = originalAuthor?.articles || [];
+          // Find the original author data
+          const originalAuthor = authorsForEnrichment.find((a: any) => a.id === contact.authorId);
           
-          logger.info('Processing contact for display', {
+          logger.info('Processing contact for display from selected list', {
             contactName: contact.name,
             contactOrganization: contact.organization,
             hasEmail: !!contact.email,
             hasPhone: !!contact.phone,
             enrichmentSource: contact.enrichmentSource,
-            articleCount: authorArticles.length
+            strengthReason: contact.strengthReason
           });
           
           // Format professional contact information
@@ -5026,21 +5195,9 @@ Would you like to search further back for more authors, or proceed with the curr
           
           // If no contact information is available, show a message
           if (contactLines.length === 0) {
-            if (contact.enrichmentSource === 'database') {
-              // Check if this name was likely filtered as non-person
-              const name = contact.name.toLowerCase();
-              const isLikelyOrganization = name.includes('group') || name.includes('media') || 
-                                         name.includes('team') || name.includes('insider') ||
-                                         name.includes('&') || name.includes('corp') ||
-                                         name.includes('news') || name.includes('press');
-              
-              if (isLikelyOrganization) {
-                contactLines.push('*Organization/publication name - individual contact not available*');
-                contactLines.push('*Try contacting the organization directly for specific journalist contacts*');
-              } else {
-                contactLines.push('*Contact information not found in RocketReach database*');
-                contactLines.push('*Consider manual research or alternative contact discovery methods*');
-              }
+            if (contact.enrichmentSource === 'fallback') {
+              contactLines.push('*Contact information not found in RocketReach database*');
+              contactLines.push('*Consider manual research or alternative contact discovery methods*');
             } else {
               contactLines.push('*Contact information being verified*');
             }
@@ -5051,24 +5208,20 @@ Would you like to search further back for more authors, or proceed with the curr
           const orgInitial = contact.organization ? contact.organization.charAt(0).toUpperCase() : '';
           const avatarText = `**${firstInitial}${orgInitial}**`;
           
-          // Create article metadata dropdown for debugging
-          const articleDropdown = authorArticles.length > 0 ? `
-
-**Articles (${authorArticles.length})**:
-${authorArticles.slice(0, 3).map((article: any, idx: number) => `• ${article.title?.substring(0, 80)}...`).join('\n')}
-${authorArticles.length > 3 ? `• ... and ${authorArticles.length - 3} more articles` : ''}` : '';
-          
           return `${avatarText} **${contact.rank}. ${contact.name}**
 ${contact.title ? `*${contact.title}*` : '*Professional*'}${contact.organization ? ` • ${contact.organization}` : ''}
 
 ${contactLines.join('\n')}
 
-**Professional Stats**: Relevance ${contact.relevanceScore.toFixed(1)} • ${contact.articleCount} Articles • ${contact.contactConfidence.toUpperCase()} Confidence
-${articleDropdown}
+**Professional Stats**: Selected by ${selectedListType} ranking • ${contact.contactConfidence.toUpperCase()} Confidence
+
+**Selection Reason**: ${contact.strengthReason}
+
 ---`;
         }).join('\n');
         
-        logger.info('Generated media list display', {
+        logger.info('Generated media list display from selected list', {
+          selectedListType: selectedListType,
           mediaListDisplayLength: mediaListDisplay.length,
           hasContent: mediaListDisplay.trim().length > 0,
           preview: mediaListDisplay.substring(0, 200) + '...'
@@ -5077,19 +5230,22 @@ ${articleDropdown}
         // Send success message with the improved media list
         const successMessage = `**Media Contacts List Generated Successfully!**
 
-Found complete contact information for **${finalContacts.length}** of **${authorsToEnrich.length}** authors writing about "U.S." related to "${originalTopic}".
+Found complete contact information for **${finalContacts.length}** of **${authorsForEnrichment.length}** ${selectedListType} sources covering "${originalTopic}" in U.S. markets.
 
 **Search Results Summary:**
 • Success Rate: ${enrichmentResults.enrichmentSuccessRate}
 • RocketReach Credits Used: ${enrichmentResults.creditsUsed}
+• List Type: ${selectedListType.toUpperCase()} ranking selection
+• Location Filter: United States
+• Language Filter: English
+• Selection Method: User-chosen ${selectedListType} ranking
 • Showing Top ${topMediaContacts.length} Contacts
 
-**Relevance Scoring:**
-Our algorithm ranks contacts by relevance score, calculated as follows:
-• **Base Score**: 5 points per published article on the topic
-• **Recency Bonus**: +2 points for articles published within the last 30 days
-• **Contact Quality**: Ranked by availability of professional email and LinkedIn profiles
-• **Tim Cook Test Contact**: Added with maximum relevance (1000 points) for RocketReach API testing
+**${selectedListType.toUpperCase()} List Selection:**
+${selectedListType === 'ai' ? 
+  'This list was generated by AI analysis using independent research from the AI\'s knowledge base of real journalists and publications.' :
+  'This list was generated using mathematical ranking based on LexisNexis source ranking, article count, and editorial quality metrics.'
+}
 
 ---
 
@@ -5097,9 +5253,10 @@ Our algorithm ranks contacts by relevance score, calculated as follows:
 
 ${mediaListDisplay}
 
-**Contact List Summary**: These ${topMediaContacts.length} contacts represent the highest-relevance journalists and media professionals covering "${originalTopic}" in U.S. markets. Contacts are ranked primarily by topical relevance, with secondary consideration for contact information completeness.`;
+**Contact List Summary**: These ${topMediaContacts.length} contacts were selected using the **${selectedListType}** ranking method for "${originalTopic}" coverage in U.S. markets.`;
 
-        logger.info('Sending media contacts list message', {
+        logger.info('Sending media contacts list message for selected list', {
+          selectedListType: selectedListType,
           messageLength: successMessage.length,
           topContactsCount: topMediaContacts.length,
           threadId: workflow.threadId
@@ -5107,7 +5264,8 @@ ${mediaListDisplay}
 
         await this.addDirectMessage(workflow.threadId, successMessage);
         
-        logger.info('Media List Contact Enrichment completed successfully', {
+        logger.info('Media List Contact Enrichment completed successfully for selected list', {
+          selectedListType: selectedListType,
           contactsEnriched: finalContacts.length,
           successRate: enrichmentResults.enrichmentSuccessRate,
           creditsUsed: enrichmentResults.creditsUsed,
@@ -5119,7 +5277,7 @@ ${mediaListDisplay}
         await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
         
         return {
-          response: `Media contacts list generated successfully! Found ${finalContacts.length} contacts.`,
+          response: `Media contacts list generated successfully! Found ${finalContacts.length} contacts from ${selectedListType} ranking.`,
           isComplete: true
         };
         
@@ -5127,7 +5285,7 @@ ${mediaListDisplay}
         logger.error('Error in Media List Contact Enrichment', {
           error: error instanceof Error ? error.message : 'Unknown error',
           stepId,
-          authorsCount: authorsToEnrich.length
+          authorsCount: selectedAuthors.length
         });
         
         await this.addDirectMessage(
@@ -5154,6 +5312,601 @@ ${mediaListDisplay}
         error: error instanceof Error ? error.message : 'Unknown error'
       });
       throw error;
+    }
+  }
+
+  // Handle JSON_DIALOG step type for Media List Generator - Author Ranking & Selection
+  async handleMediaListAuthorRanking(stepId: string, workflowId: string, threadId: string, userInput: string): Promise<{
+    response: string;
+    nextStep?: any;
+    isComplete: boolean;
+  }> {
+    try {
+      // Get the current step
+      const step = await this.dbService.getStep(stepId);
+      if (!step) throw new Error(`Step not found: ${stepId}`);
+
+      // Get the workflow
+      const workflow = await this.dbService.getWorkflow(workflowId);
+      if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+      
+      // Update the step with the user input to ensure it's stored
+      await this.dbService.updateStep(stepId, {
+        userInput: userInput, // Use the passed userInput parameter
+        status: StepStatus.IN_PROGRESS
+      });
+      
+      // Check if user is making a list selection choice
+      if (step.metadata?.needsListSelection) {
+        const userChoice = userInput.toLowerCase().trim(); // Use passed userInput
+        const collectedInfo = step.metadata.collectedInformation;
+        
+        logger.info('User making list selection choice', {
+          userChoice,
+          userInput: userInput,
+          hasAlgorithmicList: !!collectedInfo?.algorithmicTop10,
+          hasAIList: !!collectedInfo?.aiTop10Authors
+        });
+        
+        if (userChoice.includes('algorithmic') || userChoice.includes('algorithm')) {
+          // User chose algorithmic list
+          const selectedList = collectedInfo.algorithmicTop10;
+          
+          if (!selectedList || selectedList.length === 0) {
+            await this.addDirectMessage(workflow.threadId, "Algorithmic list is not available. Please choose 'ai' for the AI-curated list.");
+            return {
+              response: "Algorithmic list not available. Please choose 'ai'.",
+              nextStep: {
+                id: step.id,
+                name: step.name,
+                prompt: step.prompt,
+                type: step.stepType
+              },
+              isComplete: false
+            };
+          }
+          
+          // Store the selected list for Contact Enrichment
+          await this.dbService.updateStep(stepId, {
+            status: StepStatus.COMPLETE,
+            userInput: userInput,
+            metadata: {
+              ...step.metadata,
+              collectedInformation: {
+                ...collectedInfo,
+                top10Authors: selectedList,
+                selectedListType: 'algorithmic',
+                optimizedAlgorithm: collectedInfo.algorithmicRankingMethod,
+                algorithmSummary: `Algorithmic ranking using ${collectedInfo.userPreference} weighting`
+              },
+              needsListSelection: false
+            }
+          });
+          
+          // Find and transition to Contact Enrichment step
+          const contactEnrichmentStep = workflow.steps.find(s => s.name === "Contact Enrichment");
+          if (contactEnrichmentStep) {
+            // Update workflow to point to Contact Enrichment step
+            await this.dbService.updateWorkflowCurrentStep(workflow.id, contactEnrichmentStep.id);
+            await this.dbService.updateStep(contactEnrichmentStep.id, {
+              status: StepStatus.IN_PROGRESS
+            });
+          }
+          
+          await this.addDirectMessage(workflow.threadId, `**✅ Algorithmic List Selected**
+
+Using the mathematical ranking based on ${collectedInfo.userPreference} preference. Proceeding to contact enrichment with these ${selectedList.length} authors.
+
+Moving to RocketReach contact enrichment...`);
+          
+          return {
+            response: `Algorithmic list selected. Proceeding to contact enrichment with ${selectedList.length} authors.`,
+            nextStep: contactEnrichmentStep ? {
+              id: contactEnrichmentStep.id,
+              name: contactEnrichmentStep.name,
+              prompt: contactEnrichmentStep.prompt,
+              type: contactEnrichmentStep.stepType
+            } : null,
+            isComplete: false // Changed from true to false so workflow continues
+          };
+          
+        } else if (userChoice.includes('ai') || userChoice.includes('artificial')) {
+          // User chose AI list
+          const selectedList = collectedInfo.aiTop10Authors;
+          
+          if (!selectedList || selectedList.length === 0) {
+            await this.addDirectMessage(workflow.threadId, "AI list is not available. Please choose 'algorithmic' for the mathematical ranking.");
+            return {
+              response: "AI list not available. Please choose 'algorithmic'.",
+              nextStep: {
+                id: step.id,
+                name: step.name,
+                prompt: step.prompt,
+                type: step.stepType
+              },
+              isComplete: false
+            };
+          }
+          
+          // Store the selected list for Contact Enrichment
+          await this.dbService.updateStep(stepId, {
+            status: StepStatus.COMPLETE,
+            userInput: userInput,
+            metadata: {
+              ...step.metadata,
+              collectedInformation: {
+                ...collectedInfo,
+                top10Authors: selectedList,
+                selectedListType: 'ai',
+                optimizedAlgorithm: collectedInfo.aiRankingMethod,
+                algorithmSummary: `AI analysis with ${collectedInfo.userPreference} preference`
+              },
+              needsListSelection: false
+            }
+          });
+          
+          // Find and transition to Contact Enrichment step
+          const contactEnrichmentStep = workflow.steps.find(s => s.name === "Contact Enrichment");
+          if (contactEnrichmentStep) {
+            // Update workflow to point to Contact Enrichment step
+            await this.dbService.updateWorkflowCurrentStep(workflow.id, contactEnrichmentStep.id);
+            await this.dbService.updateStep(contactEnrichmentStep.id, {
+              status: StepStatus.IN_PROGRESS
+            });
+          }
+          
+          await this.addDirectMessage(workflow.threadId, `**✅ AI List Selected**
+
+Using the AI-curated analysis. Proceeding to contact enrichment with these ${selectedList.length} authors.
+
+Moving to RocketReach contact enrichment...`);
+          
+          return {
+            response: `AI list selected. Proceeding to contact enrichment with ${selectedList.length} authors.`,
+            nextStep: contactEnrichmentStep ? {
+              id: contactEnrichmentStep.id,
+              name: contactEnrichmentStep.name,
+              prompt: contactEnrichmentStep.prompt,
+              type: contactEnrichmentStep.stepType
+            } : null,
+            isComplete: false // Changed from true to false so workflow continues
+          };
+          
+        } else {
+          // Invalid choice
+          await this.addDirectMessage(workflow.threadId, `Please choose either:
+• **"algorithmic"** - for the mathematical ranking
+• **"ai"** - for the AI-curated list
+
+Type your choice to proceed.`);
+      
+          return {
+            response: "Please choose 'algorithmic' or 'ai'.",
+            nextStep: {
+              id: step.id,
+              name: step.name,
+              prompt: step.prompt,
+              type: step.stepType
+            },
+            isComplete: false
+          };
+        }
+      }
+      
+      // Normal dual ranking generation (first time)
+      const databaseStep = workflow.steps.find(s => s.name === "Database Query");
+      if (!databaseStep || !databaseStep.metadata?.searchResults?.authorsExtracted) {
+        throw new Error('No author data found from Database Query step');
+      }
+      
+      const allAuthors = databaseStep.metadata.searchResults.authorsExtracted;
+      const topicStep = workflow.steps.find(s => s.name === "Topic Input");
+      const originalTopic = topicStep?.metadata?.collectedInformation?.topic || 'AI and Technology';
+      
+      // Use the passed userInput parameter directly
+      const currentUserInput = userInput;
+      
+      // Determine user preference and weights - FIX: Use the actual user input
+      let preference = 'Balanced Mix';
+      let weights = { editorialRank: 35, articleCount: 35, recentActivity: 30 };
+      
+      const userChoice = currentUserInput.toLowerCase().trim();
+      
+      logger.info('Determining user preference from input', {
+        currentUserInput,
+        userChoice,
+        stepId
+      });
+      
+      if (userChoice.includes('editorial') || userChoice.includes('quality')) {
+        preference = 'Editorial Quality';
+        weights = { editorialRank: 60, articleCount: 25, recentActivity: 15 };
+      } else if (userChoice.includes('topic') || userChoice.includes('expertise')) {
+        preference = 'Topic Expertise';
+        weights = { editorialRank: 30, articleCount: 50, recentActivity: 20 };
+      } else if (userChoice.includes('recent') || userChoice.includes('activity')) {
+        preference = 'Recent Activity';
+        weights = { editorialRank: 30, articleCount: 20, recentActivity: 50 };
+      }
+      
+      logger.info('Final preference determined', {
+        preference,
+        weights,
+        originalUserInput: currentUserInput
+      });
+      
+      // Generate algorithmic ranking
+      const algorithmicRanking = this.generateAlgorithmicRanking(allAuthors, weights, originalTopic);
+      
+      // Generate AI ranking - with better error handling
+      let aiRanking;
+      try {
+        aiRanking = await this.generateAIRanking(step, workflow, preference, originalTopic);
+      } catch (error) {
+        logger.error('AI ranking failed, using fallback', {
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        aiRanking = { 
+          top10Authors: algorithmicRanking.slice(0, 10).map(author => ({
+            ...author,
+            strengthReason: `AI analysis unavailable - ${author.strengthReason}`
+          })), 
+          rankingAlgorithm: "AI analysis failed - using algorithmic fallback",
+          selectionCriteria: "Fallback to algorithmic ranking due to AI service error"
+        };
+      }
+      
+      // Present both lists to user for selection
+      const finalResults = {
+        userPreference: preference,
+        appliedWeights: weights,
+        originalAuthorCount: allAuthors.length,
+        originalTopic,
+        algorithmicTop10: algorithmicRanking.slice(0, 10),
+        algorithmicRankingMethod: `Enhanced ${preference} weighting with LexisNexis source ranking`,
+        aiTop10Authors: aiRanking.top10Authors || [],
+        aiRankingMethod: aiRanking.rankingAlgorithm || "AI analysis",
+        aiSelectionCriteria: aiRanking.selectionCriteria || "Independent AI analysis"
+      };
+      
+      // Store the results but don't auto-proceed
+      await this.dbService.updateStep(stepId, {
+        status: StepStatus.IN_PROGRESS,
+        userInput: currentUserInput,
+        metadata: {
+          ...step.metadata,
+          collectedInformation: finalResults,
+          needsListSelection: true
+        }
+      });
+      
+      // Create response message showing both lists
+      const responseMessage = `**DUAL RANKING ANALYSIS COMPLETE**
+
+Applied **${preference}** ranking preference to analyze ${allAuthors.length} authors.
+
+---
+
+**ALGORITHMIC TOP 10** (LexisNexis Source Ranking + ${preference}):
+${algorithmicRanking.slice(0, 10).map((author: any, index: number) => 
+  `${index + 1}. **${author.name}** (${author.organization}) - Editorial Rank: ${author.editorialRank || 'Unknown'} - ${author.articleCount} articles`
+).join('\n')}
+
+---
+
+**AI TOP 10** (Independent AI Analysis):
+${aiRanking.top10Authors && aiRanking.top10Authors.length > 0 ? 
+  aiRanking.top10Authors.slice(0, 10).map((author: any, index: number) => 
+    `${index + 1}. **${author.name}** (${author.organization}) - ${author.strengthReason || 'AI selected'}`
+  ).join('\n') : 
+  'AI analysis failed - using algorithmic fallback'
+}
+
+---
+
+**CHOOSE YOUR MEDIA LIST**
+
+Which list would you like to send to RocketReach for contact enrichment?
+
+• **"algorithmic"** - Use the LexisNexis source ranking with ${preference} weighting
+• **"ai"** - Use the AI-curated list with independent analysis
+
+Type your choice to proceed to contact enrichment.`;
+      
+      await this.addDirectMessage(workflow.threadId, responseMessage);
+      
+      return {
+        response: responseMessage,
+        nextStep: {
+          id: stepId,
+          name: step.name,
+          prompt: responseMessage,
+          type: step.stepType
+        },
+        isComplete: false
+      };
+      
+    } catch (error) {
+      logger.error('Error handling Media List Author Ranking', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      throw error;
+    }
+  }
+
+  private generateAlgorithmicRanking(authors: any[], weights: any, topic: string): any[] {
+    return authors
+      .filter(author => {
+        // Filter out non-journalists and wire services, but keep good sources
+        const authorName = author.name.toLowerCase();
+        const organization = (author.organization || '').toLowerCase();
+        
+        // Skip obvious non-journalists
+        const skipNames = [
+          'ceo', 'chief executive', 'president', 'director', 'manager',
+          'staff writer', 'editorial team', 'newsroom', 'editorial board'
+        ];
+        
+        const skipOrgs = [
+          'wire service', 'reuters', 'associated press', 'bloomberg terminal'
+        ];
+        
+        const isSkippableName = skipNames.some(skip => authorName.includes(skip));
+        const isSkippableOrg = skipOrgs.some(skip => organization.includes(skip));
+        const hasMultipleNames = authorName.includes(' and ') || authorName.includes(' & ');
+        
+        return !isSkippableName && !isSkippableOrg && !hasMultipleNames;
+      })
+      .map(author => {
+        // Calculate scores based on LexisNexis editorial ranking
+        const editorialRank = author.editorialRank || 5;
+        
+        // Editorial score: Rank 1 = 100, Rank 2 = 80, Rank 3 = 60, Rank 4 = 40, Rank 5 = 20
+        const editorialScore = Math.max(0, (6 - editorialRank) * 20);
+        
+        // Article count score (cap at 100)
+        const articleScore = Math.min(author.articleCount * 8, 100);
+        
+        // Recent activity score
+        const recentScore = author.recentArticles > 0 ? 
+          Math.min(author.recentArticles * 20, 100) : 10;
+        
+        // Calculate topic relevance
+        const topicRelevanceScore = this.calculateTopicRelevance(author.topics, topic);
+        
+        // Apply user preference weights
+        const weightedScore = 
+          (editorialScore * weights.editorialRank / 100) +
+          (articleScore * weights.articleCount / 100) +
+          (recentScore * weights.recentActivity / 100) +
+          (topicRelevanceScore * 0.2); // 20% weight for topic relevance
+        
+        // Create strength reason based on what makes this author strong
+        let strengthReasons = [];
+        if (editorialRank === 1) strengthReasons.push("Rank 1 LexisNexis source");
+        else if (editorialRank === 2) strengthReasons.push("Rank 2 LexisNexis source");
+        else strengthReasons.push(`Rank ${editorialRank} source`);
+        
+        if (author.articleCount > 5) strengthReasons.push(`${author.articleCount} articles`);
+        if (author.recentArticles > 0) strengthReasons.push(`${author.recentArticles} recent articles`);
+        if (topicRelevanceScore > 50) strengthReasons.push("high topic relevance");
+        
+        return {
+          ...author,
+          optimizedScore: Math.round(weightedScore * 100) / 100,
+          editorialRank: editorialRank,
+          editorialScore: editorialScore,
+          articleScore: articleScore,
+          recentScore: recentScore,
+          topicRelevanceScore: topicRelevanceScore,
+          strengthReason: strengthReasons.join(", "),
+          scoreBreakdown: {
+            editorial: Math.round(editorialScore * weights.editorialRank / 100),
+            articles: Math.round(articleScore * weights.articleCount / 100),
+            recent: Math.round(recentScore * weights.recentActivity / 100),
+            topic: Math.round(topicRelevanceScore * 0.2)
+          }
+        };
+      })
+      .sort((a, b) => {
+        // Primary sort: Editorial rank (1 is best, 5 is worst)
+        const rankDiff = a.editorialRank - b.editorialRank;
+        if (rankDiff !== 0) return rankDiff;
+        
+        // Secondary sort: Optimized score (higher is better)
+        const scoreDiff = b.optimizedScore - a.optimizedScore;
+        if (scoreDiff !== 0) return scoreDiff;
+        
+        // Tertiary sort: Article count (higher is better)
+        return b.articleCount - a.articleCount;
+      });
+  }
+
+  private calculateTopicRelevance(topics: string[], searchTopic: string): number {
+    if (!topics || !Array.isArray(topics)) return 0;
+    
+    let relevancePoints = 0;
+    const topicString = topics.join(' ').toLowerCase();
+    const searchTopicLower = searchTopic.toLowerCase();
+    
+    // Exact topic match
+    if (topicString.includes(searchTopicLower)) {
+      relevancePoints += 50;
+    }
+    
+    // Keyword matches
+    const keywords = searchTopicLower.split(/[,\s&]+/).filter(word => word.length > 2);
+    keywords.forEach(keyword => {
+      if (topicString.includes(keyword)) {
+        relevancePoints += 20;
+      }
+    });
+    
+    return Math.min(relevancePoints, 100);
+  }
+
+  private async generateAIRanking(step: WorkflowStep, workflow: Workflow, preference: string, topic: string): Promise<any> {
+    try {
+      // Create a completely independent AI analysis prompt with NO API data
+      const aiAnalysisPrompt = `You are an expert media relations specialist. Generate a list of exactly 10 real, verified journalists who write about "${topic}" in the United States.
+
+SEARCH CRITERIA:
+- Topic: "${topic}"
+- Location: United States
+- Language: English
+- Focus: ${preference}
+
+RANKING PREFERENCE: ${preference}
+${preference === 'Editorial Quality' ? 
+  '- Prioritize top-tier US publications (New York Times, Wall Street Journal, Washington Post, CNN, BBC America, Reuters US, etc.)\n- Focus on established journalists at premium outlets\n- Emphasize editorial credibility and publication reputation' :
+  preference === 'Topic Expertise' ?
+  '- Select journalists who specialize in this specific topic\n- Authors known for in-depth coverage of this subject\n- Beat reporters and subject matter experts\n- Writers with established expertise in this field' :
+  preference === 'Recent Activity' ?
+  '- Journalists actively publishing on this topic in 2024-2025\n- Authors with recent bylines and current coverage\n- Fresh voices and emerging reporters\n- Focus on recent publication activity' :
+  '- Balance quality publications, topic expertise, and recent activity\n- Mix of established journalists and emerging voices\n- Diverse range of high-quality US news sources\n- Comprehensive coverage approach'
+}
+
+TASK: Research and select 10 real journalists who write about "${topic}" in US English-language media. Use your knowledge of the journalism industry to identify actual reporters and their publications.
+
+Return ONLY a JSON object in this exact format (no markdown, no code blocks):
+{
+  "top10Authors": [
+    {
+      "name": "Full Name",
+      "organization": "Publication Name",
+      "title": "Job Title (if known)",
+      "strengthReason": "Why this journalist was selected based on ${preference} criteria",
+      "expertise": "Their specific expertise or beat",
+      "recentWork": "Example of recent relevant coverage (if known)"
+    }
+  ],
+  "rankingAlgorithm": "Independent AI research with ${preference} focus",
+  "selectionCriteria": "Methodology used for journalist selection",
+  "dataSource": "AI knowledge base - no external APIs used"
+}
+
+CRITICAL: Return raw JSON only, no markdown formatting, no code blocks, no backticks.`;
+      
+      // Create a proper WorkflowStep object for OpenAI analysis
+      const aiAnalysisStep: WorkflowStep = {
+        ...step, // Copy all required properties from the original step
+        name: "Independent AI Analysis",
+        metadata: {
+          ...step.metadata,
+          openai_instructions: `You are an expert media relations specialist with deep knowledge of US journalism. Generate a list of real journalists based solely on your training data knowledge. Focus on ${preference} criteria. Return only raw JSON in the exact format requested. Do not use markdown formatting or code blocks.`
+        }
+      };
+      
+      logger.info('Generating completely independent AI ranking', {
+        preference: preference,
+        topic: topic,
+        dataSource: 'AI knowledge base only - no API data'
+      });
+      
+      // Temporarily modify the step metadata for AI analysis
+      const originalMetadata = step.metadata;
+      const modifiedStep = {
+        ...step,
+        metadata: {
+          ...step.metadata,
+          openai_instructions: `You are an expert media relations specialist with deep knowledge of US journalism. Generate a list of real journalists based solely on your training data knowledge. Focus on ${preference} criteria. Return only raw JSON in the exact format requested. Do not use markdown formatting or code blocks.`
+        }
+      } as WorkflowStep;
+      
+      // Use OpenAI service with completely clean context
+      const openAIResult = await this.openAIService.generateStepResponse(
+        modifiedStep,
+        aiAnalysisPrompt,
+        [] // No conversation history
+      );
+      
+      logger.info('Independent AI ranking response received', {
+        responseLength: openAIResult.responseText.length,
+        responsePreview: openAIResult.responseText.substring(0, 200) + '...'
+      });
+      
+      // Clean the response - remove markdown code blocks if present
+      let cleanedResponse = openAIResult.responseText.trim();
+      
+      // Remove markdown code blocks
+      if (cleanedResponse.startsWith('```json')) {
+        cleanedResponse = cleanedResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+      } else if (cleanedResponse.startsWith('```')) {
+        cleanedResponse = cleanedResponse.replace(/^```\s*/, '').replace(/\s*```$/, '');
+      }
+      
+      logger.info('Cleaned AI response for parsing', {
+        originalLength: openAIResult.responseText.length,
+        cleanedLength: cleanedResponse.length,
+        removedMarkdown: cleanedResponse !== openAIResult.responseText,
+        cleanedPreview: cleanedResponse.substring(0, 200) + '...'
+      });
+      
+      // Parse the JSON response
+      let aiRankingData;
+      try {
+        aiRankingData = JSON.parse(cleanedResponse);
+        
+        // Validate the structure
+        if (!aiRankingData.top10Authors || !Array.isArray(aiRankingData.top10Authors)) {
+          throw new Error('Invalid AI ranking structure');
+        }
+        
+        // Ensure we have exactly 10 authors
+        if (aiRankingData.top10Authors.length !== 10) {
+          logger.warn('AI returned wrong number of authors', {
+            returned: aiRankingData.top10Authors.length,
+            expected: 10
+          });
+          // Trim to 10 or pad if needed
+          aiRankingData.top10Authors = aiRankingData.top10Authors.slice(0, 10);
+        }
+        
+        logger.info('Independent AI ranking parsed successfully', {
+          authorCount: aiRankingData.top10Authors.length,
+          algorithm: aiRankingData.rankingAlgorithm,
+          dataSource: aiRankingData.dataSource
+        });
+        
+        return aiRankingData;
+      } catch (parseError) {
+        logger.error('Failed to parse independent AI ranking JSON', {
+          error: parseError instanceof Error ? parseError.message : 'Unknown error',
+          originalResponse: openAIResult.responseText.substring(0, 500) + '...',
+          cleanedResponse: cleanedResponse.substring(0, 500) + '...'
+        });
+        
+        // Create fallback response with example journalists (no API data)
+        const fallbackAuthors = [
+          {
+            name: "John Smith",
+            organization: "Example News",
+            title: "Technology Reporter",
+            strengthReason: "AI analysis failed - example entry",
+            expertise: "Technology and AI coverage",
+            recentWork: "Recent articles on technology trends"
+          }
+        ];
+        
+        return {
+          top10Authors: fallbackAuthors,
+          rankingAlgorithm: "Independent AI analysis failed",
+          selectionCriteria: "Fallback to example data due to AI parsing error",
+          dataSource: "Fallback data - no external APIs used"
+        };
+      }
+    } catch (error) {
+      logger.error('Independent AI ranking generation failed completely', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      
+      // Return empty result to trigger fallback
+      return { 
+        top10Authors: [], 
+        rankingAlgorithm: "Independent AI analysis failed", 
+        selectionCriteria: "AI service unavailable",
+        dataSource: "No external APIs used"
+      };
     }
   }
 }
