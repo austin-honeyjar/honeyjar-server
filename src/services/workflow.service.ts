@@ -1361,6 +1361,31 @@ export class WorkflowService {
           const userChoice = userInput.toLowerCase().trim();
           
           if (userChoice.includes('search more') || userChoice.includes('search further') || userChoice.includes('more authors')) {
+            // Check if we've already done too many searches
+            const currentDepth = step.metadata.searchResults?.searchDepthLevel || 1;
+            if (currentDepth >= 3) {
+              await this.addDirectMessage(
+                workflow.threadId,
+                `You've already performed ${currentDepth} searches. To avoid excessive API usage, please proceed with the current results or try a different topic.
+
+You can:
+• **"proceed"** - to continue with current results to author ranking and selection
+
+What would you like to do?`
+              );
+              
+              return {
+                response: `Maximum search depth reached (${currentDepth}). Please proceed with current results.`,
+                nextStep: {
+                  id: stepId,
+                  name: step.name,
+                  prompt: step.prompt,
+                  type: step.stepType
+                },
+                isComplete: false
+              };
+            }
+            
             // User wants to search further back
             await this.addDirectMessage(workflow.threadId, `Searching further back in time for more authors on "${step.metadata.searchResults.originalTopic}"...`);
             
@@ -1375,17 +1400,41 @@ export class WorkflowService {
               const lastSequenceId = currentSearchResults.lastSequenceId;
               const currentDepth = currentSearchResults.searchDepthLevel || 1;
               
-              // Use the same search query format as the original search
-              const extendedSearchResults = await metabaseService.searchArticles({
+              logger.info('Starting extended search', {
+                originalTopic,
+                currentQuery,
+                lastSequenceId,
+                currentDepth,
+                hasLastSequenceId: !!lastSequenceId
+              });
+              
+              // Build search parameters for extended search
+              const searchParams: any = {
                 query: currentQuery,
-                limit: 500,
-                format: 'json', // FORCE JSON format instead of default XML
-                sequence_id: lastSequenceId,
-                sort_by_relevance: "true", // FIXED: String instead of boolean
-                show_relevance_score: "true", // FIXED: String instead of boolean
-                filter_duplicates: "true", // FIXED: String instead of boolean
-                relevance_percent: 60,
-                show_matching_keywords: "true" // FIXED: String instead of boolean
+                limit: 200, // FIXED: Maximum allowed by API (not 500)
+                format: 'json',
+                sort_by_relevance: "true",
+                show_relevance_score: "true",
+                filter_duplicates: "true",
+                // REMOVED: relevance_percent filter to get maximum results
+                show_matching_keywords: "true"
+              };
+              
+              // Only add sequence_id if we have a valid one
+              if (lastSequenceId && lastSequenceId !== 'null' && lastSequenceId !== 'undefined') {
+                searchParams.sequence_id = lastSequenceId;
+                logger.info('Using sequence_id for extended search', { sequence_id: lastSequenceId });
+              } else {
+                logger.info('No valid sequence_id, performing fresh search for extended results');
+              }
+              
+              // Use the same search query format as the original search
+              const extendedSearchResults = await metabaseService.searchArticles(searchParams);
+              
+              logger.info('Extended search completed', {
+                articlesFound: extendedSearchResults.articles.length,
+                hasMore: extendedSearchResults.hasMore,
+                newLastSequenceId: extendedSearchResults.lastSequenceId
               });
               
               // Process the extended results
@@ -1394,33 +1443,25 @@ export class WorkflowService {
               // Extract authors from all articles
               const authorsMap = new Map();
               
-              // Add existing authors first - convert topics back to Set
-              currentSearchResults.authorsExtracted.forEach((author: any) => {
-                const existingAuthor = {
-                  ...author,
-                  topics: new Set(Array.isArray(author.topics) ? author.topics : [])
-                };
-                authorsMap.set(`${author.name}-${author.organization}`, existingAuthor);
+              // FIXED: Process ALL articles from both original and extended search
+              // First, get the original articles from the current search results
+              const originalArticles = currentSearchResults.originalArticles || [];
+              const allArticles = [...originalArticles, ...extendedSearchResults.articles];
+              
+              logger.info('Processing combined articles for author extraction', {
+                originalArticlesCount: originalArticles.length,
+                extendedArticlesCount: extendedSearchResults.articles.length,
+                totalArticlesToProcess: allArticles.length
               });
               
-              // Process new articles from extended search
-              extendedSearchResults.articles.forEach((article: any, index: number) => {
+              // Process ALL articles (original + extended) to get accurate author counts
+              allArticles.forEach((article: any, index: number) => {
+                // REMOVED: All upstream filters except basic author check
                 if (article.author && article.source) {
                   const authorKey = `${article.author}-${article.source}`;
                   
-                  // FIXED: Better filtering for actual news sources vs academic sources
-                  const sourceName = article.source.toLowerCase();
-                  const isNewsSource = !sourceName.includes('ncbi') && 
-                                     !sourceName.includes('pubmed') && 
-                                     !sourceName.includes('arxiv') && 
-                                     !sourceName.includes('research') &&
-                                     !sourceName.includes('journal') &&
-                                     !sourceName.includes('academic');
-                  
-                  // Skip non-news sources unless we have very few results
-                  if (!isNewsSource && authorsMap.size > 10) {
-                    return; // Skip academic/research sources if we have enough news sources
-                  }
+                  // REMOVED: Academic source filtering - include all sources
+                  const isNewsSource = true; // Include all sources now
                   
                   if (!authorsMap.has(authorKey)) {
                     // FIXED: Try multiple paths to find editorial rank in the actual API response
@@ -1439,8 +1480,8 @@ export class WorkflowService {
                       editorialRank = parseInt(article.editorialRank) || 5;
                     }
                     
-                    // FIXED: Boost score for actual news sources
-                    const sourceBonus = isNewsSource ? 10 : 0;
+                    // REMOVED: Source bonus - treat all sources equally
+                    const sourceBonus = 0; // No bonus for any source type
                     
                     authorsMap.set(authorKey, {
                       id: `author-${index}-${Date.now()}`,
@@ -1485,79 +1526,148 @@ export class WorkflowService {
               }));
               
               const topAuthors = authorsArray
-                .sort((a, b) => b.relevanceScore - a.relevanceScore)
-                .slice(0, 20); // Increased to 20 for extended search
+                .sort((a, b) => b.relevanceScore - a.relevanceScore);
+              // REMOVED: .slice(0, 20) - Let ranking step handle final top 10 selection
               
-              // Update search results
+              // FIXED: Calculate accurate statistics
+              const totalArticlesAnalyzed = originalArticles.length + extendedSearchResults.articles.length;
+              const totalAuthorsFound = authorsArray.length;
+              const topAuthorsCount = topAuthors.length;
+              
+              // Calculate rank distribution for the updated results
+              const rankDistribution = authorsArray.reduce((acc: any, author) => {
+                const rank = author.editorialRank || 'Unknown';
+                acc[rank] = (acc[rank] || 0) + 1;
+                return acc;
+              }, {});
+              
+              // Get date range for display (use current date range)
+              const endDate = new Date();
+              const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+              const startDateStr = startDate.toISOString().split('T')[0];
+              const endDateStr = endDate.toISOString().split('T')[0];
+              
+              // Get topic keywords from current search results
+              const topicKeywords = currentSearchResults.topicKeywords || [];
+              
+              logger.info('Extended search author analysis completed - REMOVED ALL FILTERS', {
+                totalArticlesAnalyzed,
+                totalAuthorsFound,
+                topAuthorsCount,
+                originalArticlesCount: originalArticles.length,
+                extendedArticlesCount: extendedSearchResults.articles.length,
+                rankDistribution,
+                rankingStrategy: 'All authors will be ranked for top 10 selection', // FIXED: No artificial limits
+                filteringStatus: 'REMOVED: All upstream filters except basic author check'
+              });
+              
+              // Update search results with accurate counts
               const updatedSearchResults = {
                 ...currentSearchResults,
-                articlesFound: currentSearchResults.articlesFound + extendedSearchResults.articles.length,
+                articlesFound: totalArticlesAnalyzed,
                 authorsExtracted: topAuthors,
-                selectedAuthors: topAuthors.length,
-                totalArticlesAnalyzed: currentSearchResults.totalArticlesAnalyzed + extendedSearchResults.articles.length,
+                selectedAuthors: topAuthorsCount,
+                totalArticlesAnalyzed: totalArticlesAnalyzed,
                 lastSequenceId: extendedSearchResults.lastSequenceId,
                 hasMoreResults: extendedSearchResults.hasMore,
                 searchDepthLevel: currentDepth + 1,
-                extendedSearchCompleted: true
+                extendedSearchCompleted: true,
+                originalArticles: allArticles // Store all articles for future searches
               };
               
-              // Store the search results and auto-transition to next step
+              // Store the search results but DON'T auto-transition - stay in current step
               await this.dbService.updateStep(stepId, {
-                status: StepStatus.COMPLETE, // FIXED: Mark as complete to auto-transition
+                status: StepStatus.IN_PROGRESS, // Keep step active for more searches
                 userInput: userInput,
                 metadata: {
                   ...step.metadata,
                   searchResults: updatedSearchResults,
                   apiCallCompleted: true,
-                  needsUserDecision: false // FIXED: Remove user decision flag
+                  needsUserDecision: true, // Keep user decision flag for more searches
+                  searchDepthLevel: currentDepth + 1
                 }
+              });
+              
+              // FIXED: Show detailed updated search results in chat (same format as initial search)
+              const updatedSearchResultsMessage = `Found articles from **${topAuthorsCount}** authors writing about ${originalTopic ? `"${originalTopic}"` : 'general topics'} (using OR logic for keywords: ${topicKeywords?.join(', ') || 'none'}) in US English language sources.
+
+**Enhanced Search Results** (${startDateStr} to ${endDateStr}):
+• Total Articles Analyzed: ${totalArticlesAnalyzed}
+• Authors Found: ${totalAuthorsFound}
+• Authors for Ranking: ${topAuthorsCount} (all will be ranked for top 10 selection)
+• Search Time Frame: ${90} days
+• Language Filter: English only
+• Location Filter: United States only 
+• Source Quality: Premium sources (Rank 1 only) - Metabase filtered
+• Search Logic: OR logic for topic keywords
+• Search Depth: Level ${currentDepth + 1}
+
+**Editorial Rank Distribution:**
+${Object.entries(rankDistribution)
+  .map(([rank, count]) => `• Rank ${rank}: ${count} sources`)
+  .join('\n')}
+
+**Search Progress:**
+• Original Search: ${originalArticles.length} articles
+• Extended Search: ${extendedSearchResults.articles.length} additional articles
+• Total Combined: ${totalArticlesAnalyzed} articles
+
+**Note**: All sources included - ranking algorithm will select the best 10 based on your preferences.
+
+You can:
+• **"search more"** - to find additional authors
+• **"proceed"** - to continue with current results to author ranking and selection
+
+What would you like to do?`;
+              
+              await this.addDirectMessage(workflow.threadId, updatedSearchResultsMessage);
+              
+              // Stay in current step instead of auto-transitioning
+              return {
+                response: `Extended search completed. Found ${topAuthorsCount} top authors from ${totalAuthorsFound} total authors. You can search more or proceed.`,
+                nextStep: {
+                  id: stepId,
+                  name: step.name,
+                  prompt: step.prompt,
+                  type: step.stepType
+                },
+                isComplete: false
+              };
+            } catch (error) {
+              // Get the current search results for error logging
+              const currentSearchResults = step.metadata.searchResults;
+              const originalTopic = currentSearchResults?.originalTopic || 'unknown';
+              const currentQuery = currentSearchResults?.query || 'unknown';
+              const lastSequenceId = currentSearchResults?.lastSequenceId || 'none';
+              
+              logger.error('Extended search failed', {
+                error: error instanceof Error ? error.message : 'Unknown error',
+                stack: error instanceof Error ? error.stack : undefined,
+                originalTopic,
+                currentQuery,
+                lastSequenceId
               });
               
               await this.addDirectMessage(
                 workflow.threadId,
-                `Extended search completed! Found **${topAuthors.length}** total authors from ${updatedSearchResults.totalArticlesAnalyzed} total articles. Proceeding to author ranking and selection...`
+                `Extended search encountered an issue: ${error instanceof Error ? error.message : 'Unknown error'}. 
+
+You can:
+• **"search more"** - to try again with different parameters
+• **"proceed"** - to continue with current results to author ranking and selection
+
+What would you like to do?`
               );
               
-              // FIXED: Auto-transition to Author Ranking & Selection step
-              const nextStep = workflow.steps.find(s => s.name === "Author Ranking & Selection");
-              if (nextStep) {
-                await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
-                await this.dbService.updateStep(nextStep.id, {
-                  status: StepStatus.IN_PROGRESS,
-                  metadata: {
-                    ...nextStep.metadata,
-                    initialPromptSent: false
-                  }
-                });
-                
-                // Send the ranking prompt immediately
-                if (nextStep.prompt) {
-                  await this.addDirectMessage(workflow.threadId, nextStep.prompt);
-                  await this.dbService.updateStep(nextStep.id, {
-                    metadata: { ...nextStep.metadata, initialPromptSent: true }
-                  });
-                }
-                
-                return {
-                  response: `Extended search completed. Found ${topAuthors.length} total authors.`,
-                  nextStep: {
-                    id: nextStep.id,
-                    name: nextStep.name,
-                    prompt: nextStep.prompt,
-                    type: nextStep.stepType
-                  },
-                  isComplete: false
-                };
-              }
-              
-            } catch (error) {
-              await this.addDirectMessage(
-                workflow.threadId,
-                `Error during extended search: ${error instanceof Error ? error.message : 'Unknown error'}`
-              );
-              
+              // Stay in current step to allow retry
               return {
-                response: `Extended search failed.`,
+                response: `Extended search failed: ${error instanceof Error ? error.message : 'Unknown error'}. You can try again or proceed.`,
+                nextStep: {
+                  id: stepId,
+                  name: step.name,
+                  prompt: step.prompt,
+                  type: step.stepType
+                },
                 isComplete: false
               };
             }
@@ -4548,11 +4658,13 @@ export class WorkflowService {
       const topicStep = workflow.steps.find(s => s.name === "Topic Input");
       const topicData = topicStep?.metadata?.collectedInformation;
       const topic = topicData?.topic;
+      const topicKeywords = topicData?.topicKeywords || [];
 
       logger.info('Media List Database Query - Topic extracted', {
         stepId,
         workflowId,
         extractedTopic: topic,
+        topicKeywords: topicKeywords,
         topicType: typeof topic,
         topicData: topicData
       });
@@ -4569,38 +4681,55 @@ export class WorkflowService {
       const startDateStr = searchStartDate.toISOString().split('T')[0];
       const endDateStr = searchEndDate.toISOString().split('T')[0];
       
-      // FIXED: Construct search query with correct Metabase API field names and syntax
+      // FIXED: Construct search query with OR logic for topic keywords instead of AND
       let searchQuery = '';
       
-      if (topic && topic.toLowerCase() !== 'no topic') {
-        // Topic-specific search - FIXED with correct field names
-        // Using correct field names: language:English and sourceCountry:"United States"
-        searchQuery = `"${topic}" AND language:English AND sourceCountry:"United States" AND sourceRank:1`;
-        await this.addDirectMessage(workflow.threadId, `Searching for top-tier US English sources covering "${topic}"...`);
-      } else {
-        // General search for "no topic" - FIXED with correct field names
-        searchQuery = `language:English AND sourceCountry:"United States" AND sourceRank:1`;
-        await this.addDirectMessage(workflow.threadId, `Searching for top-tier US English sources across all topics...`);
-      }
+              if (topic && topic.toLowerCase() !== 'no topic') {
+          // Topic-specific search with OR logic for keywords
+          if (topicKeywords && topicKeywords.length > 0) {
+            // Use individual keywords with OR logic for broader results
+            const keywordQueries = topicKeywords.map((keyword: string) => `"${keyword}"`);
+            const topicQuery = keywordQueries.join(' OR ');
+            // FIXED: Use only Rank 1 sources for highest quality media contacts
+            searchQuery = `(${topicQuery}) AND language:English AND sourceCountry:"United States" AND sourceRank:1`;
+            
+            logger.info('Media List Database Query - Using OR logic for keywords with Rank 1 filter only', {
+              originalTopic: topic,
+              topicKeywords: topicKeywords,
+              keywordQueries: keywordQueries,
+              finalQuery: searchQuery
+            });
+            
+            await this.addDirectMessage(workflow.threadId, `Searching for premium US English sources covering "${topic}" (using keywords: ${topicKeywords.join(', ')})...`);
+          } else {
+            // Fallback to original topic if no keywords extracted
+            searchQuery = `"${topic}" AND language:English AND sourceCountry:"United States" AND sourceRank:1`;
+            await this.addDirectMessage(workflow.threadId, `Searching for premium US English sources covering "${topic}"...`);
+          }
+        } else {
+          // General search for "no topic" - FIXED with correct field names
+          searchQuery = `language:English AND sourceCountry:"United States" AND sourceRank:1`;
+          await this.addDirectMessage(workflow.threadId, `Searching for premium US English sources across all topics...`);
+        }
       
-      logger.info('Media List Database Query - ENHANCED with documented Metabase fields', {
-        originalTopic: topic,
-        searchQuery: searchQuery,
-        searchTimeFrame: `${startDateStr} to ${endDateStr}`,
-        hasTopicFilter: topic && topic.toLowerCase() !== 'no topic',
-        documentedFields: ['language:English', 'sourceRank:(1 2)', 'sourceCountry:"United States"'],
-        enhancedFiltering: 'Using official Metabase Search documentation syntax'
-      });
+              logger.info('Media List Database Query - ENHANCED with documented Metabase fields', {
+          originalTopic: topic,
+          searchQuery: searchQuery,
+          searchTimeFrame: `${startDateStr} to ${endDateStr}`,
+          hasTopicFilter: topic && topic.toLowerCase() !== 'no topic',
+          documentedFields: ['language:English', 'sourceRank:1', 'sourceCountry:"United States"'],
+          enhancedFiltering: 'Using official Metabase Search documentation syntax - Rank 1 sources only'
+        });
         
-        // FIXED: Increase limit and rely more on post-processing since API filters aren't working
+        // FIXED: Remove relevance filter to get maximum articles (200) per search
         const searchResults = await metabaseService.searchArticles({
           query: searchQuery,
-          limit: 200, // Keep at max API allows
+          limit: 200, // Maximum allowed by API
           format: 'json', // FORCE JSON format instead of default XML
           sort_by_relevance: "true", // FIXED: String instead of boolean
           show_relevance_score: "true", // FIXED: String instead of boolean
           filter_duplicates: "true", // FIXED: String instead of boolean
-          relevance_percent: 50, // LOWERED: Less restrictive to get more results
+          // REMOVED: relevance_percent filter to get maximum results
           show_matching_keywords: "true" // FIXED: String instead of boolean
         });
         
@@ -4638,22 +4767,12 @@ export class WorkflowService {
         
         // Process articles and extract authors with FIXED editorial rank extraction
         searchResults.articles.forEach((article: any, index: number) => {
+          // REMOVED: All upstream filters except basic author check
           if (article.author && article.source) {
             const authorKey = `${article.author}-${article.source}`;
             
-            // FIXED: Better filtering for actual news sources vs academic sources
-            const sourceName = article.source.toLowerCase();
-            const isNewsSource = !sourceName.includes('ncbi') && 
-                               !sourceName.includes('pubmed') && 
-                               !sourceName.includes('arxiv') && 
-                               !sourceName.includes('research') &&
-                               !sourceName.includes('journal') &&
-                               !sourceName.includes('academic');
-            
-            // Skip non-news sources unless we have very few results
-            if (!isNewsSource && authorsMap.size > 10) {
-              return; // Skip academic/research sources if we have enough news sources
-            }
+            // REMOVED: Academic source filtering - include all sources
+            const isNewsSource = true; // Include all sources now
             
             if (!authorsMap.has(authorKey)) {
               // FIXED: Try multiple paths to find editorial rank in the actual API response
@@ -4672,8 +4791,8 @@ export class WorkflowService {
                 editorialRank = parseInt(article.editorialRank) || 5;
               }
               
-              // FIXED: Boost score for actual news sources
-              const sourceBonus = isNewsSource ? 10 : 0;
+              // REMOVED: Source bonus - treat all sources equally
+              const sourceBonus = 0; // No bonus for any source type
               
               authorsMap.set(authorKey, {
                 id: `author-${index}-${Date.now()}`,
@@ -4736,14 +4855,14 @@ export class WorkflowService {
           topics: Array.from(author.topics)
         }));
         
-        // FIXED: Since we can't filter by source rank in the query, filter post-processing
-        // Apply manual filtering to prioritize Rank 1 sources
+        // FIXED: Since we're now filtering for Rank 1 only in the query, all authors should be Rank 1
+        // But keep the filtering logic in case API doesn't honor the filter
         const rank1Authors = authorsArray.filter(author => author.editorialRank === 1);
         const rank2Authors = authorsArray.filter(author => author.editorialRank === 2);
         const otherAuthors = authorsArray.filter(author => author.editorialRank > 2);
         
-        // Prioritize Rank 1, then Rank 2, then others
-        const prioritizedAuthors = [...rank1Authors, ...rank2Authors, ...otherAuthors];
+        // Prioritize Rank 1 only, but include others if API doesn't filter properly
+        const prioritizedAuthors = rank1Authors.length > 0 ? rank1Authors : [...rank2Authors, ...otherAuthors];
         
         // Log rank distribution for debugging FIXED implementation
         const rankDistribution = authorsArray.reduce((acc: any, author) => {
@@ -4752,40 +4871,18 @@ export class WorkflowService {
           return acc;
         }, {});
         
-        logger.info('FIXED Editorial rank distribution in results', {
+        logger.info('REMOVED FILTERS: Editorial rank distribution in results', {
           rankDistribution,
           totalAuthors: authorsArray.length,
           rank1Authors: rank1Authors.length,
           rank2Authors: rank2Authors.length,
           finalAuthorsUsed: prioritizedAuthors.length,
-          postProcessingFilter: 'Applied manual ranking since API filter unavailable'
+          postProcessingFilter: 'No filtering - all authors included'
         });
         
-        // Add Tim Cook from Apple as first contact for RocketReach testing
-        const timCookTestContact = {
-          id: `author-test-timcook-${Date.now()}`,
-          name: "Tim Cook",
-          organization: "Apple",
-          editorialRank: 1, // Mark as Rank 1 for testing
-          relevanceScore: 1000, // High score to ensure it's first
-          articleCount: 1,
-          topics: ["technology", "corporate"],
-          recentArticles: 1,
-          lastArticleDate: new Date().toISOString(),
-          articles: [{
-            id: "test-article-1",
-            title: "Apple CEO discusses future of technology",
-            publishedAt: new Date().toISOString(),
-            topics: ["technology", "corporate"],
-            url: "https://example.com/test-article",
-            summary: "Test article for RocketReach API testing..."
-          }]
-        };
+        // REMOVED: Tim Cook test contact - no artificial test data
         
-        // Insert Tim Cook at the beginning of the array
-        prioritizedAuthors.unshift(timCookTestContact);
-        
-        // Sort by relevance score and take top authors (Tim Cook will be first due to high score)
+        // Sort by relevance score but DON'T limit - let ranking step handle final selection
         const topAuthors = prioritizedAuthors
           .sort((a, b) => {
             // Primary sort: Editorial rank (1 is best, 5 is worst)
@@ -4794,13 +4891,14 @@ export class WorkflowService {
             
             // Secondary sort: Relevance score (higher is better)
             return b.relevanceScore - a.relevanceScore;
-          })
-          .slice(0, 15); // Top 15 authors
+          });
+        // REMOVED: .slice(0, 15) - Let ranking step handle final top 10 selection
         
         // Create search results object with enhanced metadata
         const searchResultsData = {
           query: searchQuery,
           originalTopic: topic,
+          topicKeywords: topicKeywords, // FIXED: Include topic keywords for OR logic tracking
           searchTimeFrame: {
             start: startDateStr,
             end: endDateStr,
@@ -4809,7 +4907,9 @@ export class WorkflowService {
           searchTerms: {
             filters: ["lang:en", "country:US"], // FIXED: Updated to show correct filters
             topic: topic || "All topics",
-            fixedIssues: ["Corrected field names", "Fixed boolean parameters", "Improved editorial rank extraction"]
+            topicKeywords: topicKeywords || [], // FIXED: Include keywords used
+            searchLogic: topicKeywords && topicKeywords.length > 0 ? "OR logic for keywords" : "Exact topic match",
+            fixedIssues: ["Corrected field names", "Fixed boolean parameters", "Improved editorial rank extraction", "Implemented OR logic for keywords"]
           },
           articlesFound: searchResults.articles.length,
           authorsExtracted: topAuthors,
@@ -4820,91 +4920,80 @@ export class WorkflowService {
           // Store search metadata for potential follow-up searches
           lastSequenceId: searchResults.lastSequenceId || null,
           hasMoreResults: searchResults.hasMore || false,
-          searchDepthLevel: 1, // Track how many searches we've done
+          searchDepthLevel: 1,
+          originalArticles: searchResults.articles, // FIXED: Store original articles for extended search
           implementationFixes: {
             queryFieldNames: "Updated to correct Metabase API field names",
             parameterFormat: "Fixed boolean to string conversion",
             editorialRankExtraction: "Improved path detection for actual API response structure",
-            postProcessingFilter: "Added manual ranking since API-level filtering unavailable"
+            postProcessingFilter: "Added manual ranking since API-level filtering unavailable",
+            searchLogic: "Implemented OR logic for topic keywords to get more results"
           }
         };
         
-        // Store the search results in step metadata - FIXED: Auto-complete instead of requiring user decision
+        // Store the search results in step metadata - FIXED: Require user decision for search more functionality
         await this.dbService.updateStep(stepId, {
-          status: StepStatus.COMPLETE, // FIXED: Auto-complete the step
+          status: StepStatus.IN_PROGRESS, // Keep step active for user decision
           userInput: "auto-execute",
           metadata: {
             ...step.metadata,
             searchResults: searchResultsData,
             apiCallCompleted: true,
-            needsUserDecision: false // FIXED: Don't require user decision
+            needsUserDecision: true // FIXED: Require user decision for search more functionality
           }
         });
         
-        // Enhanced search results message - FIXED: Informational only, no user choice required
-        const searchResultsMessage = `Found articles from **${topAuthors.length}** authors writing about ${topic ? `"${topic}"` : 'general topics'} in US English language sources.
+        // Enhanced search results message with OR logic information
+        const keywordInfo = topicKeywords && topicKeywords.length > 0 ? 
+          ` (using OR logic for keywords: ${topicKeywords.join(', ')})` : '';
+        
+        const searchResultsMessage = `Found articles from **${topAuthors.length}** authors writing about ${topic ? `"${topic}"` : 'general topics'}${keywordInfo} in US English language sources.
 
 **Enhanced Search Results** (${startDateStr} to ${endDateStr}):
 • Total Articles Analyzed: ${searchResults.articles.length}
-• Authors Found: ${topAuthors.length}
+• Authors Found: ${topAuthors.length} (all will be ranked for top 10 selection)
 • Search Time Frame: ${90} days
 • Language Filter: English only
 • Location Filter: United States only 
-• Relevance Threshold: 70%+
+• Source Quality: Premium sources (Rank 1 only) - Metabase filtered
+• Search Logic: ${topicKeywords && topicKeywords.length > 0 ? 'OR logic for topic keywords' : 'Exact topic match'}
 
 **Editorial Rank Distribution:**
 ${Object.entries(rankDistribution)
   .map(([rank, count]) => `• Rank ${rank}: ${count} sources`)
   .join('\n')}
 
-Moving to author ranking and selection...`;
+**Note**: Metabase API filters for US, English, Rank 1 sources - all authors included for ranking.
+
+You can:
+• **"search more"** - to find additional authors
+• **"proceed"** - to continue with current results to author ranking and selection
+
+What would you like to do?`;
           
         await this.addDirectMessage(workflow.threadId, searchResultsMessage);
         
-        logger.info('Media List Database Query - FIXED to auto-complete', {
+        logger.info('Media List Database Query - REMOVED ALL FILTERS', {
           topAuthorsCount: topAuthors.length,
           totalArticles: searchResults.articles.length,
           searchTimeFrame: `${startDateStr} to ${endDateStr}`,
-          autoCompleted: true, // FIXED: Now auto-completes
-          userChoiceRemoved: true // FIXED: No user choice required
+          topicKeywords: topicKeywords,
+          orLogicUsed: topicKeywords && topicKeywords.length > 0,
+          userDecisionRequired: true, // FIXED: Now requires user decision
+          rankingStrategy: 'All authors will be ranked for top 10 selection', // FIXED: No artificial limits
+          filteringStatus: 'REMOVED: All upstream filters except basic author check'
         });
         
-        // FIXED: Auto-transition to Author Ranking & Selection step
-        const nextStep = workflow.steps.find(s => s.name === "Author Ranking & Selection");
-        if (nextStep) {
-          await this.dbService.updateWorkflowCurrentStep(workflowId, nextStep.id);
-          await this.dbService.updateStep(nextStep.id, {
-            status: StepStatus.IN_PROGRESS,
-            metadata: {
-              ...nextStep.metadata,
-              initialPromptSent: false
-            }
-          });
-          
-          // Send the ranking prompt immediately
-          if (nextStep.prompt) {
-            await this.addDirectMessage(workflow.threadId, nextStep.prompt);
-            await this.dbService.updateStep(nextStep.id, {
-              metadata: { ...nextStep.metadata, initialPromptSent: true }
-            });
-          }
-          
-          return {
-            response: `Found ${topAuthors.length} authors. Moving to ranking selection.`,
-            nextStep: {
-              id: nextStep.id,
-              name: nextStep.name,
-              prompt: nextStep.prompt,
-              type: nextStep.stepType
-            },
-            isComplete: false
-          };
-        }
-        
-        // Fallback if no next step found
+        // FIXED: Stay in current step instead of auto-transitioning
         return {
-          response: `Found ${topAuthors.length} authors using enhanced search implementation.`,
-          isComplete: true
+          response: `Found ${topAuthors.length} authors. You can search more or proceed.`,
+          nextStep: {
+            id: stepId,
+            name: step.name,
+            prompt: step.prompt,
+            type: step.stepType
+          },
+          isComplete: false
         };
         
       } catch (error) {
@@ -5747,26 +5836,10 @@ Type your choice to proceed to contact enrichment.`;
 
   private generateAlgorithmicRanking(authors: any[], weights: any, topic: string): any[] {
     return authors
+      // REMOVED: All filtering - include all authors with basic author check
       .filter(author => {
-        // Filter out non-journalists and wire services, but keep good sources
-        const authorName = author.name.toLowerCase();
-        const organization = (author.organization || '').toLowerCase();
-        
-        // Skip obvious non-journalists
-        const skipNames = [
-          'ceo', 'chief executive', 'president', 'director', 'manager',
-          'staff writer', 'editorial team', 'newsroom', 'editorial board'
-        ];
-        
-        const skipOrgs = [
-          'wire service', 'reuters', 'associated press', 'bloomberg terminal'
-        ];
-        
-        const isSkippableName = skipNames.some(skip => authorName.includes(skip));
-        const isSkippableOrg = skipOrgs.some(skip => organization.includes(skip));
-        const hasMultipleNames = authorName.includes(' and ') || authorName.includes(' & ');
-        
-        return !isSkippableName && !isSkippableOrg && !hasMultipleNames;
+        // Only basic check: author must have a name and organization
+        return author.name && author.organization;
       })
       .map(author => {
         // Calculate scores based on LexisNexis editorial ranking
