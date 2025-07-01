@@ -3931,7 +3931,22 @@ What would you like to do?`
               let assetContent;
               let displayContent; // What we show to the user
               try {
-                const assetData = JSON.parse(result.responseText);
+                // Clean up markdown code blocks if present
+                let cleanedResponse = result.responseText.trim();
+                if (cleanedResponse.startsWith('```json')) {
+                  cleanedResponse = cleanedResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+                } else if (cleanedResponse.startsWith('```')) {
+                  cleanedResponse = cleanedResponse.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                }
+                
+                logger.info('Asset Generation auto-execution - Cleaned response for parsing', {
+                  originalLength: result.responseText.length,
+                  cleanedLength: cleanedResponse.length,
+                  hadMarkdown: cleanedResponse !== result.responseText,
+                  cleanedPreview: cleanedResponse.substring(0, 200) + '...'
+                });
+                
+                const assetData = JSON.parse(cleanedResponse);
                 assetContent = assetData.asset;
                 
                 if (!assetContent) {
@@ -3955,19 +3970,31 @@ What would you like to do?`
                 displayContent = result.responseText;
               }
               
-              // Final check: if assetContent still looks like JSON, try to extract it one more time
-              if (typeof assetContent === 'string' && assetContent.trim().startsWith('{') && assetContent.includes('"asset"')) {
-                try {
-                  const finalParse = JSON.parse(assetContent);
-                  if (finalParse.asset) {
-                    assetContent = finalParse.asset;
-                    displayContent = finalParse.asset;
-                    logger.info('Asset Generation auto-execution - Final extraction successful');
+              // Final check: if assetContent still looks like JSON or markdown, try to extract it one more time
+              if (typeof assetContent === 'string') {
+                let finalContent = assetContent.trim();
+                
+                // Strip markdown if present
+                if (finalContent.startsWith('```json')) {
+                  finalContent = finalContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+                } else if (finalContent.startsWith('```')) {
+                  finalContent = finalContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                }
+                
+                // Try to parse as JSON
+                if (finalContent.startsWith('{') && finalContent.includes('"asset"')) {
+                  try {
+                    const finalParse = JSON.parse(finalContent);
+                    if (finalParse.asset) {
+                      assetContent = finalParse.asset;
+                      displayContent = finalParse.asset;
+                      logger.info('Asset Generation auto-execution - Final extraction successful');
+                    }
+                  } catch (finalError) {
+                    logger.warn('Asset Generation auto-execution - Final extraction failed', {
+                      error: finalError instanceof Error ? finalError.message : 'Unknown error'
+                    });
                   }
-                } catch (finalError) {
-                  logger.warn('Asset Generation auto-execution - Final extraction failed', {
-                    error: finalError instanceof Error ? finalError.message : 'Unknown error'
-                  });
                 }
               }
               
@@ -3994,7 +4021,7 @@ What would you like to do?`
               
               await this.addDirectMessage(
                 workflow.threadId,
-                `[ASSET_DATA]${JSON.stringify(assetMessage)}[/ASSET_DATA]\n\nHere's your generated ${assetType}:\n\n${displayContent}`
+                `[ASSET_DATA]${JSON.stringify(assetMessage)}[/ASSET_DATA]\n\n\`\`\`json\n${JSON.stringify({ asset: displayContent })}\n\`\`\``
               );
               
               logger.info('Asset Generation auto-execution - Asset added to chat', {
@@ -4059,11 +4086,35 @@ What would you like to do?`
             } catch (autoExecError) {
               logger.error('Error auto-executing Asset Generation step with API_CALL logic', {
                 stepId: nextStep.id,
-                error: autoExecError instanceof Error ? autoExecError.message : 'Unknown error'
+                error: autoExecError instanceof Error ? autoExecError.message : 'Unknown error',
+                stack: autoExecError instanceof Error ? autoExecError.stack : undefined
               });
               
-              // Fall back to normal flow if auto-execution fails
-              await this.addDirectMessage(workflow.threadId, `Error generating asset. Please try again.`);
+              // Actually fail the step instead of continuing silently
+              await this.dbService.updateStep(nextStep.id, {
+                status: StepStatus.FAILED,
+                userInput: "auto-execute-failed",
+                metadata: {
+                  ...(updatedNextStep || nextStep).metadata,
+                  error: autoExecError instanceof Error ? autoExecError.message : 'Unknown error',
+                  errorTime: new Date().toISOString()
+                }
+              });
+              
+              // Send a proper error message to the user instead of continuing
+              const errorMessage = `I encountered an error while generating your asset. Error details: ${autoExecError instanceof Error ? autoExecError.message : 'Unknown error'}. Please try again or contact support if this persists.`;
+              await this.addDirectMessage(workflow.threadId, errorMessage);
+              
+              return {
+                response: errorMessage,
+                nextStep: {
+                  id: nextStep.id,
+                  name: nextStep.name,
+                  prompt: "Please try again or provide more information.",
+                  type: nextStep.stepType
+                },
+                isComplete: false
+              };
             }
           }
           
