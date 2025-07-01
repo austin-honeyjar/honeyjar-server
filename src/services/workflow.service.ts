@@ -3081,6 +3081,11 @@ What would you like to do?`
         if (!assetContent) {
           throw new Error('Asset content not found in OpenAI response');
         }
+        
+        logger.info('Successfully extracted asset content from JSON', {
+          assetContentLength: assetContent.length,
+          assetContentPreview: assetContent.substring(0, 100) + '...'
+        });
       } catch (error) {
         parseError = error;
         logger.error('Error parsing asset JSON', { 
@@ -3090,24 +3095,44 @@ What would you like to do?`
         
         // Fallback to using the entire response if parsing fails
         assetContent = openAIResult.responseText;
+        logger.warn('Using fallback: entire response as asset content', {
+          fallbackContentLength: assetContent.length
+        });
       }
       
-      // 8. Store the generated asset
+      // 8. Final check: if assetContent still looks like JSON, try to extract it one more time
+      let finalAssetContent = assetContent;
+      if (typeof assetContent === 'string' && assetContent.trim().startsWith('{') && assetContent.includes('"asset"')) {
+        try {
+          const finalParse = JSON.parse(assetContent);
+          if (finalParse.asset) {
+            finalAssetContent = finalParse.asset;
+            logger.info('Final extraction: successfully extracted asset from JSON-like content');
+          }
+        } catch (finalError) {
+          logger.warn('Final extraction failed, using original content', {
+            error: finalError instanceof Error ? finalError.message : 'Unknown error'
+          });
+        }
+      }
+      
+      // 9. Store the generated asset
       await this.dbService.updateStep(step.id, {
                   metadata: { 
           ...step.metadata,
-          generatedAsset: assetContent,
+          generatedAsset: finalAssetContent,
           assetType
         }
       });
       
-      // 9. Add the generated asset as a direct message
+      // 10. Add the generated asset as a direct message
+      
       await this.addDirectMessage(
         workflow.threadId, 
-        `Here's your generated ${assetType}:\n\n${assetContent}`
+        `Here's your generated ${assetType}:\n\n${finalAssetContent}`
       );
       
-      // 10. Move to the asset revision step
+      // 11. Move to the asset revision step
       const assetRevisionStep = workflow.steps.find(s => s.name === "Asset Review" || s.name === "Asset Revision");
                 
                 if (assetRevisionStep) {
@@ -3121,7 +3146,7 @@ What would you like to do?`
           metadata: {
             ...assetRevisionStep.metadata,
             assetType,
-            generatedAsset: assetContent
+            generatedAsset: finalAssetContent
           }
         });
         
@@ -3151,7 +3176,7 @@ What would you like to do?`
             type: assetRevisionStep.stepType
           },
           isComplete: false,
-          generatedAsset: assetContent,
+          generatedAsset: finalAssetContent,
           debug: config.debug.enableDebugMode ? {
             assetType,
             responseLength: openAIResult.responseText.length,
@@ -3174,7 +3199,7 @@ What would you like to do?`
               return {
         response: `${assetType} generated successfully.`,
         isComplete: true,
-        generatedAsset: assetContent
+        generatedAsset: finalAssetContent
       };
     } catch (error) {
       logger.error('Error handling JSON asset generation', {
@@ -3360,6 +3385,21 @@ What would you like to do?`
           
           // Fallback to using the entire response if parsing fails
           revisedAsset = revisionResult.responseText;
+        }
+        
+        // Final check: if revisedAsset still looks like JSON, try to extract it one more time
+        if (typeof revisedAsset === 'string' && revisedAsset.trim().startsWith('{') && revisedAsset.includes('"asset"')) {
+          try {
+            const finalParse = JSON.parse(revisedAsset);
+            if (finalParse.asset) {
+              revisedAsset = finalParse.asset;
+              logger.info('Asset revision - Final extraction successful');
+            }
+          } catch (finalError) {
+            logger.warn('Asset revision - Final extraction failed', {
+              error: finalError instanceof Error ? finalError.message : 'Unknown error'
+            });
+          }
         }
         
         // Store the revised asset
@@ -3913,6 +3953,22 @@ What would you like to do?`
                 // Fallback to using the entire response
                 assetContent = result.responseText;
                 displayContent = result.responseText;
+              }
+              
+              // Final check: if assetContent still looks like JSON, try to extract it one more time
+              if (typeof assetContent === 'string' && assetContent.trim().startsWith('{') && assetContent.includes('"asset"')) {
+                try {
+                  const finalParse = JSON.parse(assetContent);
+                  if (finalParse.asset) {
+                    assetContent = finalParse.asset;
+                    displayContent = finalParse.asset;
+                    logger.info('Asset Generation auto-execution - Final extraction successful');
+                  }
+                } catch (finalError) {
+                  logger.warn('Asset Generation auto-execution - Final extraction failed', {
+                    error: finalError instanceof Error ? finalError.message : 'Unknown error'
+                  });
+                }
               }
               
               // Store the generated asset
