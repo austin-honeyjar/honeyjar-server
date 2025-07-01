@@ -5593,7 +5593,7 @@ ${mediaListDisplay}
             });
           }
           
-          await this.addDirectMessage(workflow.threadId, `**✅ Algorithmic List Selected**
+          await this.addDirectMessage(workflow.threadId, `**Algorithmic List Selected**
 
 Using the mathematical ranking based on ${collectedInfo.userPreference} preference. Proceeding to contact enrichment with these ${selectedList.length} authors.
 
@@ -5655,7 +5655,7 @@ Moving to RocketReach contact enrichment...`);
             });
           }
           
-          await this.addDirectMessage(workflow.threadId, `**✅ AI List Selected**
+          await this.addDirectMessage(workflow.threadId, `**AI List Selected**
 
 Using the AI-curated analysis. Proceeding to contact enrichment with these ${selectedList.length} authors.
 
