@@ -10,7 +10,7 @@ export class OpenAIService {
     this.client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
-    this.model = process.env.OPENAI_MODEL || 'gpt-4-turbo-preview';
+    this.model = process.env.OPENAI_MODEL || 'gpt-4o';
   }
 
   /**

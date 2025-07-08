@@ -832,6 +832,64 @@ export class RocketReachService {
   }
 
   /**
+   * Check if a name appears to be an actual person rather than an organization
+   */
+  private isValidPersonName(name: string): boolean {
+    if (!name || typeof name !== 'string') return false;
+    
+    const nameLower = name.toLowerCase().trim();
+    
+    // Skip empty or very short names
+    if (nameLower.length < 3) return false;
+    
+    // Skip obvious organization indicators
+    const organizationKeywords = [
+      'group', 'corp', 'corporation', 'company', 'inc', 'ltd', 'llc',
+      'media', 'news', 'press', 'insider', 'team', 'staff', 'editorial',
+      'department', 'division', 'bureau', 'agency', 'association',
+      'foundation', 'institute', 'center', 'society', 'network',
+      'communications', 'publishing', 'publications', 'magazine',
+      'journal', 'times', 'post', 'herald', 'gazette', 'wire',
+      'reuters', 'bloomberg', 'associated press', 'ap news',
+      'syndicate', 'service', 'services', 'solutions', 'systems',
+      '&', 'and partners', 'partners', 'enterprises', 'industries'
+    ];
+    
+    for (const keyword of organizationKeywords) {
+      if (nameLower.includes(keyword)) return false;
+    }
+    
+    // Skip if it's all caps (often indicates organization/department)
+    if (name === name.toUpperCase() && name.length > 5) return false;
+    
+    // Skip if it contains multiple words that look corporate
+    const words = nameLower.split(/\s+/);
+    if (words.length > 4) return false; // Most people have 2-4 names
+    
+    // Skip if it starts with common organization prefixes
+    const orgPrefixes = ['sae ', 'ieee ', 'iso ', 'api ', 'asme ', 'nist '];
+    for (const prefix of orgPrefixes) {
+      if (nameLower.startsWith(prefix)) return false;
+    }
+    
+    // Skip if it ends with common organization suffixes
+    const orgSuffixes = [' group', ' corp', ' inc', ' ltd', ' llc', ' team', ' staff'];
+    for (const suffix of orgSuffixes) {
+      if (nameLower.endsWith(suffix)) return false;
+    }
+    
+    // Must have at least 2 words for a person (first + last name)
+    if (words.length < 2) return false;
+    
+    // Basic validation: should look like "First Last" or "First Middle Last"
+    // Check if first word could be a first name (starts with capital, reasonable length)
+    const firstWord = words[0];
+    if (firstWord.length < 2 || firstWord.length > 20) return false;
+    
+    return true;
+  }
+
+  /**
    * Search for a contact by name and organization
    */
   async searchContact(name: string, organization?: string): Promise<RocketReachContact | null> {
@@ -840,46 +898,167 @@ export class RocketReachService {
       return null;
     }
 
+    // Validate that this looks like a person name, not an organization
+    if (!this.isValidPersonName(name)) {
+      logger.info('Skipping RocketReach search - name appears to be organization/non-person', { 
+        name, 
+        organization,
+        reason: 'Name validation failed'
+      });
+      return null;
+    }
+
     try {
       await this.enforceRateLimit();
 
-      const searchParams: any = {
-        name: name,
-        current_employer: organization,
-        start: 0,
-        size: 5 // Get top 5 results
+      // Use the same lookupPerson method that the admin test uses (proven to work)
+      const lookupParams: PersonLookupParams = {
+        name: name
       };
 
-      const response = await this.client.get('/search', {
-        params: searchParams
-      });
-
-      if (response.data?.profiles && response.data.profiles.length > 0) {
-        // Return the best match (first result)
-        return response.data.profiles[0];
+      // Add organization if provided (this actually helps RocketReach find the right person)
+      if (organization) {
+        lookupParams.current_employer = organization;
       }
 
+      logger.info('RocketReach lookup parameters (using lookupPerson method)', {
+        originalName: name,
+        originalOrganization: organization,
+        lookupParams: lookupParams,
+        strategy: organization ? 'name_and_organization' : 'name_only'
+      });
+
+      // Use the same lookupPerson method that works in admin test
+      const response = await this.lookupPerson(lookupParams);
+
+      logger.info('RocketReach lookupPerson response', {
+        responseStatus: response.status,
+        hasData: !!response,
+        hasPerson: !!response.person,
+        responseKeys: Object.keys(response || {}),
+        searchStrategy: organization ? 'name_and_organization' : 'name_only'
+      });
+
+      // Handle the lookup response structure (same as admin test)
+      if (response?.status === 'success' && response?.person) {
+        const person = response.person;
+        
+        logger.info('SUCCESS - Extracting contact data from lookupPerson method', {
+          personId: person.id,
+          personName: person.name,
+          hasEmails: !!(person.emails),
+          emailsCount: person.emails?.length || 0,
+          hasPhones: !!(person.phones),
+          phonesCount: person.phones?.length || 0,
+          linkedinUrl: person.linkedin_url,
+          currentTitle: person.current_title,
+          currentEmployer: person.current_employer,
+          searchedOrganization: organization,
+          foundOrganization: person.current_employer
+        });
+        
+        // Transform RocketReach lookup response to our contact interface
+        const transformedContact = {
+          id: person.id?.toString(),
+          name: person.name,
+          firstName: person.first_name,
+          lastName: person.last_name,
+          title: person.current_title,
+          currentEmployer: person.current_employer,
+          email: person.emails?.[0]?.email,
+          workEmail: person.emails?.find((e: any) => e.type === 'work')?.email,
+          personalEmail: person.emails?.find((e: any) => e.type === 'personal')?.email,
+          phone: person.phones?.[0]?.number,
+          workPhone: person.phones?.find((p: any) => p.type === 'work')?.number,
+          personalPhone: person.phones?.find((p: any) => p.type === 'personal')?.number,
+          linkedin: person.linkedin_url,
+          twitter: person.social_media?.twitter,
+          facebook: person.social_media?.facebook,
+          profileUrl: person.linkedin_url
+        };
+        
+        logger.info('Found contact using lookupPerson method (same as admin test)', {
+          transformedContact,
+          hasEmail: !!(transformedContact.email || transformedContact.workEmail),
+          hasPhone: !!(transformedContact.phone || transformedContact.workPhone),
+          hasLinkedIn: !!transformedContact.linkedin,
+          organizationMatch: organization === person.current_employer
+        });
+        
+        return transformedContact;
+      }
+
+      // Handle the lookup response structure - check for both nested and direct person data
+      // RocketReach can return status "progress" or "success" and person data can be nested or direct
+      if ((response?.status === 'success' || response?.status === 'progress') && 
+          (response?.person || ((response as any)?.name && (response as any)?.id))) {
+        
+        // Person data can be nested under 'person' field or directly in response
+        const person = response.person || (response as any);
+        
+        logger.info('SUCCESS - Extracting contact data from RocketReach response', {
+          responseStatus: response.status,
+          personStructure: response.person ? 'nested' : 'direct',
+          personId: person.id,
+          personName: person.name,
+          hasEmails: !!(person.emails),
+          emailsCount: person.emails?.length || 0,
+          hasPhones: !!(person.phones),
+          phonesCount: person.phones?.length || 0,
+          linkedinUrl: person.linkedin_url,
+          currentTitle: person.current_title,
+          currentEmployer: person.current_employer,
+          searchedOrganization: organization,
+          foundOrganization: person.current_employer
+        });
+        
+        // Transform RocketReach response to our contact interface
+        const transformedContact = {
+          id: person.id?.toString(),
+          name: person.name,
+          firstName: person.first_name,
+          lastName: person.last_name,
+          title: person.current_title,
+          currentEmployer: person.current_employer,
+          email: person.emails?.[0]?.email,
+          workEmail: person.emails?.find((e: any) => e.type === 'professional' || e.type === 'work')?.email,
+          personalEmail: person.emails?.find((e: any) => e.type === 'personal')?.email,
+          phone: person.phones?.[0]?.number,
+          workPhone: person.phones?.find((p: any) => p.type === 'work')?.number,
+          personalPhone: person.phones?.find((p: any) => p.type === 'personal')?.number,
+          linkedin: person.linkedin_url,
+          twitter: person.social_media?.twitter,
+          facebook: person.social_media?.facebook,
+          profileUrl: person.linkedin_url
+        };
+        
+        logger.info('Found contact using RocketReach API', {
+          transformedContact,
+          hasEmail: !!(transformedContact.email || transformedContact.workEmail),
+          hasPhone: !!(transformedContact.phone || transformedContact.workPhone),
+          hasLinkedIn: !!transformedContact.linkedin,
+          organizationMatch: organization === person.current_employer,
+          responseStatus: response.status
+        });
+        
+        return transformedContact;
+      }
+
+      logger.info('No person found in lookupPerson response', { 
+        name, 
+        organization,
+        responseStatus: response?.status,
+        strategy: organization ? 'name_and_organization' : 'name_only'
+      });
       return null;
 
     } catch (error) {
-      if (axios.isAxiosError(error)) {
-        if (error.response?.status === 429) {
-          logger.warn('RocketReach rate limit exceeded', { name, organization });
-          // Increase delay for next request
-          this.rateLimitDelay = Math.min(this.rateLimitDelay * 2, 10000);
-        } else if (error.response?.status === 401) {
-          logger.error('RocketReach API authentication failed');
-        } else {
-          logger.error('RocketReach API error', { 
-            status: error.response?.status,
-            message: error.message,
+      logger.error('Error in searchContact using lookupPerson method', {
             name,
-            organization
+        organization,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        errorType: error instanceof Error ? error.constructor.name : typeof error
           });
-        }
-      } else {
-        logger.error('Unexpected error in RocketReach search', { error: (error as Error).message });
-      }
       return null;
     }
   }
@@ -898,7 +1077,23 @@ export class RocketReachService {
   }>): Promise<EnrichedContact[]> {
     const enrichedContacts: EnrichedContact[] = [];
 
+    // Add debugging to track Tim Cook processing
+    logger.info('DEBUG - RocketReach enrichContacts called with authors', {
+      totalAuthors: authors.length,
+      authorsNames: authors.map(a => a.name),
+      hasTimCook: authors.some(a => a.name === "Tim Cook"),
+      timCookAuthor: authors.find(a => a.name === "Tim Cook"),
+      firstAuthorName: authors[0]?.name
+    });
+
     for (const author of authors) {
+      logger.info('DEBUG - Processing author in enrichContacts loop', {
+        authorId: author.id,
+        authorName: author.name,
+        authorOrganization: author.organization,
+        isTimCook: author.name === "Tim Cook"
+      });
+      
       try {
         const enrichedContact = await this.enrichSingleContact(author);
         if (enrichedContact) {
@@ -938,10 +1133,23 @@ export class RocketReachService {
     relevanceScore: number;
   }): Promise<EnrichedContact | null> {
     
+    logger.info('Starting single contact enrichment', {
+      authorId: author.id,
+      authorName: author.name,
+      authorOrganization: author.organization,
+      authorEmail: author.email
+    });
+    
     const rocketReachContact = await this.searchContact(author.name, author.organization);
     
+    logger.info('RocketReach search completed for author', {
+      authorName: author.name,
+      foundContact: !!rocketReachContact,
+      contactData: rocketReachContact
+    });
+    
     if (rocketReachContact) {
-      return {
+      const enrichedContact = {
         authorId: author.id,
         name: rocketReachContact.name || author.name,
         title: rocketReachContact.title,
@@ -951,12 +1159,30 @@ export class RocketReachService {
         linkedin: rocketReachContact.linkedin,
         twitter: rocketReachContact.twitter,
         confidence: this.calculateConfidence(rocketReachContact, author),
-        source: 'rocketreach',
+        source: 'rocketreach' as const,
         enrichmentScore: this.calculateEnrichmentScore(rocketReachContact)
       };
+      
+      logger.info('Created enriched contact from RocketReach data', {
+        authorId: author.id,
+        enrichedContact: enrichedContact,
+        hasEmail: !!enrichedContact.email,
+        hasPhone: !!enrichedContact.phone,
+        hasLinkedIn: !!enrichedContact.linkedin,
+        confidence: enrichedContact.confidence,
+        source: enrichedContact.source
+      });
+      
+      return enrichedContact;
     }
 
     // Fallback to database information
+    logger.info('No RocketReach data found, using fallback', {
+      authorId: author.id,
+      authorName: author.name,
+      authorEmail: author.email
+    });
+    
     return {
       authorId: author.id,
       name: author.name,

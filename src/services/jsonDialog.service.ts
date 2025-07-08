@@ -164,7 +164,29 @@ export class JsonDialogService {
       // Parse the JSON response
       let responseData;
       try {
-        responseData = JSON.parse(openAIResult.responseText);
+        // Clean the response text to remove markdown code blocks if present
+        let cleanedResponseText = openAIResult.responseText.trim();
+        
+        // Remove markdown code blocks (```json ... ``` or ``` ... ```)
+        if (cleanedResponseText.startsWith('```json')) {
+          cleanedResponseText = cleanedResponseText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+        } else if (cleanedResponseText.startsWith('```')) {
+          cleanedResponseText = cleanedResponseText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+        }
+        
+        // Also handle cases where there might be backticks without the full markdown syntax
+        if (cleanedResponseText.startsWith('`') && cleanedResponseText.endsWith('`')) {
+          cleanedResponseText = cleanedResponseText.slice(1, -1);
+        }
+        
+        logger.debug('Attempting to parse cleaned JSON response', {
+          originalLength: openAIResult.responseText.length,
+          cleanedLength: cleanedResponseText.length,
+          wasMarkdown: cleanedResponseText !== openAIResult.responseText,
+          cleanedPreview: cleanedResponseText.substring(0, 100) + '...'
+        });
+        
+        responseData = JSON.parse(cleanedResponseText);
         
         // Handle different field naming conventions
         // Check for isComplete or isStepComplete
@@ -691,8 +713,8 @@ If the user is asking a question or needs help:
     }
     // Default case for other steps - particularly important for information gathering steps
     else {
-      // Special handling for Information Collection steps - use their baseInstructions but include context
-      if (step.name.includes("Information Collection") || step.name.includes("Collection")) {
+      // Special handling for Information Collection steps AND Author Ranking & Selection step - use their baseInstructions but include context
+      if (step.name.includes("Information Collection") || step.name.includes("Collection") || step.name === "Author Ranking & Selection") {
         const baseInstructions = step.metadata?.baseInstructions;
         if (baseInstructions) {
           // Include the collected information context in the baseInstructions
@@ -700,7 +722,12 @@ If the user is asking a question or needs help:
             ? `\n\nCONTEXT FROM PREVIOUS STEPS:\n${JSON.stringify(collectedInfo, null, 2)}\n\nCRITICAL INSTRUCTIONS FOR INFORMATION COLLECTION:\n- You are in the INFORMATION COLLECTION phase, NOT the asset generation phase\n- Your task is ONLY to collect information needed for future asset generation\n- DO NOT generate any assets (press releases, social posts, media pitches, etc.)\n- DO NOT create any final content - only gather the required information\n- Ask follow-up questions to collect missing information\n- Use the context above to understand what has already been established (announcement type, asset type, etc.)\n- Once you have sufficient information, mark the step as complete to move to the Asset Generation phase\n- NEVER include generated asset content in your response`
             : '';
           
-          return baseInstructions + contextSection + formattedHistory;
+          // For Author Ranking & Selection, don't add the information collection instructions
+          if (step.name === "Author Ranking & Selection") {
+            return baseInstructions + formattedHistory;
+          } else {
+            return baseInstructions + contextSection + formattedHistory;
+          }
         }
       }
       
