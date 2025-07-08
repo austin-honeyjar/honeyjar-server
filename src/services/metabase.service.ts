@@ -155,15 +155,15 @@ export interface SearchArticlesParams {
   query: string; // Required search query
   limit?: number; // 1-200, default 1
   format?: 'xml' | 'json' | 'rss' | 'atom'; // Default json
-  recent?: boolean; // Search only last 3 days for faster queries
+  recent?: string; // Search only last 3 days for faster queries - API expects "true"/"false" strings
   sequence_id?: string; // Pagination
-  filter_duplicates?: boolean; // Remove duplicate articles
+  filter_duplicates?: string; // Remove duplicate articles - API expects "true"/"false" strings
   duplicate_order?: 'latest' | 'oldest'; // Which duplicate to show
   sort?: 'asc' | 'desc'; // Sort order, default desc
   relevance_percent?: number; // Filter by relevance 1-100
-  sort_by_relevance?: boolean; // Sort by relevance instead of sequenceId
-  show_relevance_score?: boolean; // Include relevance scores
-  show_matching_keywords?: boolean; // Show matching keywords
+  sort_by_relevance?: string; // Sort by relevance instead of sequenceId - API expects "true"/"false" strings
+  show_relevance_score?: string; // Include relevance scores - API expects "true"/"false" strings
+  show_matching_keywords?: string; // Show matching keywords - API expects "true"/"false" strings
 }
 
 export interface RevokedArticlesParams {
@@ -400,7 +400,7 @@ export class MetabaseService {
 
       // Use caching with appropriate TTL based on search type
       const cacheOptions = {
-        ttl: params.recent ? 300 : 900 // 5 minutes for recent, 15 minutes for full search
+        ttl: params.recent === 'true' ? 300 : 900 // 5 minutes for recent, 15 minutes for full search
       };
 
       return await withCache(
@@ -600,6 +600,8 @@ export class MetabaseService {
    * Implements the Metabase Search API
    */
   private async fetchSearchResultsFromAPI(params: SearchArticlesParams): Promise<ArticleSearchResponse> {
+    const startTime = Date.now();
+    
     logger.info('🌐 Fetching search results from Metabase Search API (cache miss)', {
       query: params.query,
       limit: params.limit,
@@ -610,11 +612,11 @@ export class MetabaseService {
     // Validate limit parameter (search API has different limits)
     let limit = params.limit || 1;
     if (limit < 1 || limit > 200) {
-      logger.warn(`⚠️ Invalid search limit ${limit}, defaulting to 1`, {
+      logger.warn(`⚠️ Invalid search limit ${limit}, defaulting to 200`, {
         requestedLimit: params.limit,
         maxAllowed: 200
       });
-      limit = 1;
+      limit = 200; // Default to maximum allowed instead of 1
     }
 
     // Build request parameters for search API
@@ -626,7 +628,7 @@ export class MetabaseService {
     };
 
     // Add optional parameters
-    if (params.recent) {
+    if (params.recent === 'true') {
       requestParams.recent = 'true';
       logger.debug('➕ Added recent=true for faster 3-day search');
     }
@@ -636,7 +638,7 @@ export class MetabaseService {
       logger.debug('➕ Added sequence_id for pagination', { sequence_id: params.sequence_id });
     }
 
-    if (params.filter_duplicates) {
+    if (params.filter_duplicates === 'true') {
       requestParams.filter_duplicates = 'true';
       logger.debug('➕ Added filter_duplicates=true');
     }
@@ -657,18 +659,18 @@ export class MetabaseService {
     }
 
     if (params.sort_by_relevance) {
-      requestParams.sort_by_relevance = 'true';
-      logger.debug('➕ Added sort_by_relevance=true');
+      requestParams.sort_by_relevance = params.sort_by_relevance;
+      logger.debug('➕ Added sort_by_relevance', { sort_by_relevance: params.sort_by_relevance });
     }
 
     if (params.show_relevance_score) {
-      requestParams.show_relevance_score = 'true';
-      logger.debug('➕ Added show_relevance_score=true');
+      requestParams.show_relevance_score = params.show_relevance_score;
+      logger.debug('➕ Added show_relevance_score', { show_relevance_score: params.show_relevance_score });
     }
 
     if (params.show_matching_keywords) {
-      requestParams.show_matching_keywords = 'true';
-      logger.debug('➕ Added show_matching_keywords=true');
+      requestParams.show_matching_keywords = params.show_matching_keywords;
+      logger.debug('➕ Added show_matching_keywords', { show_matching_keywords: params.show_matching_keywords });
     }
 
     logger.info('📋 Final search request parameters', {
@@ -708,6 +710,37 @@ export class MetabaseService {
       lastSequenceId: searchData.lastSequenceId,
       sampleTitles: searchData.articles.slice(0, 3).map(a => a.title)
     });
+
+    const responseTime = Date.now() - startTime;
+
+    // Log API call to database for compliance tracking
+    await metabaseDBService.logApiCall({
+      callType: 'search',
+      endpoint: '/api/v10/searchArticles',
+      parameters: requestParams,
+      responseStatus: response.status,
+      responseTime,
+      articlesReturned: searchData.articles.length,
+      sequenceId: searchData.lastSequenceId,
+      cacheHit: false,
+      metadata: {
+        requestedLimit: limit,
+        hasSequenceId: !!params.sequence_id,
+        searchQuery: params.query,
+        isMediaMatchingSearch: true // Flag to identify media matching searches
+      }
+    });
+
+    // Store articles in database for compliance
+    if (searchData.articles.length > 0) {
+      await metabaseDBService.storeArticles(searchData.articles);
+      
+      logger.info('📝 Stored search articles for compliance', {
+        storedCount: searchData.articles.length,
+        searchQuery: params.query,
+        endpoint: '/api/v10/searchArticles'
+      });
+    }
 
     return searchData;
   }
@@ -1110,6 +1143,53 @@ export class MetabaseService {
       sampleIds: transformedArticles.slice(0, 3).map(a => a.id),
       sampleTitles: transformedArticles.slice(0, 3).map(a => a.title)
     });
+    
+    // ✅ DEBUG: Analyze what editorial ranks are actually being returned
+    const rankAnalysis = transformedArticles.map(article => {
+      const source = article.metadata?.source;
+      const editorialRank = source?.editorialRank || 'unknown';
+      return {
+        title: article.title.substring(0, 50),
+        source: article.source,
+        editorialRank: editorialRank,
+        hasSourceMetadata: !!source
+      };
+    });
+    
+    const rankBreakdown = rankAnalysis.reduce((acc: any, article) => {
+      const rank = article.editorialRank;
+      acc[rank] = (acc[rank] || 0) + 1;
+      return acc;
+    }, {});
+    
+    logger.info('🔍 DEBUG: Editorial rank analysis from Metabase API response', {
+      totalArticles: transformedArticles.length,
+      rankBreakdown,
+      sampleArticles: rankAnalysis.slice(0, 5),
+      nonRank1Count: rankAnalysis.filter(a => 
+        a.editorialRank !== '1' && 
+        a.editorialRank !== 1 && 
+        a.editorialRank !== 'unknown'
+      ).length
+    });
+    
+    // ✅ ADD: Check if API is honoring sourceRank:1 filter
+    const nonRank1Sources = rankAnalysis.filter(a => 
+      a.editorialRank !== '1' && 
+      a.editorialRank !== 1 && 
+      a.editorialRank !== 'unknown'
+    );
+    
+    if (nonRank1Sources.length > 0) {
+      logger.warn('⚠️ FILTER FAILURE: sourceRank:1 filter not working properly', {
+        nonRank1Count: nonRank1Sources.length,
+        totalArticles: transformedArticles.length,
+        filterEffectiveness: `${Math.round(((transformedArticles.length - nonRank1Sources.length) / transformedArticles.length) * 100)}%`,
+        problemSources: nonRank1Sources.slice(0, 10) // Show first 10 problem sources
+      });
+    } else {
+      logger.info('✅ sourceRank:1 filter working correctly - all sources are Rank 1 or unknown');
+    }
 
     return {
       articles: transformedArticles,

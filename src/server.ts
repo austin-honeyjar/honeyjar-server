@@ -1,3 +1,5 @@
+import dotenv from 'dotenv';
+dotenv.config();
 import express from 'express';
 import cors from 'cors';
 import { config } from './config/index';
@@ -386,11 +388,160 @@ async function initializeDatabase() {
         EXCEPTION
           WHEN duplicate_object THEN null;
         END $$;
+        
+        DO $$ BEGIN
+          CREATE TYPE "api_call_type" AS ENUM ('articles', 'search', 'revoked', 'compliance_clicks');
+        EXCEPTION
+          WHEN duplicate_object THEN null;
+        END $$;
+        
+        DO $$ BEGIN
+          CREATE TYPE "compliance_status" AS ENUM ('compliant', 'overdue', 'error');
+        EXCEPTION
+          WHEN duplicate_object THEN null;
+        END $$;
       `);
       logger.info('News pipeline enums created successfully');
       
-      // Create news pipeline tables
-      logger.info('Creating news pipeline tables...');
+      // Create Metabase tables with proper schema
+      logger.info('Creating Metabase tables with proper schema...');
+      await db.execute(sql`
+        -- Metabase API calls logging for sync history
+        CREATE TABLE IF NOT EXISTS metabase_api_calls (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          call_type api_call_type NOT NULL,
+          endpoint TEXT NOT NULL,
+          parameters JSONB NOT NULL DEFAULT '{}',
+          response_status INTEGER,
+          response_time INTEGER, -- milliseconds
+          articles_returned INTEGER DEFAULT 0,
+          error_message TEXT,
+          error_code TEXT, -- Metabase error codes (1000-9999)
+          sequence_id TEXT, -- Last sequence ID from response
+          rate_limit_info JSONB DEFAULT '{}',
+          cache_hit BOOLEAN NOT NULL DEFAULT false,
+          metadata JSONB DEFAULT '{}',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+        );
+        
+        -- Metabase compliance status tracking
+        CREATE TABLE IF NOT EXISTS metabase_compliance_status (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          check_date TIMESTAMP WITH TIME ZONE NOT NULL,
+          revoked_articles_count INTEGER NOT NULL DEFAULT 0,
+          articles_processed JSONB NOT NULL DEFAULT '[]',
+          status compliance_status NOT NULL DEFAULT 'compliant',
+          next_scheduled_check TIMESTAMP WITH TIME ZONE,
+          errors JSONB DEFAULT '[]',
+          metadata JSONB DEFAULT '{}',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+        );
+        
+        -- Metabase articles storage with proper schema
+        CREATE TABLE IF NOT EXISTS metabase_articles (
+          id TEXT PRIMARY KEY, -- Using Metabase article ID as primary key
+          title TEXT NOT NULL,
+          summary TEXT,
+          content TEXT,
+          url TEXT NOT NULL,
+          source TEXT NOT NULL,
+          published_at TIMESTAMP WITH TIME ZONE,
+          estimated_published_date TIMESTAMP WITH TIME ZONE,
+          harvest_date TIMESTAMP WITH TIME ZONE,
+          author TEXT,
+          topics JSONB NOT NULL DEFAULT '[]',
+          licenses JSONB NOT NULL DEFAULT '[]',
+          click_url TEXT, -- For compliance clicking
+          sequence_id TEXT, -- For pagination
+          metadata JSONB NOT NULL DEFAULT '{}', -- Additional Metabase fields
+          is_revoked BOOLEAN NOT NULL DEFAULT false,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+        );
+        
+        -- Metabase revoked articles tracking
+        CREATE TABLE IF NOT EXISTS metabase_revoked_articles (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          article_id TEXT NOT NULL,
+          revoked_date TIMESTAMP WITH TIME ZONE NOT NULL,
+          sequence_id TEXT, -- From revoked API response
+          processed BOOLEAN NOT NULL DEFAULT false,
+          processed_at TIMESTAMP WITH TIME ZONE,
+          compliance_check_id UUID REFERENCES metabase_compliance_status(id),
+          metadata JSONB DEFAULT '{}',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+        );
+      `);
+      
+      // Handle migration for existing metabase_articles table - add missing columns
+      logger.info('Checking and adding missing columns to metabase_articles table...');
+      try {
+        // Add estimated_published_date column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS estimated_published_date TIMESTAMP WITH TIME ZONE;
+        `);
+        
+        // Add harvest_date column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS harvest_date TIMESTAMP WITH TIME ZONE;
+        `);
+        
+        // Add licenses column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS licenses JSONB NOT NULL DEFAULT '[]';
+        `);
+        
+        // Add click_url column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS click_url TEXT;
+        `);
+        
+        // Add sequence_id column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS sequence_id TEXT;
+        `);
+        
+        // Add is_revoked column if it doesn't exist
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN NOT NULL DEFAULT false;
+        `);
+        
+        // Add language column if it doesn't exist (for backward compatibility)
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'English';
+        `);
+        
+        // Add source_rank column if it doesn't exist (for backward compatibility)
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS source_rank INTEGER DEFAULT 5;
+        `);
+        
+        // Add source_country column if it doesn't exist (for backward compatibility)
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS source_country TEXT DEFAULT 'United States';
+        `);
+        
+        // Add relevance_score column if it doesn't exist (for backward compatibility)
+        await db.execute(sql`
+          ALTER TABLE metabase_articles 
+          ADD COLUMN IF NOT EXISTS relevance_score FLOAT DEFAULT 0.0;
+        `);
+        
+        logger.info('Missing columns added to metabase_articles table successfully');
+      } catch (columnError) {
+        logger.error('Error adding missing columns to metabase_articles:', columnError);
+      }
+      
+      // Continue with other news pipeline tables
       await db.execute(sql`
         -- News author relevance tracking and scoring
         CREATE TABLE IF NOT EXISTS news_authors (
@@ -464,9 +615,35 @@ async function initializeDatabase() {
         );
       `);
       
-      // Create indexes for news pipeline tables
-      logger.info('Creating indexes for news pipeline tables...');
+      // Create indexes for Metabase and news pipeline tables
+      logger.info('Creating indexes for Metabase and news pipeline tables...');
       await db.execute(sql`
+        -- Metabase API calls indexes
+        CREATE INDEX IF NOT EXISTS idx_metabase_api_calls_type ON metabase_api_calls(call_type);
+        CREATE INDEX IF NOT EXISTS idx_metabase_api_calls_created_at ON metabase_api_calls(created_at);
+        CREATE INDEX IF NOT EXISTS idx_metabase_api_calls_status ON metabase_api_calls(response_status);
+        
+        -- Metabase compliance indexes
+        CREATE INDEX IF NOT EXISTS idx_metabase_compliance_check_date ON metabase_compliance_status(check_date);
+        CREATE INDEX IF NOT EXISTS idx_metabase_compliance_status ON metabase_compliance_status(status);
+        
+        -- Metabase articles indexes for fast searching
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_title_search ON metabase_articles USING gin(to_tsvector('english', title));
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_content_search ON metabase_articles USING gin(to_tsvector('english', content));
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_author ON metabase_articles(author) WHERE author IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_source ON metabase_articles(source) WHERE source IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_published ON metabase_articles(published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_is_revoked ON metabase_articles(is_revoked);
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_sequence_id ON metabase_articles(sequence_id);
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_language_rank ON metabase_articles(language, source_rank, source_country);
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_topics ON metabase_articles USING gin(topics);
+        CREATE INDEX IF NOT EXISTS idx_metabase_articles_relevance ON metabase_articles(relevance_score DESC);
+        
+        -- Metabase revoked articles indexes
+        CREATE INDEX IF NOT EXISTS idx_metabase_revoked_article_id ON metabase_revoked_articles(article_id);
+        CREATE INDEX IF NOT EXISTS idx_metabase_revoked_processed ON metabase_revoked_articles(processed);
+        CREATE INDEX IF NOT EXISTS idx_metabase_revoked_date ON metabase_revoked_articles(revoked_date);
+        
         -- Author scoring and retrieval indexes
         CREATE INDEX IF NOT EXISTS idx_authors_relevance ON news_authors(relevance_score DESC, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_authors_activity ON news_authors(recent_activity_score DESC, last_article_date DESC);
@@ -490,10 +667,28 @@ async function initializeDatabase() {
         CREATE INDEX IF NOT EXISTS idx_author_articles_relevance ON news_author_articles(author_id, relevance_score DESC);
       `);
       
-      logger.info('News pipeline tables and indexes created successfully');
+      // Create trigger to update updated_at timestamp on metabase_articles
+      logger.info('Creating update trigger for metabase_articles...');
+      await db.execute(sql`
+        CREATE OR REPLACE FUNCTION update_updated_at_column()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            NEW.updated_at = CURRENT_TIMESTAMP;
+            RETURN NEW;
+        END;
+        $$ language 'plpgsql';
+        
+        DROP TRIGGER IF EXISTS update_metabase_articles_updated_at ON metabase_articles;
+        CREATE TRIGGER update_metabase_articles_updated_at 
+          BEFORE UPDATE ON metabase_articles 
+          FOR EACH ROW 
+          EXECUTE FUNCTION update_updated_at_column();
+      `);
+      
+      logger.info('Metabase and news pipeline tables and indexes created successfully');
       
     } catch (newsPipelineError) {
-      logger.error('Error creating news pipeline tables:', newsPipelineError);
+      logger.error('Error creating Metabase and news pipeline tables:', newsPipelineError);
       // Don't fail the server startup for news pipeline table issues
     }
     
