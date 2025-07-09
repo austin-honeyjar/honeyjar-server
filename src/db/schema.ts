@@ -25,7 +25,7 @@ export const chatMessages = pgTable('chat_messages', {
   threadId: uuid('thread_id').notNull().references(() => chatThreads.id),
   userId: text('user_id').notNull(),
   role: text('role').notNull(),
-  content: text('content').notNull(),
+  content: jsonb('content').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 

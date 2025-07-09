@@ -361,6 +361,74 @@ async function initializeDatabase() {
     }
     
     // =============================================================================
+    // STRUCTURED CONTENT MIGRATION
+    // =============================================================================
+    
+    // Check if chat_messages.content is already JSONB
+    logger.info('Checking chat_messages.content column type...');
+    try {
+      const contentColumnCheck = await db.execute(sql`
+        SELECT data_type 
+        FROM information_schema.columns 
+        WHERE table_name = 'chat_messages' 
+        AND column_name = 'content';
+      `);
+      
+      const currentDataType = contentColumnCheck[0]?.data_type;
+      logger.info(`Current chat_messages.content data type: ${currentDataType}`);
+      
+      if (currentDataType === 'text') {
+        logger.info('Migrating chat_messages.content from TEXT to JSONB for structured content support...');
+        
+        // First, add a new JSONB column for structured content
+        await db.execute(sql`
+          ALTER TABLE chat_messages 
+          ADD COLUMN IF NOT EXISTS content_structured JSONB;
+        `);
+        
+        // Migrate existing text content to structured format
+        // We'll wrap existing string content in a basic structure
+        await db.execute(sql`
+          UPDATE chat_messages 
+          SET content_structured = jsonb_build_object(
+            'type', 'text',
+            'text', content,
+            'decorators', '[]'::jsonb,
+            'metadata', '{}'::jsonb
+          )
+          WHERE content_structured IS NULL;
+        `);
+        
+        // Make the new column NOT NULL now that all rows have values
+        await db.execute(sql`
+          ALTER TABLE chat_messages 
+          ALTER COLUMN content_structured SET NOT NULL;
+        `);
+        
+        // Drop the old text column
+        await db.execute(sql`
+          ALTER TABLE chat_messages 
+          DROP COLUMN content;
+        `);
+        
+        // Rename the new column to content
+        await db.execute(sql`
+          ALTER TABLE chat_messages 
+          RENAME COLUMN content_structured TO content;
+        `);
+        
+        logger.info('Successfully migrated chat_messages.content to JSONB structured format');
+      } else if (currentDataType === 'jsonb') {
+        logger.info('chat_messages.content is already JSONB - structured content migration not needed');
+      } else {
+        logger.warn(`Unexpected data type for chat_messages.content: ${currentDataType}`);
+      }
+    } catch (migrationError) {
+      logger.error('Error during structured content migration:', migrationError);
+      // Don't fail the server startup for migration issues
+    }
+    
+    // =============================================================================
     // NEWS PIPELINE TABLES INITIALIZATION
     // =============================================================================
     

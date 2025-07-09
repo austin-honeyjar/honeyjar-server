@@ -27,6 +27,7 @@ import { chatThreads, chatMessages } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { JsonDialogService } from './jsonDialog.service';
 import { config } from '../config';
+import { MessageContentHelper, StructuredMessageContent, ChatMessageContent } from '../types/chat-message';
 
 // Configuration objects for reuse
 const ASSET_TYPES = {
@@ -1366,19 +1367,21 @@ export class WorkflowService {
           }
         });
         
-        // 9. Add the generated asset as a direct message
-        const assetMessage = {
-          type: 'asset_generated',
-          assetType: assetType,
-          content: assetContent,
-          displayContent: assetContent,
-          stepId: stepId,
-          stepName: step.name
-        };
+        // 9. Add the generated asset as a direct message using structured content
+        const structuredAssetMessage = MessageContentHelper.createAssetMessage(
+          `Here's your generated ${assetType}:\n\n${assetContent}`,
+          assetType,
+          stepId,
+          step.name,
+          {
+            isRevision: false,
+            showCreateButton: true
+          }
+        );
         
-        await this.addDirectMessage(
+        await this.addStructuredMessage(
           workflow.threadId,
-          `[ASSET_DATA]${JSON.stringify(assetMessage)}[/ASSET_DATA]\n\nHere's your generated ${assetType}:\n\n${assetContent}`
+          structuredAssetMessage
         );
         
         // Continue to next step or complete workflow
@@ -2647,22 +2650,18 @@ What would you like to do?`
     }
   }
 
+  /**
+   * Update workflow current step
+   */
   async updateWorkflowCurrentStep(workflowId: string, stepId: string | null): Promise<void> {
-    const workflow = await this.dbService.getWorkflow(workflowId);
-    if (!workflow) {
-      throw new Error(`Workflow not found: ${workflowId}`);
-    }
-
-    await this.dbService.updateWorkflowCurrentStep(workflowId, stepId);
+    return this.dbService.updateWorkflowCurrentStep(workflowId, stepId);
   }
 
+  /**
+   * Update workflow status
+   */
   async updateWorkflowStatus(workflowId: string, status: WorkflowStatus): Promise<void> {
-    const workflow = await this.getWorkflow(workflowId);
-    if (!workflow) {
-      throw new Error(`Workflow not found: ${workflowId}`);
-    }
-
-    await this.dbService.updateWorkflowStatus(workflowId, status);
+    return this.dbService.updateWorkflowStatus(workflowId, status);
   }
 
   /**
@@ -2760,10 +2759,11 @@ What would you like to do?`
         content.includes("announcement types") && 
         content.includes("Which type best fits");
         
-      const hasAnnouncementTypeQuestion = recentMessages.some(msg => 
-        msg.content.includes("announcement types") && 
-        msg.content.includes("Which type best fits")
-      );
+      const hasAnnouncementTypeQuestion = recentMessages.some(msg => {
+        const messageText = MessageContentHelper.getText(msg.content as ChatMessageContent);
+        return messageText.includes("announcement types") && 
+               messageText.includes("Which type best fits");
+      });
       
       // Skip adding the message if it's a duplicate or if it's the announcement type question and we already have one
       if (isDuplicate || (isAnnouncementTypeQuestion && hasAnnouncementTypeQuestion)) {
@@ -4354,9 +4354,12 @@ What would you like to do?`
       
       // Filter out system messages and extract just the content
       const conversationHistory = sortedMessages
-        .filter(msg => !msg.content.startsWith('[System]') && !msg.content.startsWith('[Workflow Status]'))
+        .filter(msg => {
+          const messageText = MessageContentHelper.getText(msg.content as ChatMessageContent);
+          return !messageText.startsWith('[System]') && !messageText.startsWith('[Workflow Status]');
+        })
         .slice(-limit * 2) // Keep only most recent messages after filtering
-        .map(msg => msg.content);
+        .map(msg => MessageContentHelper.getText(msg.content as ChatMessageContent));
       
       logger.info(`Processed ${conversationHistory.length} conversation history messages for thread ${threadId}`);
       
@@ -6298,6 +6301,51 @@ CRITICAL: Return raw JSON only, no markdown formatting, no code blocks, no backt
         selectionCriteria: "AI service unavailable",
         dataSource: "No external APIs used"
       };
+    }
+  }
+
+  /**
+   * Add a structured message directly to the chat thread
+   * This is the new method for adding structured content messages
+   */
+  async addStructuredMessage(threadId: string, content: StructuredMessageContent): Promise<void> {
+    try {
+      // Check for duplicate messages - search for messages with the same text content
+      const recentMessages = await db.query.chatMessages.findMany({
+        where: eq(chatMessages.threadId, threadId),
+        orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+        limit: 5, // Check the 5 most recent messages
+      });
+      
+      // Check if this exact message text already exists in the recent messages
+      const isDuplicate = recentMessages.some(msg => {
+        const existingContent = msg.content as ChatMessageContent;
+        const existingText = MessageContentHelper.getText(existingContent);
+        return existingText === content.text;
+      });
+      
+      // Skip adding the message if it's a duplicate
+      if (isDuplicate) {
+        console.log(`Skipping duplicate structured message: "${content.text.substring(0, 50)}..."`);
+        return;
+      }
+      
+      // Add the structured message
+      await db.insert(chatMessages)
+        .values({
+          threadId,
+          content: content as any, // Store as JSONB
+          role: "assistant",
+          userId: "system"
+        });
+      
+      console.log(`STRUCTURED MESSAGE ADDED: '${content.text.substring(0, 50)}...' to thread ${threadId}`);
+    } catch (error) {
+      logger.error('Error adding structured message', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      throw error;
     }
   }
 }
