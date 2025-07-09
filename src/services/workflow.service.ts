@@ -17,6 +17,11 @@ import { JSON_DIALOG_PR_WORKFLOW_TEMPLATE } from "../templates/workflows/json-di
 import { TEST_STEP_TRANSITIONS_TEMPLATE } from "../templates/workflows/test-step-transitions";
 import { QUICK_PRESS_RELEASE_TEMPLATE } from "../templates/workflows/quick-press-release";
 import { MEDIA_LIST_TEMPLATE } from "../templates/workflows/media-list";
+import { PRESS_RELEASE_TEMPLATE } from "../templates/workflows/press-release";
+import { MEDIA_PITCH_TEMPLATE } from "../templates/workflows/media-pitch";
+import { SOCIAL_POST_TEMPLATE } from "../templates/workflows/social-post";
+import { BLOG_ARTICLE_TEMPLATE } from "../templates/workflows/blog-article";
+import { FAQ_TEMPLATE } from "../templates/workflows/faq";
 import { db } from "../db";
 import { chatThreads, chatMessages } from "../db/schema";
 import { eq } from "drizzle-orm";
@@ -135,7 +140,12 @@ const WORKFLOW_TYPES = {
   LAUNCH_ANNOUNCEMENT: 'Launch Announcement',
   TEST_STEP_TRANSITIONS: 'Test Step Transitions',
   QUICK_PRESS_RELEASE: 'Quick Press Release',
-  MEDIA_MATCHING: 'Media Matching'
+  MEDIA_MATCHING: 'Media Matching',
+  PRESS_RELEASE: 'Press Release',
+  MEDIA_PITCH: 'Media Pitch',
+  SOCIAL_POST: 'Social Post',
+  BLOG_ARTICLE: 'Blog Article',
+  FAQ: 'FAQ'
 };
 
 // Workflow pattern matching configuration
@@ -145,7 +155,12 @@ const WORKFLOW_PATTERNS = {
   [WORKFLOW_TYPES.LAUNCH_ANNOUNCEMENT]: [/\b(launch|product|announcement|feature)\b/i],
   [WORKFLOW_TYPES.TEST_STEP_TRANSITIONS]: [/\b(step|transition|test step|steps|test transitions)\b/i],
   [WORKFLOW_TYPES.QUICK_PRESS_RELEASE]: [/\b(quick|press release|fast|simple)\b/i],
-  [WORKFLOW_TYPES.MEDIA_MATCHING]: [/\b(media|matching|media matching|media list|journalists|reporters|contacts)\b/i]
+  [WORKFLOW_TYPES.MEDIA_MATCHING]: [/\b(media|matching|media matching|media list|journalists|reporters|contacts)\b/i],
+  [WORKFLOW_TYPES.PRESS_RELEASE]: [/\b(press release|pr announcement|announcement materials)\b/i],
+  [WORKFLOW_TYPES.MEDIA_PITCH]: [/\b(media pitch|pitch|outreach|media outreach|journalist outreach)\b/i],
+  [WORKFLOW_TYPES.SOCIAL_POST]: [/\b(social post|social media|social copy|social content|brand voice)\b/i],
+  [WORKFLOW_TYPES.BLOG_ARTICLE]: [/\b(blog article|blog post|long-form|narrative|pov|opinion piece)\b/i],
+  [WORKFLOW_TYPES.FAQ]: [/\b(faq|frequently asked questions|questions|responses)\b/i]
 };
 
 // Add hardcoded UUIDs for each template type
@@ -156,7 +171,12 @@ const TEMPLATE_UUIDS = {
   JSON_DIALOG_PR_WORKFLOW: '00000000-0000-0000-0000-000000000004',
   TEST_STEP_TRANSITIONS: '00000000-0000-0000-0000-000000000005',
   QUICK_PRESS_RELEASE: '00000000-0000-0000-0000-000000000006',
-  MEDIA_MATCHING: '00000000-0000-0000-0000-000000000007' // Using the new UUID format
+  MEDIA_MATCHING: '00000000-0000-0000-0000-000000000007',
+  PRESS_RELEASE: '00000000-0000-0000-0000-000000000008',
+  MEDIA_PITCH: '00000000-0000-0000-0000-000000000009',
+  SOCIAL_POST: '00000000-0000-0000-0000-000000000010',
+  BLOG_ARTICLE: '00000000-0000-0000-0000-000000000011',
+  FAQ: '00000000-0000-0000-0000-000000000012'
 };
 
 export class WorkflowService {
@@ -215,6 +235,31 @@ export class WorkflowService {
           ...MEDIA_LIST_TEMPLATE,
           id: TEMPLATE_UUIDS.MEDIA_MATCHING
         };
+      case PRESS_RELEASE_TEMPLATE.name:
+        return { 
+          ...PRESS_RELEASE_TEMPLATE,
+          id: TEMPLATE_UUIDS.PRESS_RELEASE
+        };
+      case MEDIA_PITCH_TEMPLATE.name:
+        return { 
+          ...MEDIA_PITCH_TEMPLATE,
+          id: TEMPLATE_UUIDS.MEDIA_PITCH
+        };
+      case SOCIAL_POST_TEMPLATE.name:
+        return { 
+          ...SOCIAL_POST_TEMPLATE,
+          id: TEMPLATE_UUIDS.SOCIAL_POST
+        };
+      case BLOG_ARTICLE_TEMPLATE.name:
+        return { 
+          ...BLOG_ARTICLE_TEMPLATE,
+          id: TEMPLATE_UUIDS.BLOG_ARTICLE
+        };
+      case FAQ_TEMPLATE.name:
+        return { 
+          ...FAQ_TEMPLATE,
+          id: TEMPLATE_UUIDS.FAQ
+        };
       default:
         console.log(`Template not found for name: ${name}`);
         return null;
@@ -233,7 +278,12 @@ export class WorkflowService {
       { id: TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW, name: 'JSON Dialog PR Workflow' },
       { id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS, name: 'Test Step Transitions' },
       { id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE, name: 'Quick Press Release' },
-      { id: TEMPLATE_UUIDS.MEDIA_MATCHING, name: 'Media Matching' }
+      { id: TEMPLATE_UUIDS.MEDIA_MATCHING, name: 'Media Matching' },
+      { id: TEMPLATE_UUIDS.PRESS_RELEASE, name: 'Press Release' },
+      { id: TEMPLATE_UUIDS.MEDIA_PITCH, name: 'Media Pitch' },
+      { id: TEMPLATE_UUIDS.SOCIAL_POST, name: 'Social Post' },
+      { id: TEMPLATE_UUIDS.BLOG_ARTICLE, name: 'Blog Article' },
+      { id: TEMPLATE_UUIDS.FAQ, name: 'FAQ' }
     ];
 
     for (const { id, name } of templateEntries) {
@@ -307,6 +357,31 @@ export class WorkflowService {
         ...MEDIA_LIST_TEMPLATE, 
         id: TEMPLATE_UUIDS.MEDIA_MATCHING 
       };
+    } else if (templateId === TEMPLATE_UUIDS.PRESS_RELEASE) {
+      return { 
+        ...PRESS_RELEASE_TEMPLATE, 
+        id: TEMPLATE_UUIDS.PRESS_RELEASE 
+      };
+    } else if (templateId === TEMPLATE_UUIDS.MEDIA_PITCH) {
+      return { 
+        ...MEDIA_PITCH_TEMPLATE, 
+        id: TEMPLATE_UUIDS.MEDIA_PITCH 
+      };
+    } else if (templateId === TEMPLATE_UUIDS.SOCIAL_POST) {
+      return { 
+        ...SOCIAL_POST_TEMPLATE, 
+        id: TEMPLATE_UUIDS.SOCIAL_POST 
+      };
+    } else if (templateId === TEMPLATE_UUIDS.BLOG_ARTICLE) {
+      return { 
+        ...BLOG_ARTICLE_TEMPLATE, 
+        id: TEMPLATE_UUIDS.BLOG_ARTICLE 
+      };
+    } else if (templateId === TEMPLATE_UUIDS.FAQ) {
+      return { 
+        ...FAQ_TEMPLATE, 
+        id: TEMPLATE_UUIDS.FAQ 
+      };
     }
     
     // Check if templateId matches any template name directly
@@ -344,6 +419,31 @@ export class WorkflowService {
       return { 
         ...MEDIA_LIST_TEMPLATE, 
         id: TEMPLATE_UUIDS.MEDIA_MATCHING 
+      };
+    } else if (templateId === PRESS_RELEASE_TEMPLATE.name) {
+      return { 
+        ...PRESS_RELEASE_TEMPLATE, 
+        id: TEMPLATE_UUIDS.PRESS_RELEASE 
+      };
+    } else if (templateId === MEDIA_PITCH_TEMPLATE.name) {
+      return { 
+        ...MEDIA_PITCH_TEMPLATE, 
+        id: TEMPLATE_UUIDS.MEDIA_PITCH 
+      };
+    } else if (templateId === SOCIAL_POST_TEMPLATE.name) {
+      return { 
+        ...SOCIAL_POST_TEMPLATE, 
+        id: TEMPLATE_UUIDS.SOCIAL_POST 
+      };
+    } else if (templateId === BLOG_ARTICLE_TEMPLATE.name) {
+      return { 
+        ...BLOG_ARTICLE_TEMPLATE, 
+        id: TEMPLATE_UUIDS.BLOG_ARTICLE 
+      };
+    } else if (templateId === FAQ_TEMPLATE.name) {
+      return { 
+        ...FAQ_TEMPLATE, 
+        id: TEMPLATE_UUIDS.FAQ 
       };
     }
     
