@@ -1,6 +1,7 @@
 import { WorkflowStep, StepStatus } from '../types/workflow';
 import { OpenAIService } from './openai.service';
 import logger from '../utils/logger';
+import { MessageContentHelper, StructuredMessageContent } from '../types/chat-message';
 
 /**
  * Simple service for handling JSON Dialog step types
@@ -487,10 +488,22 @@ export class JsonDialogService {
                 }
               }
               
+              // Create structured asset message using the new system
+              const structuredAssetMessage = MessageContentHelper.createAssetMessage(
+                `Here's your generated ${assetType}:\n\n${cleanDisplayContent}`,
+                assetType,
+                step.id,
+                step.name,
+                {
+                  isRevision: false,
+                  showCreateButton: true
+                }
+              );
+              
               await db.insert(chatMessages)
                 .values({
                   threadId: actualThreadId, // Use the actual thread ID
-                  content: `[ASSET_DATA]${JSON.stringify(assetMessage)}[/ASSET_DATA]\n\nHere's your generated ${assetType}:\n\n${cleanDisplayContent}`,
+                  content: structuredAssetMessage, // Store as structured JSONB content
                   role: "assistant",
                   userId: "system"
                 });

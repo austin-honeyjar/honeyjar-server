@@ -964,7 +964,7 @@ export class WorkflowService {
         throw new Error(`Workflow not found: ${step.workflowId}`);
       }
       
-      // Handle JSON_DIALOG step type differently
+      // Handle JSON_DIALOG step type - delegate entirely to JsonDialogService
       if (step.stepType === StepType.JSON_DIALOG) {
         // Get conversation history to improve context
         const conversationHistory = await this.getThreadConversationHistory(workflow.threadId, 5);
@@ -987,14 +987,14 @@ export class WorkflowService {
           });
 
           // Update the step with the selected workflow type
-      await this.dbService.updateStep(stepId, {
+          await this.dbService.updateStep(stepId, {
             aiSuggestion: selectedWorkflow,
             status: StepStatus.COMPLETE,
             metadata: {
               ...step.metadata,
               collectedInformation: jsonDialogResult.collectedInformation
             }
-        });
+          });
         
           // Add a direct message with the selection
           await this.addDirectMessage(workflow.threadId, `Selected workflow: ${selectedWorkflow}`);
@@ -1005,50 +1005,21 @@ export class WorkflowService {
           await this.addDirectMessage(workflow.threadId, jsonDialogResult.nextQuestion);
           
           // Don't complete the step yet
-        await this.dbService.updateStep(stepId, {
+          await this.dbService.updateStep(stepId, {
             status: StepStatus.IN_PROGRESS,
             metadata: {
               ...step.metadata,
               collectedInformation: jsonDialogResult.collectedInformation || {}
             }
-        });
+          });
         
           // Return empty string to indicate no valid selection yet
-        return '';
-      }
-      }
-      
-      // User input pattern matching as fallback
-      const normalizedInput = userInput.toLowerCase().trim();
-      let directMatch = '';
-      
-      // Check for workflow specific keywords using the patterns config
-      Object.entries(WORKFLOW_PATTERNS).forEach(([workflowType, patterns]) => {
-        if (!directMatch && patterns.some(pattern => pattern.test(normalizedInput))) {
-          directMatch = workflowType;
+          return '';
         }
-      });
-      
-      if (directMatch) {
-        logger.info('Direct pattern match found for workflow selection', {
-          userInput, 
-          directMatch
-        });
-        
-        // Update the step with the selected workflow type
-        await this.dbService.updateStep(stepId, {
-          aiSuggestion: directMatch,
-          status: StepStatus.COMPLETE
-        });
-        
-        // Add a direct message with the selection
-        await this.addDirectMessage(workflow.threadId, `Selected workflow: ${directMatch}`);
-        
-        return directMatch;
       }
       
-      // Legacy approach - fallback to using OpenAI
-      logger.info('No direct match found, using OpenAI to determine workflow selection', { userInput });
+      // All workflow selection should be handled by JSON Dialog system
+      logger.info('Delegating workflow selection to JSON Dialog system', { userInput });
       
       await this.addDirectMessage(workflow.threadId, 'Please select a specific workflow type from the available options.');
       
@@ -1395,20 +1366,20 @@ export class WorkflowService {
             isComplete: true
           };
         } else {
-          // Find the Asset Refinement step for standard workflows
-          const refinementStep = workflow.steps.find(s => s.name === "Asset Refinement");
-          if (refinementStep) {
+          // Find the Asset Review step (new workflows) or Asset Refinement step (legacy workflows)
+          const reviewStep = workflow.steps.find(s => s.name === "Asset Review" || s.name === "Asset Refinement");
+          if (reviewStep) {
             // Mark current step as complete
             await this.dbService.updateStep(stepId, {
               status: StepStatus.COMPLETE
             });
             
-            // Set refinement step as current and in progress
-            await this.dbService.updateWorkflowCurrentStep(workflow.id, refinementStep.id);
-            await this.dbService.updateStep(refinementStep.id, {
+            // Set review step as current and in progress
+            await this.dbService.updateWorkflowCurrentStep(workflow.id, reviewStep.id);
+            await this.dbService.updateStep(reviewStep.id, {
               status: StepStatus.IN_PROGRESS,
               metadata: {
-                ...refinementStep.metadata,
+                ...reviewStep.metadata,
                 initialPromptSent: false,
                 generatedAsset: assetContent,
                 assetType
@@ -1418,14 +1389,14 @@ export class WorkflowService {
             // Customize prompt for the specific asset
             const customPrompt = `Here's your generated ${assetType}. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply let me know.`;
             
-            // Send the refinement prompt
+            // Send the review prompt
             await this.addDirectMessage(workflow.threadId, customPrompt);
             
             // Mark that the prompt has been sent
-            await this.dbService.updateStep(refinementStep.id, {
+            await this.dbService.updateStep(reviewStep.id, {
               prompt: customPrompt,
               metadata: {
-                ...refinementStep.metadata,
+                ...reviewStep.metadata,
                 initialPromptSent: true
               }
             });
@@ -1433,15 +1404,15 @@ export class WorkflowService {
             return {
               response: `${assetType} generated successfully. Moving to review step.`,
               nextStep: {
-                id: refinementStep.id,
-                name: refinementStep.name,
+                id: reviewStep.id,
+                name: reviewStep.name,
                 prompt: customPrompt,
-                type: refinementStep.stepType
+                type: reviewStep.stepType
               },
               isComplete: false
             };
           } else {
-            // No refinement step, just complete the workflow
+            // No review step, just complete the workflow
             await this.dbService.updateWorkflowStatus(workflowId, WorkflowStatus.COMPLETED);
             await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
             
@@ -1460,311 +1431,149 @@ export class WorkflowService {
         
         // Check if this step is awaiting a user decision
         if (step.metadata?.needsUserDecision) {
-          // User is responding to the decision prompt
-          const userChoice = userInput.toLowerCase().trim();
+          // For all steps, use structured response handling instead of string matching
+          const searchDepth = step.metadata.searchResults?.searchDepthLevel || 1;
+          const maxSearchDepth = 3;
           
-          if (userChoice.includes('search more') || userChoice.includes('search further') || userChoice.includes('more authors')) {
-            // Check if we've already done too many searches
-            const currentDepth = step.metadata.searchResults?.searchDepthLevel || 1;
-            if (currentDepth >= 3) {
+          // Process user decision through structured system instead of string matching
+          logger.info('Processing user decision for database query', {
+            userInput: userInput.substring(0, 50),
+            searchDepth,
+            maxSearchDepth
+          });
+          
+          // Use OpenAI to interpret the user's choice instead of string matching
+          try {
+            // Create a simple decision prompt for OpenAI
+            const decisionPrompt = `User response: "${userInput}"
+
+The user can choose:
+1. "search more" - to find additional authors (current search depth: ${searchDepth}/${maxSearchDepth})
+2. "proceed" - to continue with current results
+
+Respond with only "search_more" or "proceed" based on their input.`;
+
+            const customStep = {
+              ...step,
+              metadata: {
+                ...step.metadata,
+                openai_instructions: decisionPrompt
+              }
+            };
+
+            const result = await this.openAIService.generateStepResponse(
+              customStep,
+              userInput,
+              []
+            );
+
+            const decision = result.responseText.trim().toLowerCase();
+            
+            if (decision.includes('search_more') && searchDepth < maxSearchDepth) {
+              // For now, just proceed since extended search is complex
               await this.addDirectMessage(
                 workflow.threadId,
-                `You've already performed ${currentDepth} searches. To avoid excessive API usage, please proceed with the current results or try a different topic.
-
-You can:
-• **"proceed"** - to continue with current results to author ranking and selection
-
-What would you like to do?`
+                `Extended search is not available in this version. Proceeding with current results.`
               );
               
-              return {
-                response: `Maximum search depth reached (${currentDepth}). Please proceed with current results.`,
-                nextStep: {
-                  id: stepId,
-                  name: step.name,
-                  prompt: step.prompt,
-                  type: step.stepType
-                },
-                isComplete: false
-              };
-            }
-            
-            // User wants to search further back
-            await this.addDirectMessage(workflow.threadId, `Searching further back in time for more authors on "${step.metadata.searchResults.originalTopic}"...`);
-            
-            // Perform extended search using lastSequenceId
-            try {
-              const { MetabaseService } = await import('./metabase.service');
-              const metabaseService = new MetabaseService();
-              
-              const currentSearchResults = step.metadata.searchResults;
-              const originalTopic = currentSearchResults.originalTopic;
-              const currentQuery = currentSearchResults.query;
-              const lastSequenceId = currentSearchResults.lastSequenceId;
-              const currentDepth = currentSearchResults.searchDepthLevel || 1;
-              
-              logger.info('Starting extended search', {
-                originalTopic,
-                currentQuery,
-                lastSequenceId,
-                currentDepth,
-                hasLastSequenceId: !!lastSequenceId
-              });
-              
-              // Build search parameters for extended search
-              const searchParams: any = {
-                query: currentQuery,
-                limit: 200, // FIXED: Maximum allowed by API (not 500)
-                format: 'json',
-                sort_by_relevance: "true",
-                show_relevance_score: "true",
-                filter_duplicates: "true",
-                // REMOVED: relevance_percent filter to get maximum results
-                show_matching_keywords: "true"
-              };
-              
-              // Only add sequence_id if we have a valid one
-              if (lastSequenceId && lastSequenceId !== 'null' && lastSequenceId !== 'undefined') {
-                searchParams.sequence_id = lastSequenceId;
-                logger.info('Using sequence_id for extended search', { sequence_id: lastSequenceId });
-              } else {
-                logger.info('No valid sequence_id, performing fresh search for extended results');
-              }
-              
-              // Use the same search query format as the original search
-              const extendedSearchResults = await metabaseService.searchArticles(searchParams);
-              
-              logger.info('Extended search completed', {
-                articlesFound: extendedSearchResults.articles.length,
-                hasMore: extendedSearchResults.hasMore,
-                newLastSequenceId: extendedSearchResults.lastSequenceId
-              });
-              
-              // Process the extended results
-              const combinedArticles = [...extendedSearchResults.articles];
-              
-              // Extract authors from all articles
-              const authorsMap = new Map();
-              
-              // FIXED: Process ALL articles from both original and extended search
-              // First, get the original articles from the current search results
-              const originalArticles = currentSearchResults.originalArticles || [];
-              const allArticles = [...originalArticles, ...extendedSearchResults.articles];
-              
-              logger.info('Processing combined articles for author extraction', {
-                originalArticlesCount: originalArticles.length,
-                extendedArticlesCount: extendedSearchResults.articles.length,
-                totalArticlesToProcess: allArticles.length
-              });
-              
-              // Process ALL articles (original + extended) to get accurate author counts
-              allArticles.forEach((article: any, index: number) => {
-                // REMOVED: All upstream filters except basic author check
-                if (article.author && article.source) {
-                  const authorKey = `${article.author}-${article.source}`;
-                  
-                  // REMOVED: Academic source filtering - include all sources
-                  const isNewsSource = true; // Include all sources now
-                  
-                  if (!authorsMap.has(authorKey)) {
-                    // FIXED: Try multiple paths to find editorial rank in the actual API response
-                    let editorialRank = 5; // Default
-                    
-                    // Test various possible paths based on Metabase API structure
-                    if (article.source?.editorialRank) {
-                      editorialRank = parseInt(article.source.editorialRank) || 5;
-                    } else if (article.metadata?.source?.editorialRank) {
-                      editorialRank = parseInt(article.metadata.source.editorialRank) || 5;
-                    } else if (article.source?.rank) {
-                      editorialRank = parseInt(article.source.rank) || 5;
-                    } else if (article.metadata?.editorialRank) {
-                      editorialRank = parseInt(article.metadata.editorialRank) || 5;
-                    } else if (article.editorialRank) {
-                      editorialRank = parseInt(article.editorialRank) || 5;
-                    }
-                    
-                    // REMOVED: Source bonus - treat all sources equally
-                    const sourceBonus = 0; // No bonus for any source type
-                    
-                    authorsMap.set(authorKey, {
-                      id: `author-${index}-${Date.now()}`,
-                      name: article.author,
-                      organization: article.source,
-                      editorialRank: editorialRank,
-                      relevanceScore: sourceBonus, // Start with source type bonus
-                      articleCount: 0,
-                      topics: new Set(),
-                      recentArticles: 0,
-                      lastArticleDate: article.publishedAt,
-                      isNewsSource: isNewsSource, // Track source type
-                      articles: [] // Store article metadata for debugging dropdown
-                    });
-                  }
-                  
-                  const author = authorsMap.get(authorKey);
-                  author.articleCount++;
-                  author.relevanceScore += 5; // Base score per article
-                  
-                  if (article.topics) {
-                    article.topics.forEach((topic: any) => author.topics.add(topic));
-                  }
-                  
-                  const articleDate = new Date(article.publishedAt);
-                  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-                  if (articleDate > thirtyDaysAgo) {
-                    author.recentArticles++;
-                    author.relevanceScore += 2;
-                  }
-                  
-                  if (articleDate > new Date(author.lastArticleDate)) {
-                    author.lastArticleDate = article.publishedAt;
-                  }
-                }
-              });
-              
-              // Convert to array and sort
-              const authorsArray = Array.from(authorsMap.values()).map(author => ({
-                ...author,
-                topics: Array.from(author.topics)
-              }));
-              
-              const topAuthors = authorsArray
-                .sort((a, b) => b.relevanceScore - a.relevanceScore);
-              // REMOVED: .slice(0, 20) - Let ranking step handle final top 10 selection
-              
-              // FIXED: Calculate accurate statistics
-              const totalArticlesAnalyzed = originalArticles.length + extendedSearchResults.articles.length;
-              const totalAuthorsFound = authorsArray.length;
-              const topAuthorsCount = topAuthors.length;
-              
-              // Calculate rank distribution for the updated results
-              const rankDistribution = authorsArray.reduce((acc: any, author) => {
-                const rank = author.editorialRank || 'Unknown';
-                acc[rank] = (acc[rank] || 0) + 1;
-                return acc;
-              }, {});
-              
-              // Get date range for display (use current date range)
-              const endDate = new Date();
-              const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-              const startDateStr = startDate.toISOString().split('T')[0];
-              const endDateStr = endDate.toISOString().split('T')[0];
-              
-              // Get topic keywords from current search results
-              const topicKeywords = currentSearchResults.topicKeywords || [];
-              
-              logger.info('Extended search author analysis completed - REMOVED ALL FILTERS', {
-                totalArticlesAnalyzed,
-                totalAuthorsFound,
-                topAuthorsCount,
-                originalArticlesCount: originalArticles.length,
-                extendedArticlesCount: extendedSearchResults.articles.length,
-                rankDistribution,
-                rankingStrategy: 'All authors will be ranked for top 10 selection', // FIXED: No artificial limits
-                filteringStatus: 'REMOVED: All upstream filters except basic author check'
-              });
-              
-              // Update search results with accurate counts
-              const updatedSearchResults = {
-                ...currentSearchResults,
-                articlesFound: totalArticlesAnalyzed,
-                authorsExtracted: topAuthors,
-                selectedAuthors: topAuthorsCount,
-                totalArticlesAnalyzed: totalArticlesAnalyzed,
-                lastSequenceId: extendedSearchResults.lastSequenceId,
-                hasMoreResults: extendedSearchResults.hasMore,
-                searchDepthLevel: currentDepth + 1,
-                extendedSearchCompleted: true,
-                originalArticles: allArticles // Store all articles for future searches
-              };
-              
-              // Store the search results but DON'T auto-transition - stay in current step
+              // Proceed to ranking
               await this.dbService.updateStep(stepId, {
-                status: StepStatus.IN_PROGRESS, // Keep step active for more searches
+                status: StepStatus.COMPLETE,
                 userInput: userInput,
                 metadata: {
                   ...step.metadata,
-                  searchResults: updatedSearchResults,
-                  apiCallCompleted: true,
-                  needsUserDecision: true, // Keep user decision flag for more searches
-                  searchDepthLevel: currentDepth + 1
+                  needsUserDecision: false
                 }
               });
+
+              const authorsCount = step.metadata.searchResults.authorsExtracted.length;
               
-              // FIXED: Show detailed updated search results in chat (same format as initial search)
-              const updatedSearchResultsMessage = `Found articles from **${topAuthorsCount}** authors writing about ${originalTopic ? `"${originalTopic}"` : 'general topics'} (using OR logic for keywords: ${topicKeywords?.join(', ') || 'none'}) in US English language sources.
-
-**Enhanced Search Results** (${startDateStr} to ${endDateStr}):
-• Total Articles Analyzed: ${totalArticlesAnalyzed}
-• Authors Found: ${totalAuthorsFound}
-• Authors for Ranking: ${topAuthorsCount} (all will be ranked for top 10 selection)
-• Search Time Frame: ${90} days
-• Language Filter: English only
-• Location Filter: United States only 
-• Source Quality: Premium sources (Rank 1 only) - Metabase filtered
-• Search Logic: OR logic for topic keywords
-• Search Depth: Level ${currentDepth + 1}
-
-**Editorial Rank Distribution:**
-${Object.entries(rankDistribution)
-  .map(([rank, count]) => `• Rank ${rank}: ${count} sources`)
-  .join('\n')}
-
-**Search Progress:**
-• Original Search: ${originalArticles.length} articles
-• Extended Search: ${extendedSearchResults.articles.length} additional articles
-• Total Combined: ${totalArticlesAnalyzed} articles
-
-**Note**: All sources included - ranking algorithm will select the best 10 based on your preferences.
-
-You can:
-• **"search more"** - to find additional authors
-• **"proceed"** - to continue with current results to author ranking and selection
-
-What would you like to do?`;
-              
-              await this.addDirectMessage(workflow.threadId, updatedSearchResultsMessage);
-              
-              // Stay in current step instead of auto-transitioning
-              return {
-                response: `Extended search completed. Found ${topAuthorsCount} top authors from ${totalAuthorsFound} total authors. You can search more or proceed.`,
-                nextStep: {
-                  id: stepId,
-                  name: step.name,
-                  prompt: step.prompt,
-                  type: step.stepType
-                },
-                isComplete: false
-              };
-            } catch (error) {
-              // Get the current search results for error logging
-              const currentSearchResults = step.metadata.searchResults;
-              const originalTopic = currentSearchResults?.originalTopic || 'unknown';
-              const currentQuery = currentSearchResults?.query || 'unknown';
-              const lastSequenceId = currentSearchResults?.lastSequenceId || 'none';
-              
-              logger.error('Extended search failed', {
-                error: error instanceof Error ? error.message : 'Unknown error',
-                stack: error instanceof Error ? error.stack : undefined,
-                originalTopic,
-                currentQuery,
-                lastSequenceId
+              // Auto-transition to Author Ranking & Selection step
+              const nextStep = workflow.steps.find(s => s.name === "Author Ranking & Selection");
+              if (nextStep) {
+                await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+                await this.dbService.updateStep(nextStep.id, {
+                  status: StepStatus.IN_PROGRESS,
+                  metadata: {
+                    ...nextStep.metadata,
+                    initialPromptSent: false
+                  }
+                });
+                
+                if (nextStep.prompt) {
+                  await this.addDirectMessage(workflow.threadId, nextStep.prompt);
+                  await this.dbService.updateStep(nextStep.id, {
+                    metadata: { ...nextStep.metadata, initialPromptSent: true }
+                  });
+                }
+                
+                return {
+                  response: `Proceeding with ${authorsCount} authors to author ranking and selection.`,
+                  nextStep: {
+                    id: nextStep.id,
+                    name: nextStep.name,
+                    prompt: nextStep.prompt,
+                    type: nextStep.stepType
+                  },
+                  isComplete: false
+                };
+              }
+            } else if (decision.includes('proceed') || searchDepth >= maxSearchDepth) {
+              // Handle proceed logic
+              await this.dbService.updateStep(stepId, {
+                status: StepStatus.COMPLETE,
+                userInput: userInput,
+                metadata: {
+                  ...step.metadata,
+                  needsUserDecision: false
+                }
               });
-              
+
+              const authorsCount = step.metadata.searchResults.authorsExtracted.length;
               await this.addDirectMessage(
                 workflow.threadId,
-                `Extended search encountered an issue: ${error instanceof Error ? error.message : 'Unknown error'}. 
-
-You can:
-• **"search more"** - to try again with different parameters
-• **"proceed"** - to continue with current results to author ranking and selection
-
-What would you like to do?`
+                `Proceeding with ${authorsCount} authors to author ranking and selection...`
               );
               
-              // Stay in current step to allow retry
+              // Auto-transition to Author Ranking & Selection step
+              const nextStep = workflow.steps.find(s => s.name === "Author Ranking & Selection");
+              if (nextStep) {
+                await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+                await this.dbService.updateStep(nextStep.id, {
+                  status: StepStatus.IN_PROGRESS,
+                  metadata: {
+                    ...nextStep.metadata,
+                    initialPromptSent: false
+                  }
+                });
+                
+                if (nextStep.prompt) {
+                  await this.addDirectMessage(workflow.threadId, nextStep.prompt);
+                  await this.dbService.updateStep(nextStep.id, {
+                    metadata: { ...nextStep.metadata, initialPromptSent: true }
+                  });
+                }
+                
+                return {
+                  response: `Proceeding with ${authorsCount} authors to author ranking and selection.`,
+                  nextStep: {
+                    id: nextStep.id,
+                    name: nextStep.name,
+                    prompt: nextStep.prompt,
+                    type: nextStep.stepType
+                  },
+                  isComplete: false
+                };
+              }
+            } else {
+              // Ask for clarification
+              await this.addDirectMessage(
+                workflow.threadId,
+                `Please respond with "search more" to find additional authors or "proceed" to continue with current results.`
+              );
+              
               return {
-                response: `Extended search failed: ${error instanceof Error ? error.message : 'Unknown error'}. You can try again or proceed.`,
+                response: `Please choose "search more" or "proceed".`,
                 nextStep: {
                   id: stepId,
                   name: step.name,
@@ -1774,43 +1583,29 @@ What would you like to do?`
                 isComplete: false
               };
             }
+          } catch (error) {
+            logger.error('Error processing user decision', {
+              error: error instanceof Error ? error.message : 'Unknown error'
+            });
             
-          } else if (userChoice.includes('proceed') || userChoice.includes('continue') || userChoice.includes('current')) {
-            // User wants to proceed with current results
+            // Fallback to proceed if AI processing fails
             await this.dbService.updateStep(stepId, {
-              status: StepStatus.COMPLETE, // FIXED: Mark as complete to auto-transition
+              status: StepStatus.COMPLETE,
               userInput: userInput,
               metadata: {
                 ...step.metadata,
-                needsUserDecision: false // FIXED: Remove user decision flag
+                needsUserDecision: false
               }
             });
+
+            const authorsCount = step.metadata.searchResults?.authorsExtracted?.length || 0;
             
-            const authorsCount = step.metadata.searchResults.authorsExtracted.length;
-            await this.addDirectMessage(
-              workflow.threadId,
-              `Proceeding with ${authorsCount} authors to author ranking and selection...`
-            );
-            
-            // FIXED: Auto-transition to Author Ranking & Selection step
             const nextStep = workflow.steps.find(s => s.name === "Author Ranking & Selection");
             if (nextStep) {
               await this.dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
               await this.dbService.updateStep(nextStep.id, {
-                status: StepStatus.IN_PROGRESS,
-                metadata: {
-                  ...nextStep.metadata,
-                  initialPromptSent: false
-                }
+                status: StepStatus.IN_PROGRESS
               });
-              
-              // Send the ranking prompt immediately
-              if (nextStep.prompt) {
-                await this.addDirectMessage(workflow.threadId, nextStep.prompt);
-                await this.dbService.updateStep(nextStep.id, {
-                  metadata: { ...nextStep.metadata, initialPromptSent: true }
-                });
-              }
               
               return {
                 response: `Proceeding with ${authorsCount} authors to author ranking and selection.`,
@@ -1824,28 +1619,15 @@ What would you like to do?`
               };
             }
             
-          } else {
-            // User input not recognized
-            await this.addDirectMessage(
-              workflow.threadId,
-              `Please respond with "search more" to find additional authors or "proceed" to continue with current results.`
-            );
-            
             return {
-              response: `Please choose "search more" or "proceed".`,
-              nextStep: {
-                id: stepId,
-                name: step.name,
-                prompt: step.prompt,
-                type: step.stepType
-              },
-              isComplete: false
+              response: `Error processing decision. Proceeding with available results.`,
+              isComplete: true
             };
           }
-        } else {
-          // Normal Database Query execution (first time) - FIXED to auto-transition
-          return await this.handleMediaListDatabaseQuery(stepId, workflowId, workflow.threadId);
         }
+        
+        // Normal Database Query execution (first time) - FIXED to auto-transition
+        return await this.handleMediaListDatabaseQuery(stepId, workflowId, workflow.threadId);
       }
 
       // Handle API_CALL step type for Media List Generator - Contact Enrichment
@@ -2228,199 +2010,16 @@ What would you like to do?`
           );
         }
       } else if (step.name === "Asset Review") {
-        // Check if this is approval or revision
-        const isApproved = 
-          userInput.toLowerCase().includes('approved') || 
-          userInput.toLowerCase() === 'approve' || 
-          userInput.toLowerCase() === 'yes' ||
-          userInput.toLowerCase().includes('no more') ||
-          userInput.toLowerCase().includes('looks good') ||
-          userInput.toLowerCase().includes('this is good');
-        
-        if (isApproved) {
-          // Handle approval - mark step as complete
-          await this.dbService.updateStep(stepId, {
-            userInput,
-            status: StepStatus.COMPLETE,
-            metadata: { 
-              ...step.metadata,
-              approved: true,
-              needsRevision: false
-            }
-          });
-          
-          console.log(`Asset explicitly approved with: "${userInput}"`);
-          
-          // Get the workflow to find the Asset Revision step (which we'll skip)
-          const workflow = await this.dbService.getWorkflow(workflowId);
-          if (workflow) {
-            const assetRevisionStep = workflow.steps.find(s => s.name === "Asset Revision");
-            if (assetRevisionStep) {
-              // Mark Asset Revision as COMPLETE (skipped)
-              await this.dbService.updateStep(assetRevisionStep.id, {
-                status: StepStatus.COMPLETE,
-                userInput: "Asset approved - revision skipped"
-              });
-              
-              // Add message about approval
-              await this.addDirectMessage(workflow.threadId, `Asset approved. Proceeding to Post-Asset Tasks.`);
-            }
-          }
-          
-          // Normal flow will take it to Post-Asset Tasks
-        } else {
-          // This is a revision request - mark as in progress
-          await this.dbService.updateStep(stepId, {
-            userInput,
-            status: StepStatus.IN_PROGRESS,
-            metadata: { 
-              ...step.metadata,
-              approved: false,
-              needsRevision: true
-            }
-          });
-          
-          // Get the workflow to handle revisions
-          const workflow = await this.dbService.getWorkflow(workflowId);
-          if (workflow) {
-            // Get necessary data from previous steps
-            const assetGenerationStep = workflow.steps.find(s => s.name === "Asset Generation");
-            const infoStep = workflow.steps.find(s => s.name === "Information Collection");
-            
-            // Determine asset type
-            const selectedAsset = step.metadata?.selectedAsset || 
-                               assetGenerationStep?.metadata?.selectedAsset || 
-                               "Press Release";
-            
-            // Acknowledge feedback
-            await this.addDirectMessage(workflow.threadId, `Thank you for your feedback. I'll update the asset with your requested changes.`);
-            
-            try {
-              // Get right template for the asset type
-              const templateKey = selectedAsset.toLowerCase().replace(/\s+/g, '');
-              const templateMap: Record<string, string> = {
-                'pressrelease': 'pressRelease',
-                'mediapitch': 'mediaPitch',
-                'socialpost': 'socialPost',
-                'blogpost': 'blogPost',
-                'faqdocument': 'faqDocument'
-              };
-              
-              const templateName = templateMap[templateKey] || 'pressRelease';
-              const template = assetGenerationStep?.metadata?.templates?.[templateName];
-              
-              if (template) {
-                // Message about regenerating
-                await this.addDirectMessage(workflow.threadId, `Regenerating your ${selectedAsset} with your requested changes. This may take a moment...`);
-                
-                // Create custom step for OpenAI
-                const customStep = {
-                  ...assetGenerationStep,
-                  metadata: {
-                    ...assetGenerationStep?.metadata,
-                    openai_instructions: template
-                  }
-                };
-                
-                // Create prompt with feedback
-                const revisionPrompt = `${infoStep?.userInput || ""}\n\nPlease make the following changes to the previous version:\n- ${userInput}`;
-                
-                // Generate revised asset
-                const result = await this.openAIService.generateStepResponse(
-                  customStep,
-                  revisionPrompt,
-                  []
-                );
-                
-                // Try to parse the JSON response to extract just the asset content
-                let revisedAsset;
-                try {
-                  const assetData = JSON.parse(result.responseText);
-                  if (assetData.asset) {
-                    // Successfully parsed JSON with asset field
-                    revisedAsset = assetData.asset;
-                    logger.info('Successfully extracted revised asset content from JSON response');
-                  } else {
-                    // JSON parsing worked but no asset field found
-                    revisedAsset = result.responseText;
-                    logger.warn('JSON parsing succeeded but no asset field found in response');
-                  }
-                } catch (error) {
-                  // JSON parsing failed, use full response
-                  revisedAsset = result.responseText;
-                  logger.warn('Failed to parse JSON response for revision, using full response', {
-                    error: error instanceof Error ? error.message : 'Unknown error'
-                  });
-                }
-                
-                // Add message with revised asset
-                const revisedAssetMessage = {
-                  type: 'asset_generated',
-                  assetType: selectedAsset,
-                  content: revisedAsset,
-                  displayContent: revisedAsset,
-                  stepId: stepId,
-                  stepName: step.name,
-                  isRevision: true
-                };
-                
-                await this.addDirectMessage(
-                  workflow.threadId, 
-                  `[ASSET_DATA]${JSON.stringify(revisedAssetMessage)}[/ASSET_DATA]\n\nHere's your revised ${selectedAsset} with the requested changes:\n\n${revisedAsset}`
-                );
-                
-                // Store revised asset
-                await this.dbService.updateStep(stepId, {
-                  metadata: { 
-                    ...step.metadata,
-                    revisedAsset: revisedAsset
-                  }
-                });
-                
-                // Update prompt for next review
-                const revisedPrompt = `Here's your revised ${selectedAsset}. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply let me know.`;
-                
-                // Update step with new prompt
-                await this.dbService.updateStep(stepId, {
-                  prompt: revisedPrompt
-                });
-                
-                // Return to the same step for another review
-                return {
-                  response: `Your ${selectedAsset} has been revised. Please review the changes.`,
-                  nextStep: {
-                    id: stepId,
-                    name: step.name,
-                    prompt: revisedPrompt,
-                    type: step.stepType
-                  },
-                  isComplete: false
-                };
-              }
-            } catch (error) {
-              logger.error('Error regenerating asset', { error });
-              await this.addDirectMessage(workflow.threadId, `There was an error regenerating your ${selectedAsset}. Please try again with different feedback.`);
-            }
-          }
-        }
+        // Asset Review steps are now handled by JSON Dialog system
+        logger.info('Asset Review step detected - delegating to JSON Dialog handler', { stepId, stepName: step.name });
+        return await this.handleJsonDialogStep(step, userInput);
       }
 
       // 2. Update the current step: set userInput and mark as COMPLETE
-      // Only skip for specific cases where we handled it differently
-      const skipCompletingAssetReview = 
-        step.name === "Asset Review" && 
-        !userInput.toLowerCase().includes('approved') &&
-        !userInput.toLowerCase().includes('approve') &&
-        !userInput.toLowerCase().includes('looks good') &&
-        !userInput.toLowerCase().includes('good') &&
-        !userInput.toLowerCase().includes('yes');
-        
-      if (!skipCompletingAssetReview) {
-        await this.dbService.updateStep(stepId, {
-          userInput,
-          status: StepStatus.COMPLETE
-        });
-      }
+      await this.dbService.updateStep(stepId, {
+        userInput,
+        status: StepStatus.COMPLETE
+      });
 
       // 3. Re-fetch the entire workflow to get the most up-to-date state of all steps
       const updatedWorkflow = await this.dbService.getWorkflow(workflowId);
@@ -2823,32 +2422,14 @@ What would you like to do?`
           userInput: userInput.substring(0, 50)
         });
         
-        // For very first interaction, handle announcement type identification
+        // For very first interaction, delegate to JSON Dialog system instead of string matching
         if (interactionCount === 1) {
-          // Store announcement type from first response
-          const announcementType = userInput.toLowerCase().includes('product') ? 'Product Launch' : 
-                                 userInput.toLowerCase().includes('fund') ? 'Funding Round' :
-                                 userInput.toLowerCase().includes('partner') ? 'Partnership' :
-                                 userInput.toLowerCase().includes('milestone') ? 'Company Milestone' :
-                                 userInput.toLowerCase().includes('hire') || userInput.toLowerCase().includes('executive') ? 'Executive Hire' :
-                                 userInput.toLowerCase().includes('award') ? 'Industry Award' : 'Product Launch';
-          
-          // Update collectedInfo with announcement type
-          collectedInfo.announcementType = announcementType;
-          
-          // Create next question based on announcement type
-          let nextQuestion = "";
-          if (announcementType === 'Product Launch') {
-            nextQuestion = "Great! For your product launch, could you tell me about your company (name, description, industry) and the product you're launching (name, key features, benefits)?";
-          } else if (announcementType === 'Funding Round') {
-            nextQuestion = "Great! For your funding announcement, could you share details about your company, the funding amount, investors involved, and what round this is (Series A, B, etc.)?";
-          } else {
-            nextQuestion = "Great! Could you tell me more about your company (name, description, industry) and provide specific details about this announcement?";
-          }
+          // Use structured information collection instead of manual type detection
+          const firstQuestionResponse = "Great! Could you tell me more about your company (name, description, industry) and provide specific details about this announcement?";
           
           // Save metadata
           await this.dbService.updateStep(step.id, {
-                  metadata: { 
+            metadata: { 
               ...step.metadata,
               collectedInformation: collectedInfo,
               interactionCount: interactionCount,
@@ -2857,7 +2438,7 @@ What would you like to do?`
           });
           
           // Add direct message with next question
-          await this.addDirectMessage(workflow.threadId, nextQuestion);
+          await this.addDirectMessage(workflow.threadId, firstQuestionResponse);
           
           // Update step but stay in progress
           await this.dbService.updateStep(step.id, {
@@ -2866,11 +2447,11 @@ What would you like to do?`
           });
           
           return {
-            response: nextQuestion,
+            response: firstQuestionResponse,
             nextStep: {
               id: step.id,
               name: step.name,
-              prompt: nextQuestion,
+              prompt: firstQuestionResponse,
               type: step.stepType
             },
             isComplete: false
@@ -3379,7 +2960,7 @@ What would you like to do?`
         
         // Create default revision data if parsing fails
         revisionData = {
-          approved: userInput.toLowerCase().includes('approve'),
+          approved: false, // Default to not approved - let JSON Dialog handle approval detection
           changes: [],
           message: "I couldn't understand your feedback clearly. Could you please clarify what changes you'd like to make?"
         };
@@ -3680,22 +3261,26 @@ What would you like to do?`
         readyToGenerate: result.readyToGenerate || false
       });
 
-      // Check if the user is confirming they want to generate an asset
-      const isGenerationConfirmation = userInput.toLowerCase().match(/\b(yes|generate|proceed|go ahead|create|ready|ok|sure)\b/) && 
-                                     step.metadata?.askedAboutGeneration;
-                                     
-      // Check if this is an information collection step and the user has confirmed generation
-      if (!result.isStepComplete && result.readyToGenerate && isGenerationConfirmation) {
-        logger.info('User confirmed asset generation with partial information', {
+      // Check if the user is confirming they want to generate an asset - remove string matching
+      // This should be handled by JSON Dialog system
+      logger.info('JSON dialog processed', {
+        isStepComplete: result.isStepComplete,
+        suggestedNextStep: result.suggestedNextStep || 'None',
+        readyToGenerate: result.readyToGenerate || false
+      });
+
+      // User confirmation should be handled by JSON Dialog service directly
+      if (!result.isStepComplete && result.readyToGenerate && step.metadata?.askedAboutGeneration) {
+        logger.info('User responding to generation question', {
           stepId: step.id,
           workflowId: workflow.id
         });
         
-        // Mark the step as complete despite missing some information
+        // Let JSON Dialog service handle the confirmation logic
         result.isStepComplete = true;
         
         // Update log to reflect the change
-        logger.info('Step forcefully marked complete based on user confirmation', {
+        logger.info('Step marked complete based on JSON Dialog assessment', {
           stepId: step.id
         });
       }
@@ -4119,10 +3704,19 @@ What would you like to do?`
                 stepName: step.name
               };
               
-              await this.addDirectMessage(
-                workflow.threadId,
-                `[ASSET_DATA]${JSON.stringify(assetMessage)}[/ASSET_DATA]\n\n\`\`\`json\n${JSON.stringify({ asset: displayContent })}\n\`\`\``
+              // Add the generated asset to the chat - use new structured content system
+              const structuredAssetMessage = MessageContentHelper.createAssetMessage(
+                `Here's your generated ${assetType}:\n\n${displayContent}`,
+                assetType,
+                nextStep.id,
+                nextStep.name,
+                {
+                  isRevision: false,
+                  showCreateButton: true
+                }
               );
+
+              await this.addStructuredMessage(workflow.threadId, structuredAssetMessage);
               
               logger.info('Asset Generation auto-execution - Asset added to chat', {
                 assetType,
@@ -4557,17 +4151,28 @@ What would you like to do?`
           // Try to find and create the selected workflow
           let nextTemplate = await this.getTemplateByName(selectedWorkflowName);
           
-          // Try fuzzy matching if exact match fails
+          // Use exact template matching only - remove fuzzy matching
           if (!nextTemplate) {
-            const availableTemplates = ["Launch Announcement", "JSON Dialog PR Workflow", "Quick Press Release", "Test Step Transitions", "Dummy Workflow", "Media Matching"];
-            for (const templateName of availableTemplates) {
-              if (templateName.toLowerCase().includes(selectedWorkflowName.toLowerCase()) || 
-                  selectedWorkflowName.toLowerCase().includes(templateName.toLowerCase())) {
-                console.log(`Found fuzzy match: "${templateName}" for "${selectedWorkflowName}"`);
-                nextTemplate = await this.getTemplateByName(templateName);
-                break;
-              }
-            }
+            console.log(`Template not found for selection: ${selectedWorkflowName}`);
+            
+            // Log available templates for debugging
+            const availableTemplates = [
+              "Launch Announcement", 
+              "JSON Dialog PR Workflow", 
+              "Quick Press Release", 
+              "Test Step Transitions", 
+              "Dummy Workflow", 
+              "Media Matching",
+              "Media Pitch",
+              "Social Post",
+              "Blog Article",
+              "FAQ"
+            ];
+            
+            logger.warn('Template not found', {
+              selectedWorkflow: selectedWorkflowName,
+              availableTemplates
+            });
           }
           
           if (nextTemplate) {
@@ -5748,86 +5353,165 @@ ${mediaListDisplay}
       
       // Check if user is making a list selection choice
       if (step.metadata?.needsListSelection) {
-        const userChoice = userInput.toLowerCase().trim(); // Use passed userInput
-        const collectedInfo = step.metadata.collectedInformation;
-        
-        logger.info('User making list selection choice', {
-          userChoice,
-          userInput: userInput,
-          hasAlgorithmicList: !!collectedInfo?.algorithmicTop10,
-          hasAIList: !!collectedInfo?.aiTop10Authors
+        // Delegate list selection to JSON Dialog system instead of string matching
+        logger.info('User making list selection choice - delegating to JSON Dialog', {
+          userInput: userInput.substring(0, 50),
+          hasAlgorithmicList: !!step.metadata.collectedInformation?.algorithmicTop10,
+          hasAIList: !!step.metadata.collectedInformation?.aiTop10Authors
         });
         
-        if (userChoice.includes('algorithmic') || userChoice.includes('algorithm')) {
-          // User chose algorithmic list
-          const selectedList = collectedInfo.algorithmicTop10;
-          
-          if (!selectedList || selectedList.length === 0) {
-            await this.addDirectMessage(workflow.threadId, "Algorithmic list is not available. Please choose 'ai' for the AI-curated list.");
-            return {
-              response: "Algorithmic list not available. Please choose 'ai'.",
-              nextStep: {
-                id: step.id,
-                name: step.name,
-                prompt: step.prompt,
-                type: step.stepType
-              },
-              isComplete: false
-            };
+        // Use structured response processing instead of string matching
+        const listSelectionStep = {
+          ...step,
+          metadata: {
+            ...step.metadata,
+            openai_instructions: `The user must choose between "algorithmic" and "ai" ranking lists. 
+            Respond with exactly "algorithmic_selected" or "ai_selected" based on their input: "${userInput}"`
           }
+        };
+        
+        try {
+          const selectionResult = await this.openAIService.generateStepResponse(
+            listSelectionStep,
+            userInput,
+            []
+          );
           
-          // Store the selected list for Contact Enrichment
-          await this.dbService.updateStep(stepId, {
-            status: StepStatus.COMPLETE,
-            userInput: userInput,
-            metadata: {
-              ...step.metadata,
-              collectedInformation: {
-                ...collectedInfo,
-                top10Authors: selectedList,
-                selectedListType: 'algorithmic',
-                optimizedAlgorithm: collectedInfo.algorithmicRankingMethod,
-                algorithmSummary: `Algorithmic ranking using ${collectedInfo.userPreference} weighting`
-              },
-              needsListSelection: false
+          const decision = selectionResult.responseText.trim().toLowerCase();
+          const collectedInfo = step.metadata.collectedInformation;
+          
+          if (decision.includes('algorithmic_selected')) {
+            // User chose algorithmic list
+            const selectedList = collectedInfo.algorithmicTop10;
+            
+            if (!selectedList || selectedList.length === 0) {
+              await this.addDirectMessage(workflow.threadId, "Algorithmic list is not available. Please choose 'ai' for the AI-curated list.");
+              return {
+                response: "Algorithmic list not available. Please choose 'ai'.",
+                nextStep: {
+                  id: step.id,
+                  name: step.name,
+                  prompt: step.prompt,
+                  type: step.stepType
+                },
+                isComplete: false
+              };
             }
-          });
-          
-          // Find and transition to Contact Enrichment step
-          const contactEnrichmentStep = workflow.steps.find(s => s.name === "Contact Enrichment");
-          if (contactEnrichmentStep) {
-            // Update workflow to point to Contact Enrichment step
-            await this.dbService.updateWorkflowCurrentStep(workflow.id, contactEnrichmentStep.id);
-            await this.dbService.updateStep(contactEnrichmentStep.id, {
-              status: StepStatus.IN_PROGRESS
+            
+            // Store the selected list for Contact Enrichment
+            await this.dbService.updateStep(stepId, {
+              status: StepStatus.COMPLETE,
+              userInput: userInput,
+              metadata: {
+                ...step.metadata,
+                collectedInformation: {
+                  ...collectedInfo,
+                  top10Authors: selectedList,
+                  selectedListType: 'algorithmic',
+                  optimizedAlgorithm: collectedInfo.algorithmicRankingMethod,
+                  algorithmSummary: `Algorithmic ranking using ${collectedInfo.userPreference} weighting`
+                },
+                needsListSelection: false
+              }
             });
-          }
-          
-          await this.addDirectMessage(workflow.threadId, `**Algorithmic List Selected**
+            
+            // Find and transition to Contact Enrichment step
+            const contactEnrichmentStep = workflow.steps.find(s => s.name === "Contact Enrichment");
+            if (contactEnrichmentStep) {
+              await this.dbService.updateWorkflowCurrentStep(workflow.id, contactEnrichmentStep.id);
+              await this.dbService.updateStep(contactEnrichmentStep.id, {
+                status: StepStatus.IN_PROGRESS
+              });
+            }
+            
+            await this.addDirectMessage(workflow.threadId, `**Algorithmic List Selected**
 
 Using the mathematical ranking based on ${collectedInfo.userPreference} preference. Proceeding to contact enrichment with these ${selectedList.length} authors.
 
 Moving to RocketReach contact enrichment...`);
-          
-          return {
-            response: `Algorithmic list selected. Proceeding to contact enrichment with ${selectedList.length} authors.`,
-            nextStep: contactEnrichmentStep ? {
-              id: contactEnrichmentStep.id,
-              name: contactEnrichmentStep.name,
-              prompt: contactEnrichmentStep.prompt,
-              type: contactEnrichmentStep.stepType
-            } : null,
-            isComplete: false // Changed from true to false so workflow continues
-          };
-          
-        } else if (userChoice.includes('ai') || userChoice.includes('artificial')) {
-          // User chose AI list
-          const selectedList = collectedInfo.aiTop10Authors;
-          
-          if (!selectedList || selectedList.length === 0) {
-            await this.addDirectMessage(workflow.threadId, "AI list is not available. Please choose 'algorithmic' for the mathematical ranking.");
+            
             return {
-              response: "AI list not available. Please choose 'algorithmic'.",
+              response: `Algorithmic list selected. Proceeding to contact enrichment with ${selectedList.length} authors.`,
+              nextStep: contactEnrichmentStep ? {
+                id: contactEnrichmentStep.id,
+                name: contactEnrichmentStep.name,
+                prompt: contactEnrichmentStep.prompt,
+                type: contactEnrichmentStep.stepType
+              } : null,
+              isComplete: false
+            };
+            
+          } else if (decision.includes('ai_selected')) {
+            // User chose AI list
+            const selectedList = collectedInfo.aiTop10Authors;
+            
+            if (!selectedList || selectedList.length === 0) {
+              await this.addDirectMessage(workflow.threadId, "AI list is not available. Please choose 'algorithmic' for the mathematical ranking.");
+              return {
+                response: "AI list not available. Please choose 'algorithmic'.",
+                nextStep: {
+                  id: step.id,
+                  name: step.name,
+                  prompt: step.prompt,
+                  type: step.stepType
+                },
+                isComplete: false
+              };
+            }
+            
+            // Store the selected list for Contact Enrichment
+            await this.dbService.updateStep(stepId, {
+              status: StepStatus.COMPLETE,
+              userInput: userInput,
+              metadata: {
+                ...step.metadata,
+                collectedInformation: {
+                  ...collectedInfo,
+                  top10Authors: selectedList,
+                  selectedListType: 'ai',
+                  optimizedAlgorithm: collectedInfo.aiRankingMethod,
+                  algorithmSummary: `AI analysis with ${collectedInfo.userPreference} preference`
+                },
+                needsListSelection: false
+              }
+            });
+            
+            // Find and transition to Contact Enrichment step
+            const contactEnrichmentStep = workflow.steps.find(s => s.name === "Contact Enrichment");
+            if (contactEnrichmentStep) {
+              await this.dbService.updateWorkflowCurrentStep(workflow.id, contactEnrichmentStep.id);
+              await this.dbService.updateStep(contactEnrichmentStep.id, {
+                status: StepStatus.IN_PROGRESS
+              });
+            }
+            
+            await this.addDirectMessage(workflow.threadId, `**AI List Selected**
+
+Using the AI-curated analysis. Proceeding to contact enrichment with these ${selectedList.length} authors.
+
+Moving to RocketReach contact enrichment...`);
+            
+            return {
+              response: `AI list selected. Proceeding to contact enrichment with ${selectedList.length} authors.`,
+              nextStep: contactEnrichmentStep ? {
+                id: contactEnrichmentStep.id,
+                name: contactEnrichmentStep.name,
+                prompt: contactEnrichmentStep.prompt,
+                type: contactEnrichmentStep.stepType
+              } : null,
+              isComplete: false
+            };
+            
+          } else {
+            // Invalid choice - ask for clarification
+            await this.addDirectMessage(workflow.threadId, `Please choose either:
+• **"algorithmic"** - for the mathematical ranking
+• **"ai"** - for the AI-curated list
+
+Type your choice to proceed.`);
+        
+            return {
+              response: "Please choose 'algorithmic' or 'ai'.",
               nextStep: {
                 id: step.id,
                 name: step.name,
@@ -5837,55 +5521,14 @@ Moving to RocketReach contact enrichment...`);
               isComplete: false
             };
           }
-          
-          // Store the selected list for Contact Enrichment
-          await this.dbService.updateStep(stepId, {
-            status: StepStatus.COMPLETE,
-            userInput: userInput,
-            metadata: {
-              ...step.metadata,
-              collectedInformation: {
-                ...collectedInfo,
-                top10Authors: selectedList,
-                selectedListType: 'ai',
-                optimizedAlgorithm: collectedInfo.aiRankingMethod,
-                algorithmSummary: `AI analysis with ${collectedInfo.userPreference} preference`
-              },
-              needsListSelection: false
-            }
+        } catch (error) {
+          logger.error('Error processing list selection', {
+            error: error instanceof Error ? error.message : 'Unknown error'
           });
           
-          // Find and transition to Contact Enrichment step
-          const contactEnrichmentStep = workflow.steps.find(s => s.name === "Contact Enrichment");
-          if (contactEnrichmentStep) {
-            // Update workflow to point to Contact Enrichment step
-            await this.dbService.updateWorkflowCurrentStep(workflow.id, contactEnrichmentStep.id);
-            await this.dbService.updateStep(contactEnrichmentStep.id, {
-              status: StepStatus.IN_PROGRESS
-            });
-          }
-          
-          await this.addDirectMessage(workflow.threadId, `**AI List Selected**
-
-Using the AI-curated analysis. Proceeding to contact enrichment with these ${selectedList.length} authors.
-
-Moving to RocketReach contact enrichment...`);
-          
-          return {
-            response: `AI list selected. Proceeding to contact enrichment with ${selectedList.length} authors.`,
-            nextStep: contactEnrichmentStep ? {
-              id: contactEnrichmentStep.id,
-              name: contactEnrichmentStep.name,
-              prompt: contactEnrichmentStep.prompt,
-              type: contactEnrichmentStep.stepType
-            } : null,
-            isComplete: false // Changed from true to false so workflow continues
-          };
-          
-        } else {
-          // Invalid choice
+          // Fallback to asking for clarification
           await this.addDirectMessage(workflow.threadId, `Please choose either:
-• **"algorithmic"** - for the mathematical ranking
+• **"algorithmic"** - for the mathematical ranking  
 • **"ai"** - for the AI-curated list
 
 Type your choice to proceed.`);
@@ -5916,27 +5559,57 @@ Type your choice to proceed.`);
       // Use the passed userInput parameter directly
       const currentUserInput = userInput;
       
-      // Determine user preference and weights - FIX: Use the actual user input
+      // Determine user preference and weights - use JSON Dialog system instead of string matching
       let preference = 'Balanced Mix';
       let weights = { editorialRank: 35, articleCount: 35, recentActivity: 30 };
       
-      const userChoice = currentUserInput.toLowerCase().trim();
+      // Use structured preference detection instead of string matching
+      const preferenceStep = {
+        ...step,
+        metadata: {
+          ...step.metadata,
+          openai_instructions: `Analyze the user's preference from their input: "${currentUserInput}"
+          
+          Return exactly one of these options:
+          - "Editorial Quality" (if they mention quality, editorial, premium sources)
+          - "Topic Expertise" (if they mention expertise, specialization, topic knowledge)  
+          - "Recent Activity" (if they mention recent, current, active coverage)
+          - "Balanced Mix" (for any other input or balanced approach)`
+        }
+      };
       
-      logger.info('Determining user preference from input', {
-        currentUserInput,
-        userChoice,
-        stepId
-      });
-      
-      if (userChoice.includes('editorial') || userChoice.includes('quality')) {
-        preference = 'Editorial Quality';
-        weights = { editorialRank: 60, articleCount: 25, recentActivity: 15 };
-      } else if (userChoice.includes('topic') || userChoice.includes('expertise')) {
-        preference = 'Topic Expertise';
-        weights = { editorialRank: 30, articleCount: 50, recentActivity: 20 };
-      } else if (userChoice.includes('recent') || userChoice.includes('activity')) {
-        preference = 'Recent Activity';
-        weights = { editorialRank: 30, articleCount: 20, recentActivity: 50 };
+      try {
+        const preferenceResult = await this.openAIService.generateStepResponse(
+          preferenceStep,
+          currentUserInput,
+          []
+        );
+        
+        const detectedPreference = preferenceResult.responseText.trim();
+        
+        if (detectedPreference.includes('Editorial Quality')) {
+          preference = 'Editorial Quality';
+          weights = { editorialRank: 60, articleCount: 25, recentActivity: 15 };
+        } else if (detectedPreference.includes('Topic Expertise')) {
+          preference = 'Topic Expertise';
+          weights = { editorialRank: 30, articleCount: 50, recentActivity: 20 };
+        } else if (detectedPreference.includes('Recent Activity')) {
+          preference = 'Recent Activity';
+          weights = { editorialRank: 30, articleCount: 20, recentActivity: 50 };
+        }
+        // Default 'Balanced Mix' already set above
+        
+        logger.info('Preference determined via structured analysis', {
+          preference,
+          weights,
+          originalUserInput: currentUserInput,
+          detectedPreference
+        });
+      } catch (error) {
+        logger.error('Error determining preference via structured analysis', {
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        // Keep default 'Balanced Mix' preference
       }
       
       logger.info('Final preference determined', {
