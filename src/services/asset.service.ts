@@ -141,12 +141,18 @@ export class AssetService {
       assetContent = stepData.aiSuggestion;
     }
     
-    // Extract asset type 
-    const assetType = metadata.assetType || 
+    // Extract asset type - check all the places where asset types are stored in workflows
+    const collectedInfo = metadata.collectedInformation || {};
+    const assetType = collectedInfo.selectedAssetType || 
+                     collectedInfo.assetType || 
+                     metadata.assetType ||
+                     metadata.selectedAssetType ||
                      (stepData.name.includes('Press Release') ? 'Press Release' :
                       stepData.name.includes('Media Pitch') ? 'Media Pitch' :
                       stepData.name.includes('Social Post') ? 'Social Post' :
-                      'Document');
+                      stepData.name.includes('Blog Post') ? 'Blog Post' :
+                      stepData.name.includes('FAQ') ? 'FAQ Document' :
+                      'Press Release'); // Default to Press Release instead of Document
     
     // Extract asset title - first try metadata, then step name or a default title
     const assetTitle = metadata.assetTitle || 
@@ -159,7 +165,13 @@ export class AssetService {
     // Use step name as asset name if not specified in metadata
     const assetName = metadata.assetName || stepData.name;
     
-    logger.info(`Extracted asset data: ${assetName} (${assetType}), content length: ${assetContent?.length || 0}`);
+    logger.info(`Extracted asset data: ${assetName} (${assetType}), content length: ${assetContent?.length || 0}`, {
+      foundInCollectedInfo: !!(collectedInfo.selectedAssetType || collectedInfo.assetType),
+      foundInMetadata: !!metadata.assetType,
+      foundInStepName: stepData.name.includes('Press Release') || stepData.name.includes('Media Pitch') || stepData.name.includes('Social Post'),
+      collectedInfoKeys: Object.keys(collectedInfo),
+      metadataKeys: Object.keys(metadata)
+    });
     
     // Return structured asset data
     return {
