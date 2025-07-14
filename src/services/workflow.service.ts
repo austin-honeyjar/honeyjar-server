@@ -1338,9 +1338,10 @@ export class WorkflowService {
           }
         });
         
-        // 9. Add the generated asset as a direct message using structured content
-        const structuredAssetMessage = MessageContentHelper.createAssetMessage(
-          `Here's your generated ${assetType}:\n\n${assetContent}`,
+        // Add asset using unified structured messaging
+        await this.addAssetMessage(
+          workflow.threadId,
+          assetContent,
           assetType,
           stepId,
           step.name,
@@ -1348,11 +1349,6 @@ export class WorkflowService {
             isRevision: false,
             showCreateButton: true
           }
-        );
-        
-        await this.addStructuredMessage(
-          workflow.threadId,
-          structuredAssetMessage
         );
         
         // Continue to next step or complete workflow
@@ -2288,10 +2284,6 @@ Respond with only "search_more" or "proceed" based on their input.`;
       // Check if this is a status message that should be prefixed
       let messageContent = content;
       
-      // Check if this is an asset message
-      const isAssetMessage = content.includes("Here's your generated") || 
-                            content.includes("Here's your revised");
-      
       // Check if this is a media contacts list message - should never get a prefix
       const isMediaContactsList = content.includes("**Media Contacts List Generated Successfully!**") ||
                                   content.includes("## **TOP MEDIA CONTACTS**") ||
@@ -2299,15 +2291,10 @@ Respond with only "search_more" or "proceed" based on their input.`;
       
       // Check if this is a step prompt message (initial step instructions to user)
       const isStepPrompt = !content.startsWith('[') && // Not already prefixed
-                          !content.includes("Here's your") && // Not an asset
                           !content.includes("regenerating") && // Not status
                           !content.includes("generating") && // Not status
                           !content.includes("completed") && // Not status
                           !isMediaContactsList; // Not a media contacts list
-      
-      if (isAssetMessage) {
-        logger.info(`Adding asset message to thread ${threadId}, content length: ${content.length}`);
-      }
       
       if (isMediaContactsList) {
         logger.info(`Adding media contacts list message to thread ${threadId}, content length: ${content.length}`);
@@ -2340,20 +2327,14 @@ Respond with only "search_more" or "proceed" based on their input.`;
         messageContent = `[System] ${content}`;
       }
       
-      // Check for duplicate messages - search for messages with the same content
-      // This is especially important for the first step of the Launch Announcement workflow
+      // Simplified duplicate checking - only for specific workflow prompts
       const recentMessages = await db.query.chatMessages.findMany({
         where: eq(chatMessages.threadId, threadId),
         orderBy: (messages, { desc }) => [desc(messages.createdAt)],
-        limit: 5, // Check the 5 most recent messages
+        limit: 5,
       });
       
-      // Check if this exact message content already exists in the recent messages
-      const isDuplicate = recentMessages.some(msg => 
-        msg.content === messageContent
-      );
-      
-      // Also check for the first step of Launch Announcement to prevent duplicates
+      // Only check duplicates for announcement type questions to prevent workflow restart issues
       const isAnnouncementTypeQuestion = 
         content.includes("announcement types") && 
         content.includes("Which type best fits");
@@ -2364,13 +2345,13 @@ Respond with only "search_more" or "proceed" based on their input.`;
                messageText.includes("Which type best fits");
       });
       
-      // Skip adding the message if it's a duplicate or if it's the announcement type question and we already have one
-      if (isDuplicate || (isAnnouncementTypeQuestion && hasAnnouncementTypeQuestion)) {
-        console.log(`Skipping duplicate message: "${messageContent.substring(0, 50)}..."`);
+      // Skip adding only if it's the specific announcement type question and we already have one
+      if (isAnnouncementTypeQuestion && hasAnnouncementTypeQuestion) {
+        console.log(`Skipping duplicate announcement type question: "${messageContent.substring(0, 50)}..."`);
         return;
       }
       
-      // Add the message if it's not a duplicate
+      // Add the message
       await db.insert(chatMessages)
         .values({
           threadId,
@@ -2379,13 +2360,9 @@ Respond with only "search_more" or "proceed" based on their input.`;
           userId: "system"
         });
       
-      if (isAssetMessage) {
-        logger.info(`Successfully added asset message to thread ${threadId}`);
-      } else {
       console.log(`DIRECT MESSAGE ADDED: '${messageContent.substring(0, 50)}...' to thread ${threadId}`);
-      }
     } catch (error) {
-      logger.error('Error handling JSON message', {
+      logger.error('Error adding direct message', {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined
       });
@@ -2806,11 +2783,18 @@ Respond with only "search_more" or "proceed" based on their input.`;
         }
       });
       
-      // 10. Add the generated asset as a direct message
+      // 10. Add the generated asset as an asset message
       
-      await this.addDirectMessage(
-        workflow.threadId, 
-        `Here's your generated ${assetType}:\n\n${finalAssetContent}`
+      await this.addAssetMessage(
+        workflow.threadId,
+        finalAssetContent,
+        assetType,
+        step.id,
+        step.name,
+        {
+          isRevision: false,
+          showCreateButton: true
+        }
       );
       
       // 11. Move to the asset revision step
@@ -3087,10 +3071,16 @@ Respond with only "search_more" or "proceed" based on their input.`;
         await this.dbService.updateStep(step.id, {
           metadata: {
             ...step.metadata,
-            revisedAsset: revisedAsset,
-            generatedAsset: revisedAsset, // Replace original with revised
-            revisionFeedback: userInput,
-            revisionChanges: revisionData.changes
+            generatedAsset: revisedAsset,
+            originalAsset: originalAsset,
+            revisionHistory: [
+              ...(step.metadata?.revisionHistory || []),
+              {
+                userFeedback: userInput,
+                requestedChanges: revisionData.changes,
+                revisedAt: new Date().toISOString()
+              }
+            ]
           }
         });
                 
@@ -3202,6 +3192,11 @@ Respond with only "search_more" or "proceed" based on their input.`;
       const workflow = await this.dbService.getWorkflow(step.workflowId);
       if (!workflow) {
         throw new Error(`Workflow not found: ${step.workflowId}`);
+      }
+
+      // Special handling for Asset Review steps
+      if (step.name === "Asset Review" || step.name === "Asset Revision") {
+        return await this.handleAssetReviewStep(step, userInput, workflow);
       }
 
       // Special handling for "Generate an Asset" step in Quick Press Release workflow
@@ -3694,19 +3689,10 @@ Respond with only "search_more" or "proceed" based on their input.`;
                 }
               });
               
-              // Add the generated asset to the chat - use clean display content
-              const assetMessage = {
-                type: 'asset_generated',
-                assetType: assetType,
-                content: assetContent,
-                displayContent: displayContent,
-                stepId: step.id,
-                stepName: step.name
-              };
-              
-              // Add the generated asset to the chat - use new structured content system
-              const structuredAssetMessage = MessageContentHelper.createAssetMessage(
-                `Here's your generated ${assetType}:\n\n${displayContent}`,
+              // Add asset using unified structured messaging
+              await this.addAssetMessage(
+                workflow.threadId,
+                displayContent,
                 assetType,
                 nextStep.id,
                 nextStep.name,
@@ -3715,8 +3701,6 @@ Respond with only "search_more" or "proceed" based on their input.`;
                   showCreateButton: true
                 }
               );
-
-              await this.addStructuredMessage(workflow.threadId, structuredAssetMessage);
               
               logger.info('Asset Generation auto-execution - Asset added to chat', {
                 assetType,
@@ -3726,8 +3710,8 @@ Respond with only "search_more" or "proceed" based on their input.`;
               // Move to the next step (Asset Review)
               const assetReviewStep = refreshedWorkflow.steps.find(s => s.name === "Asset Review");
               if (assetReviewStep) {
-                // Initialize the Asset Review step with context
-                await this.initializeStepWithContext(assetReviewStep.id, refreshedWorkflow);
+                // Skip expensive context initialization to improve performance
+                // await this.initializeStepWithContext(assetReviewStep.id, refreshedWorkflow);
                 
                 // Update the Asset Review step
                 await this.dbService.updateStep(assetReviewStep.id, {
@@ -3743,30 +3727,19 @@ Respond with only "search_more" or "proceed" based on their input.`;
                 // Update workflow to point to the Asset Review step
                 await this.dbService.updateWorkflowCurrentStep(workflow.id, assetReviewStep.id);
                 
-                // Get the updated step with the new prompt
-                const updatedReviewStep = await this.dbService.getStep(assetReviewStep.id);
-                const reviewPrompt = updatedReviewStep?.prompt || assetReviewStep.prompt;
+                // Use the original prompt instead of expensive AI-generated one
+                const reviewPrompt = assetReviewStep.prompt;
                 
-                // Send the review prompt
-                if (reviewPrompt) {
-                  await this.addDirectMessage(workflow.threadId, reviewPrompt);
-                  
-                  // Mark prompt as sent
-                  await this.dbService.updateStep(assetReviewStep.id, {
-                    metadata: { ...assetReviewStep.metadata, initialPromptSent: true }
-                  });
-                }
-              
-              return {
+                return {
                   response: `${assetType} generated successfully. Please review it.`,
-                nextStep: {
+                  nextStep: {
                     id: assetReviewStep.id,
                     name: assetReviewStep.name,
                     prompt: reviewPrompt,
                     type: assetReviewStep.stepType
-                },
-                isComplete: false
-              };
+                  },
+                  isComplete: false
+                };
               } else {
                 // No review step, complete the workflow
                 await this.dbService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
@@ -4086,18 +4059,17 @@ Respond with only "search_more" or "proceed" based on their input.`;
         throw new Error(`Step not found: ${stepId}`);
       }
       
-      // If this is the first time processing this step and no initialPromptSent flag is set
-      // Send the prompt to the user
-      if (currentStep.prompt && !currentStep.metadata?.initialPromptSent) {
-        await this.addDirectMessage(workflow.threadId, currentStep.prompt);
-        
-        // Mark that we've sent the prompt
-        await this.dbService.updateStep(currentStep.id, {
-          metadata: { ...currentStep.metadata, initialPromptSent: true }
-        });
-        
-        logger.info(`Sent initial prompt for JSON step ${currentStep.name} in handleJsonMessage`);
-      }
+      // Remove duplicate prompt sending - handleJsonDialogStep will handle this
+      // if (currentStep.prompt && !currentStep.metadata?.initialPromptSent) {
+      //   await this.addDirectMessage(workflow.threadId, currentStep.prompt);
+      //   
+      //   // Mark that we've sent the prompt
+      //   await this.dbService.updateStep(currentStep.id, {
+      //     metadata: { ...currentStep.metadata, initialPromptSent: true }
+      //   });
+      //   
+      //   logger.info(`Sent initial prompt for JSON step ${currentStep.name} in handleJsonMessage`);
+      // }
 
       // Special case for Test Step Transitions, Step 4
       const template = await this.dbService.getTemplate(workflow.templateId);
@@ -4398,6 +4370,34 @@ Respond with only "search_more" or "proceed" based on their input.`;
       stepName: step.name,
       originalPrompt: step.prompt
     });
+    
+    // Special handling for Asset Review steps
+    if (step.name === "Asset Review" || step.name === "Asset Revision") {
+      // Find the Asset Generation step and get the generated asset
+      const assetGenerationStep = workflow.steps.find(s => s.name === "Asset Generation");
+      if (assetGenerationStep?.metadata?.generatedAsset) {
+        const generatedAsset = assetGenerationStep.metadata.generatedAsset;
+        const assetType = assetGenerationStep.metadata.assetType || "Press Release";
+        
+        // Update the Asset Review step with the generated asset
+        await this.dbService.updateStep(stepId, {
+          metadata: {
+            ...step.metadata,
+            generatedAsset: generatedAsset,
+            assetType: assetType,
+            initializedWithAsset: true
+          }
+        });
+        
+        logger.info('Initialized Asset Review step with generated asset', {
+          stepId,
+          assetType,
+          assetLength: generatedAsset.length
+        });
+        
+        return; // Early return for Asset Review steps
+      }
+    }
     
     // Gather context from all previous steps
     const previousContext = await this.gatherPreviousStepsContext(workflow);
@@ -6017,6 +6017,254 @@ CRITICAL: Return raw JSON only, no markdown formatting, no code blocks, no backt
       logger.error('Error adding structured message', {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Handle Asset Review step - processes approval or revision requests
+   */
+  private async handleAssetReviewStep(step: WorkflowStep, userInput: string, workflow: Workflow): Promise<{
+    response: string;
+    nextStep?: any;
+    isComplete: boolean;
+  }> {
+    try {
+      logger.info('Processing Asset Review step', {
+        stepId: step.id,
+        stepName: step.name,
+        userInput: userInput.substring(0, 50) + '...'
+      });
+
+      // Get conversation history for context
+      const conversationHistory = await this.getThreadConversationHistory(workflow.threadId, 10);
+
+      // Process with JsonDialogService
+      const result = await this.jsonDialogService.processMessage(step, userInput, conversationHistory, workflow.threadId);
+
+      logger.info('Asset Review JSON dialog result', {
+        isStepComplete: result.isStepComplete,
+        reviewDecision: result.collectedInformation?.reviewDecision,
+        hasChanges: !!(result.collectedInformation?.requestedChanges?.length)
+      });
+
+      // Update step with user input
+      await this.dbService.updateStep(step.id, {
+        userInput: userInput,
+        metadata: {
+          ...step.metadata,
+          collectedInformation: result.collectedInformation
+        }
+      });
+
+      // Check the review decision
+      const reviewDecision = result.collectedInformation?.reviewDecision;
+
+      if (reviewDecision === 'approved') {
+        // User approved - complete the step and workflow
+        await this.dbService.updateStep(step.id, {
+          status: StepStatus.COMPLETE
+        });
+
+        await this.dbService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
+        await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
+
+        const approvalMessage = "Asset approved! Your workflow is now complete.";
+        await this.addDirectMessage(workflow.threadId, approvalMessage);
+
+        return {
+          response: approvalMessage,
+          isComplete: true
+        };
+      } 
+      else if (reviewDecision === 'revision_requested') {
+        // User wants changes - regenerate the asset
+        const requestedChanges = result.collectedInformation?.requestedChanges || [];
+        
+        if (requestedChanges.length === 0) {
+          // No specific changes provided - ask for clarification
+          const clarificationMessage = "I'd be happy to make changes! Could you please specify what you'd like me to modify?";
+          await this.addDirectMessage(workflow.threadId, clarificationMessage);
+          
+          return {
+            response: clarificationMessage,
+            nextStep: {
+              id: step.id,
+              name: step.name,
+              prompt: clarificationMessage,
+              type: step.stepType
+            },
+            isComplete: false
+          };
+        }
+
+        // Get the original asset from Asset Generation step
+        const assetGenerationStep = workflow.steps.find(s => s.name === "Asset Generation");
+        const originalAsset = assetGenerationStep?.metadata?.generatedAsset || step.metadata?.generatedAsset;
+        
+        if (!originalAsset) {
+          throw new Error('Original asset not found for revision');
+        }
+
+        // Get asset type
+        const assetType = step.metadata?.assetType || 
+                         result.collectedInformation?.assetType || 
+                         assetGenerationStep?.metadata?.assetType || 
+                         "Press Release";
+
+        // Send revision message
+        await this.addDirectMessage(workflow.threadId, `Revising your ${assetType} based on your feedback...`);
+
+        // Create revision prompt
+        const revisionPrompt = `ORIGINAL ASSET:
+${originalAsset}
+
+REQUESTED CHANGES:
+${requestedChanges.map((change: string, index: number) => `${index + 1}. ${change}`).join('\n')}
+
+USER FEEDBACK:
+${userInput}
+
+TASK: Revise the ${assetType} incorporating all the requested changes while maintaining professional quality and structure.
+
+RESPONSE FORMAT: Return ONLY the revised ${assetType} content, no JSON, no explanations.`;
+
+        // Create a step for revision
+        const revisionStep = {
+          ...step,
+          metadata: {
+            ...step.metadata,
+            openai_instructions: revisionPrompt
+          }
+        };
+
+        // Generate revised asset
+        const revisionResult = await this.openAIService.generateStepResponse(
+          revisionStep,
+          revisionPrompt,
+          []
+        );
+
+        let revisedAsset = revisionResult.responseText.trim();
+
+        // Store the revised asset
+        await this.dbService.updateStep(step.id, {
+          metadata: {
+            ...step.metadata,
+            generatedAsset: revisedAsset,
+            originalAsset: originalAsset,
+            revisionHistory: [
+              ...(step.metadata?.revisionHistory || []),
+              {
+                userFeedback: userInput,
+                requestedChanges: requestedChanges,
+                revisedAt: new Date().toISOString()
+              }
+            ]
+          }
+        });
+
+        // Add revised asset using unified structured messaging
+        await this.addAssetMessage(
+          workflow.threadId,
+          revisedAsset,
+          assetType,
+          step.id,
+          step.name,
+          {
+            isRevision: true,
+            showCreateButton: true
+          }
+        );
+
+
+        // Ask for next review
+        const reviewPrompt = `Please review the revised ${assetType}. Let me know if you'd like any additional changes, or if you're satisfied with it.`;
+        await this.addDirectMessage(workflow.threadId, reviewPrompt);
+
+        return {
+          response: reviewPrompt,
+          nextStep: {
+            id: step.id,
+            name: step.name,
+            prompt: reviewPrompt,
+            type: step.stepType
+          },
+          isComplete: false
+        };
+      }
+      else {
+        // Unclear or need clarification
+        const clarificationMessage = result.nextQuestion || 
+          "I want to make sure I understand. Are you happy with the asset as-is, or would you like me to make some changes? If changes, please let me know what specifically you'd like modified.";
+        
+        await this.addDirectMessage(workflow.threadId, clarificationMessage);
+
+        return {
+          response: clarificationMessage,
+          nextStep: {
+            id: step.id,
+            name: step.name,
+            prompt: clarificationMessage,
+            type: step.stepType
+          },
+          isComplete: false
+        };
+      }
+
+    } catch (error) {
+      logger.error('Error handling Asset Review step', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stepId: step.id
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Add an asset message using consistent structured messaging
+   * This is the unified method for all workflows
+   */
+  async addAssetMessage(
+    threadId: string, 
+    assetContent: string, 
+    assetType: string, 
+    stepId: string, 
+    stepName: string, 
+    options: {
+      assetId?: string;
+      isRevision?: boolean;
+      showCreateButton?: boolean;
+    } = {}
+  ): Promise<void> {
+    try {
+      const structuredMessage = MessageContentHelper.createAssetMessage(
+        `Here's your ${options.isRevision ? 'revised' : 'generated'} ${assetType}:\n\n${assetContent}`,
+        assetType,
+        stepId,
+        stepName,
+        {
+          assetId: options.assetId,
+          isRevision: options.isRevision || false,
+          showCreateButton: options.showCreateButton !== false // Default to true
+        }
+      );
+
+      await this.addStructuredMessage(threadId, structuredMessage);
+      
+      logger.info('Added asset message via structured messaging', {
+        assetType,
+        stepId,
+        stepName,
+        isRevision: options.isRevision,
+        contentLength: assetContent.length
+      });
+    } catch (error) {
+      logger.error('Error adding asset message', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        assetType,
+        stepId
       });
       throw error;
     }

@@ -26,6 +26,7 @@ CONTEXT:
 - Adapt your questions based on what information has already been provided
 - Track completion percentage as fields are filled
 - If the user says they don't know or they don't have that information, skip that requirement and move on to the next one.
+- CRITICAL: If the user explicitly requests to "generate the asset" or says "proceed" or similar, respect their request even if some optional information is missing.
 
 REQUIRED INFORMATION FOR PRESS RELEASE:
 - Company name and description
@@ -33,7 +34,7 @@ REQUIRED INFORMATION FOR PRESS RELEASE:
 - Key features or benefits (3-5 points)
 - Release/launch date
 - Pricing/availability information (if applicable)
-- Contact information (name, email, phone)
+- Contact information (name, email, phone) - OPTIONAL, can generate without this
 - Quote preference: auto-generate or provide person for attribution
 - If providing person: executive name and title for quote attribution
 
@@ -44,11 +45,13 @@ INFORMATION PROCESSING GUIDELINES:
 - Ask for most important missing information first
 - Group related questions together
 - If information seems inconsistent, seek clarification
+- PRIORITY: If user says "generate the asset", "proceed", "go ahead", or similar language, mark as complete even if optional fields are missing
+- Contact information is OPTIONAL - if user declines to provide it, proceed with generation
 
 RESPONSE FORMAT:
 You MUST respond with ONLY valid JSON in this format:
 
-While collecting information (less than 90% complete):
+While collecting information (less than 70% complete AND user hasn't requested generation):
 {
   "isComplete": false,
   "collectedInformation": {
@@ -66,14 +69,14 @@ While collecting information (less than 90% complete):
   "suggestedNextStep": null
 }
 
-When sufficient information is collected (90%+ complete):
+When user explicitly requests generation OR sufficient information is collected (70%+ complete):
 {
   "isComplete": true,
   "collectedInformation": {
     // All collected information organized by category
   },
   "missingInformation": ["Any non-critical fields still missing"],
-  "completionPercentage": 95,
+  "completionPercentage": 85,
   "suggestedNextStep": "Asset Generation"
 }`
       }

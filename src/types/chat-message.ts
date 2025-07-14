@@ -142,18 +142,10 @@ export class MessageContentHelper {
             stepName,
             assetId: options.assetId,
             isRevision: options.isRevision || false,
-            showCreateButton: options.showCreateButton !== false
+            showCreateButton: options.showCreateButton !== false // Re-enable decorator buttons - will be hidden in dev mode on frontend
           }
-        },
-        ...(options.showCreateButton !== false ? [{
-          type: 'button' as const,
-          data: {
-            buttonType: 'create_asset' as const,
-            text: `Create ${assetType}`,
-            action: 'create_asset',
-            variant: 'primary' as const
-          }
-        } as ButtonDecorator] : [])
+        }
+        // Removed duplicate button decorator - asset decorator handles the button
       ]
     };
   }

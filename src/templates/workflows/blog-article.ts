@@ -54,7 +54,7 @@ While collecting information (less than 90% complete):
 {
   "isComplete": false,
   "collectedInformation": {
-    "assetType": "Blog Article",
+    "assetType": "Blog Post",
     "companyInfo": {
       "name": "Company name",
       "description": "Company description"

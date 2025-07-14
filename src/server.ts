@@ -239,7 +239,7 @@ async function initializeDatabase() {
             thread_id UUID NOT NULL REFERENCES chat_threads(id),
             user_id TEXT NOT NULL,
             role TEXT NOT NULL,
-            content TEXT NOT NULL,
+            content JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
           
@@ -419,7 +419,36 @@ async function initializeDatabase() {
         
         logger.info('Successfully migrated chat_messages.content to JSONB structured format');
       } else if (currentDataType === 'jsonb') {
-        logger.info('chat_messages.content is already JSONB - structured content migration not needed');
+        logger.info('chat_messages.content is already JSONB - checking for proper structured format...');
+        
+        // Check if existing JSONB messages have proper structured format
+        const unstructuredCheck = await db.execute(sql`
+          SELECT COUNT(*) as count
+          FROM chat_messages 
+          WHERE jsonb_typeof(content) = 'string';
+        `);
+        
+        const unstructuredCount = parseInt(String(unstructuredCheck[0]?.count || 0));
+        
+        if (unstructuredCount > 0) {
+          logger.info(`Found ${unstructuredCount} messages with string content, converting to structured format...`);
+          
+          // Convert string JSONB values to structured format
+          await db.execute(sql`
+            UPDATE chat_messages 
+            SET content = jsonb_build_object(
+              'type', 'text',
+              'text', content #>> '{}',
+              'decorators', '[]'::jsonb,
+              'metadata', '{}'::jsonb
+            )
+            WHERE jsonb_typeof(content) = 'string';
+          `);
+          
+          logger.info('Successfully converted unstructured JSONB messages to structured format');
+        } else {
+          logger.info('All JSONB messages are already in structured format');
+        }
       } else {
         logger.warn(`Unexpected data type for chat_messages.content: ${currentDataType}`);
       }
