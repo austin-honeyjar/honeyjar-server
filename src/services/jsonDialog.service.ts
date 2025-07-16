@@ -1,6 +1,7 @@
-import { WorkflowStep, StepStatus } from '../types/workflow';
+import { WorkflowStep, StepStatus, StepType } from '../types/workflow';
 import { OpenAIService } from './openai.service';
 import logger from '../utils/logger';
+import { MessageContentHelper, StructuredMessageContent } from '../types/chat-message';
 
 /**
  * Simple service for handling JSON Dialog step types
@@ -239,11 +240,37 @@ export class JsonDialogService {
       }
 
       // Special handling for asset generation - add the generated asset to the chat directly
-      // ONLY for steps explicitly named for asset generation, NOT for information collection steps
-      const isAssetGenerationStep = (step.name === "Generate an Asset" || step.name === "Asset Generation") && 
-                                   !step.name.includes("Information Collection") && 
-                                   !step.name.includes("Collection") &&
-                                   (responseData.isComplete || responseData.isStepComplete);
+      // UNIVERSAL DETECTION: Check for asset content regardless of step name
+      const isAssetGenerationStep = (
+        // Traditional step names
+        (step.name === "Generate an Asset" || step.name === "Asset Generation") ||
+        // API_CALL steps that are complete and NOT information collection
+        (step.stepType === StepType.API_CALL && 
+         !step.name.includes("Information Collection") && 
+         !step.name.includes("Collection") &&
+         (responseData.isComplete || responseData.isStepComplete))
+      ) && 
+      // Make sure it's not an information collection step
+      !step.name.includes("Information Collection") && !step.name.includes("Collection");
+      
+      // Enhanced content detection - check if response actually contains asset content
+      const hasAssetContent = !!(
+        responseData.collectedInformation?.asset || 
+        responseData.asset ||
+        responseData.collectedInformation?.generatedAsset ||
+        responseData.generatedAsset ||
+        (responseData.nextQuestion && 
+         responseData.nextQuestion.length > 500 && 
+         (responseData.nextQuestion.includes('**LinkedIn Post:**') || 
+          responseData.nextQuestion.includes('**Twitter') ||
+          responseData.nextQuestion.includes('FOR IMMEDIATE RELEASE') ||
+          responseData.nextQuestion.includes('Here\'s your') ||
+          responseData.nextQuestion.includes('# '))) // Common asset formatting
+      );
+      
+      // Final asset detection: Either explicit asset generation step OR has asset content
+      const shouldProcessAsset = (isAssetGenerationStep && (responseData.isComplete || responseData.isStepComplete)) || 
+                                (hasAssetContent && (responseData.isComplete || responseData.isStepComplete));
       
       // Log potential issues with Information Collection steps generating assets
       if ((step.name.includes("Information Collection") || step.name.includes("Collection")) && 
@@ -305,8 +332,35 @@ export class JsonDialogService {
         }
       }
       
-      if (isAssetGenerationStep) {
-        logger.info('Asset generation step detected', {
+      // DEBUG: Log asset generation step detection
+      logger.info('Universal asset detection analysis', {
+        stepId: step.id,
+        stepName: step.name,
+        stepType: step.stepType,
+        isAssetGenerationStep,
+        hasAssetContent,
+        shouldProcessAsset,
+        stepNameMatches: (step.name === "Generate an Asset" || step.name === "Asset Generation"),
+        isApiCall: step.stepType === StepType.API_CALL,
+        notInformationCollection: !step.name.includes("Information Collection") && !step.name.includes("Collection"),
+        isComplete: responseData.isComplete,
+        isStepComplete: responseData.isStepComplete,
+        contentIndicators: {
+          hasAssetField: !!(responseData.collectedInformation?.asset || responseData.asset),
+          hasGeneratedAssetField: !!(responseData.collectedInformation?.generatedAsset || responseData.generatedAsset),
+          hasLongNextQuestion: !!(responseData.nextQuestion && responseData.nextQuestion.length > 500),
+          containsAssetMarkers: !!(responseData.nextQuestion && (
+            responseData.nextQuestion.includes('**LinkedIn Post:**') || 
+            responseData.nextQuestion.includes('**Twitter') ||
+            responseData.nextQuestion.includes('FOR IMMEDIATE RELEASE') ||
+            responseData.nextQuestion.includes('Here\'s your') ||
+            responseData.nextQuestion.includes('# ')
+          ))
+        }
+      });
+      
+      if (shouldProcessAsset) {
+        logger.info('Universal asset processing activated', {
           stepId: step.id,
           stepName: step.name,
           isComplete: responseData.isComplete,
@@ -420,21 +474,14 @@ export class JsonDialogService {
         }
         
         if (assetContent) {
-          logger.info('Generated asset detected, adding to chat', {
+          logger.info('Generated asset detected, adding to chat via unified method', {
             stepId: step.id,
             stepName: step.name,
-            assetLength: assetContent.length,
-            extractionMethod: responseData.collectedInformation?.asset ? 'collectedInformation.asset' :
-                             responseData.asset ? 'responseData.asset' :
-                             responseData.nextQuestion ? 'nextQuestion' : 'rawResponse'
+            assetLength: assetContent.length
           });
           
           if (actualThreadId) {
             try {
-              // Import dependencies without causing circular imports
-              const { db } = await import('../db');
-              const { chatMessages } = await import('../db/schema');
-              
               // Get asset type from multiple sources with better fallback logic
               let assetType = responseData.collectedInformation?.selectedAssetType ||
                              responseData.collectedInformation?.assetType || 
@@ -451,65 +498,62 @@ export class JsonDialogService {
               }
               
               logger.info('JsonDialogService - Asset type determination', {
-                responseAssetType: responseData.assetType,
-                responseCollectedAssetType: responseData.collectedInformation?.assetType,
-                responseSelectedAssetType: responseData.collectedInformation?.selectedAssetType,
-                collectedInfoAssetType: collectedInfo?.assetType,
-                collectedInfoSelectedAssetType: collectedInfo?.selectedAssetType,
-                stepMetadataAssetType: step.metadata?.collectedInformation?.assetType,
-                stepMetadataSelectedAssetType: step.metadata?.collectedInformation?.selectedAssetType,
                 finalAssetType: assetType
               });
-              
-              // Add the generated asset as a direct message
-              const assetMessage = {
-                type: 'asset_generated',
-                assetType: assetType,
-                content: assetContent,
-                displayContent: assetContent,
-                stepId: step.id,
-                stepName: step.name
-              };
               
               // Extract clean display content for the chat message
               let cleanDisplayContent = assetContent;
               
-              // If assetContent is JSON with an "asset" field, extract just the asset content for display
+              // ENHANCED: If assetContent is JSON with an "asset" field, extract just the asset content for display
               if (typeof assetContent === 'string' && assetContent.trim().startsWith('{')) {
                 try {
                   const parsedAsset = JSON.parse(assetContent);
                   if (parsedAsset.asset) {
                     cleanDisplayContent = parsedAsset.asset;
-                    logger.info('Extracted clean display content from JSON wrapper for chat display');
+                    logger.info('Extracted clean display content from JSON wrapper', {
+                      originalLength: assetContent.length,
+                      cleanLength: cleanDisplayContent.length
+                    });
                   }
                 } catch (parseError) {
-                  logger.info('Asset content looks like JSON but failed to parse, using as-is for display');
+                  logger.warn('Asset content looks like JSON but failed to parse, using as-is', {
+                    error: parseError instanceof Error ? parseError.message : 'Unknown error'
+                  });
                 }
               }
               
-              await db.insert(chatMessages)
-                .values({
-                  threadId: actualThreadId, // Use the actual thread ID
-                  content: `[ASSET_DATA]${JSON.stringify(assetMessage)}[/ASSET_DATA]\n\nHere's your generated ${assetType}:\n\n${cleanDisplayContent}`,
-                  role: "assistant",
-                  userId: "system"
-                });
+              // USE UNIFIED METHOD: Import WorkflowService and use addAssetMessage
+              const { WorkflowService } = await import('./workflow.service');
+              const workflowService = new WorkflowService();
               
-              logger.info('Successfully added asset to chat', {
+              await workflowService.addAssetMessage(
+                actualThreadId,
+                cleanDisplayContent,
+                assetType,
+                step.id,
+                step.name,
+                {
+                  isRevision: false,
+                  showCreateButton: true
+                }
+              );
+              
+              logger.info('Successfully added asset via unified method', {
                 threadId: actualThreadId,
-                assetLength: assetContent.length,
-                assetType
+                assetLength: cleanDisplayContent.length,
+                assetType,
+                method: 'unified_addAssetMessage'
               });
               
               // Store the asset in the response data for consistency
               if (!responseData.collectedInformation) {
                 responseData.collectedInformation = {};
               }
-              responseData.collectedInformation.asset = assetContent;
+              responseData.collectedInformation.asset = cleanDisplayContent; // Store clean content
               responseData.collectedInformation.assetType = assetType;
               
             } catch (error) {
-              logger.error('Error adding asset to chat', {
+              logger.error('Error adding asset to chat via unified method', {
                 error: error instanceof Error ? error.message : 'Unknown error',
                 stack: error instanceof Error ? error.stack : undefined
               });

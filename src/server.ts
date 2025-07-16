@@ -239,7 +239,7 @@ async function initializeDatabase() {
             thread_id UUID NOT NULL REFERENCES chat_threads(id),
             user_id TEXT NOT NULL,
             role TEXT NOT NULL,
-            content TEXT NOT NULL,
+            content JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
           
@@ -358,6 +358,103 @@ async function initializeDatabase() {
       }
     } else {
       logger.info('Assets table already exists');
+    }
+    
+    // =============================================================================
+    // STRUCTURED CONTENT MIGRATION
+    // =============================================================================
+    
+    // Check if chat_messages.content is already JSONB
+    logger.info('Checking chat_messages.content column type...');
+    try {
+      const contentColumnCheck = await db.execute(sql`
+        SELECT data_type 
+        FROM information_schema.columns 
+        WHERE table_name = 'chat_messages' 
+        AND column_name = 'content';
+      `);
+      
+      const currentDataType = contentColumnCheck[0]?.data_type;
+      logger.info(`Current chat_messages.content data type: ${currentDataType}`);
+      
+      if (currentDataType === 'text') {
+        logger.info('Migrating chat_messages.content from TEXT to JSONB for structured content support...');
+        
+        // First, add a new JSONB column for structured content
+        await db.execute(sql`
+          ALTER TABLE chat_messages 
+          ADD COLUMN IF NOT EXISTS content_structured JSONB;
+        `);
+        
+        // Migrate existing text content to structured format
+        // We'll wrap existing string content in a basic structure
+        await db.execute(sql`
+          UPDATE chat_messages 
+          SET content_structured = jsonb_build_object(
+            'type', 'text',
+            'text', content,
+            'decorators', '[]'::jsonb,
+            'metadata', '{}'::jsonb
+          )
+          WHERE content_structured IS NULL;
+        `);
+        
+        // Make the new column NOT NULL now that all rows have values
+        await db.execute(sql`
+          ALTER TABLE chat_messages 
+          ALTER COLUMN content_structured SET NOT NULL;
+        `);
+        
+        // Drop the old text column
+        await db.execute(sql`
+          ALTER TABLE chat_messages 
+          DROP COLUMN content;
+        `);
+        
+        // Rename the new column to content
+        await db.execute(sql`
+          ALTER TABLE chat_messages 
+          RENAME COLUMN content_structured TO content;
+        `);
+        
+        logger.info('Successfully migrated chat_messages.content to JSONB structured format');
+      } else if (currentDataType === 'jsonb') {
+        logger.info('chat_messages.content is already JSONB - checking for proper structured format...');
+        
+        // Check if existing JSONB messages have proper structured format
+        const unstructuredCheck = await db.execute(sql`
+          SELECT COUNT(*) as count
+          FROM chat_messages 
+          WHERE jsonb_typeof(content) = 'string';
+        `);
+        
+        const unstructuredCount = parseInt(String(unstructuredCheck[0]?.count || 0));
+        
+        if (unstructuredCount > 0) {
+          logger.info(`Found ${unstructuredCount} messages with string content, converting to structured format...`);
+          
+          // Convert string JSONB values to structured format
+          await db.execute(sql`
+            UPDATE chat_messages 
+            SET content = jsonb_build_object(
+              'type', 'text',
+              'text', content #>> '{}',
+              'decorators', '[]'::jsonb,
+              'metadata', '{}'::jsonb
+            )
+            WHERE jsonb_typeof(content) = 'string';
+          `);
+          
+          logger.info('Successfully converted unstructured JSONB messages to structured format');
+        } else {
+          logger.info('All JSONB messages are already in structured format');
+        }
+      } else {
+        logger.warn(`Unexpected data type for chat_messages.content: ${currentDataType}`);
+      }
+    } catch (migrationError) {
+      logger.error('Error during structured content migration:', migrationError);
+      // Don't fail the server startup for migration issues
     }
     
     // =============================================================================
