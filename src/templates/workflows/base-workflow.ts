@@ -9,18 +9,23 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
       type: StepType.JSON_DIALOG,
       name: "Workflow Selection",
       description: "Select the type of workflow you'd like to create",
-      prompt: "Which workflow would you like to use? Please choose from:\n\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Quick Press Release - For creating a press release in just two steps\n• Test Step Transitions - For testing step transitions and workflow completion\n• Dummy Workflow - For testing purposes\n• Media Matching - For generating prioritized media contact lists based on topic relevance",
+      prompt: "Which workflow would you like to use? Please choose from:\n\n**Full Workflows:**\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Media Matching - For generating prioritized media contact lists based on topic relevance\n\n**Quick Asset Creation:**\n• Press Release - Draft PR announcement materials\n• Media Pitch - Build custom outreach with context\n• Social Post - Craft social copy in your brand voice\n• Blog Article - Create long-form POVs, news, or narratives\n• FAQ - Generate frequent questions and suggested responses\n• Quick Press Release - For creating a press release in just two steps\n\n**Testing & Development:**\n• Test Step Transitions - For testing step transitions and workflow completion\n• Dummy Workflow - For testing purposes",
       order: 0,
       dependencies: [],
       metadata: {
         goal: "Determine which workflow the user wants to create based on their input",
         options: [
           "Launch Announcement",
-          "Dummy Workflow",
           "JSON Dialog PR Workflow",
-          "Test Step Transitions",
+          "Media Matching",
+          "Press Release",
+          "Media Pitch",
+          "Social Post",
+          "Blog Article",
+          "FAQ",
           "Quick Press Release",
-          "Media Matching"
+          "Test Step Transitions",
+          "Dummy Workflow"
         ],
         baseInstructions: `You are a workflow selection assistant. Your task is to match the user's input to one of the available workflows.
 
@@ -28,18 +33,28 @@ TASK:
 Match user input to one of these workflows:
 - Launch Announcement: For product launches, features, or news releases
 - JSON Dialog PR Workflow: For creating press releases, media pitches, and PR assets
+- Media Matching: For generating prioritized media contact lists based on topic relevance
+- Press Release: For creating professional press release announcements
+- Media Pitch: For creating personalized media outreach and pitches
+- Social Post: For creating social media content in your brand voice
+- Blog Article: For creating long-form content, POVs, and narratives
+- FAQ: For creating comprehensive FAQ documents
 - Quick Press Release: For creating a press release in just two simple steps
 - Test Step Transitions: For testing step transitions and workflow completion
 - Dummy Workflow: For testing and demonstration purposes
-- Media Matching: For generating prioritized media contact lists based on topic relevance
 
 MATCHING RULES:
-- If user mentions "PR", "press release", "press", choose "JSON Dialog PR Workflow"
-- If user mentions "launch", "announcement", "product", choose "Launch Announcement" 
-- If user mentions "test", "dummy", "sample", "demo", choose "Dummy Workflow"
-- If user mentions "step", "transition", "test steps", choose "Test Step Transitions"
+- If user mentions "PR", "press release", "announcement materials", choose "Press Release"
+- If user mentions "media pitch", "pitch", "outreach", "journalist outreach", choose "Media Pitch"
+- If user mentions "social", "social media", "social post", "brand voice", choose "Social Post"
+- If user mentions "blog", "article", "long-form", "POV", "narrative", choose "Blog Article"
+- If user mentions "FAQ", "questions", "frequently asked", choose "FAQ"
+- If user mentions "launch", "product launch", "announcement", choose "Launch Announcement" 
+- If user mentions "JSON Dialog PR", "dialog", choose "JSON Dialog PR Workflow"
 - If user mentions "quick", "fast", "simple", "easy", choose "Quick Press Release"
 - If user mentions "media matching", "media contacts", "media list", "journalists", "reporters", choose "Media Matching"
+- If user mentions "test", "dummy", "sample", "demo", choose "Dummy Workflow"
+- If user mentions "step", "transition", "test steps", choose "Test Step Transitions"
 - If no clear match, ask user to clarify with choices
 
 RESPONSE FORMAT:
