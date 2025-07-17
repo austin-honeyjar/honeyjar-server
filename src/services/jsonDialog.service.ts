@@ -669,7 +669,7 @@ PRIORITY INSTRUCTIONS:
 3. If the user says "I don't know" for any information, mark it as UNAVAILABLE and DO NOT ask for it again
 4. NEVER ask for information that has already been provided - check conversation history thoroughly
 5. Maintain a helpful, flexible conversational style
-6. After collecting 70% or more of essential information, suggest generating an asset
+6. After collecting 60% or more of essential information, suggest generating an asset
 7. EXTRACT ALL RELEVANT INFORMATION from the user's input, even if it wasn't directly requested`;
     
     // Special case for workflow selection
@@ -797,7 +797,7 @@ TASK:
 5. IMPORTANT: Extract ALL relevant information from the current message, even if it wasn't directly asked for in your last question
 6. Look for information that might be relevant for ANY workflow step, not just the current focus
 7. If you detect information that might be useful for a future step, store it in the appropriate field in collectedInformation
-8. If 70% or more of essential information is collected, offer to proceed with generation
+8. If 60% or more of essential information is collected, offer to proceed with generation
 9. Return a JSON response
 
 RESPONSE FORMAT:
@@ -814,7 +814,7 @@ If all essential information is collected:
   "completionPercentage": 100
 }
 
-If 70% or more of essential information is collected:
+If 60% or more of essential information is collected:
 {
   "isComplete": false,
   "collectedInformation": {
@@ -839,7 +839,7 @@ If the user is asking a question or making a statement that needs direct respons
   "completionPercentage": ${infoTracking.completionPercentage}
 }
 
-If more information is needed and under 70% complete:
+If more information is needed and under 60% complete:
 {
   "isComplete": false,
   "collectedInformation": {
@@ -904,7 +904,7 @@ OPTIONAL INFORMATION (${optionalStatus.complete}/${optionalFields.length} comple
 ${this.formatFieldStatus(optionalFields, flattenedInfo)}
 
 COMPLETION STATUS: ${Math.round(completionPercentage * 100)}% complete
-${completionPercentage >= 0.7 ? "READY TO SUGGEST GENERATION: YES" : "READY TO SUGGEST GENERATION: NO"}`;
+${completionPercentage >= 0.6 ? "READY TO SUGGEST GENERATION: YES" : "READY TO SUGGEST GENERATION: NO"}`;
     
     return {
       formattedStatus,
