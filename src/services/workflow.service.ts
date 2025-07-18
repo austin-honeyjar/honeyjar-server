@@ -1725,6 +1725,10 @@ Respond with only "search_more" or "proceed" based on their input.`;
             // Create a Media Matching workflow using template ID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
           }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.FAQ)) {
+            // Create a FAQ workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.FAQ);
+          }
           
           if (newWorkflow) {
             // Don't send a message about starting the workflow - keep it silent
@@ -1884,6 +1888,10 @@ Respond with only "search_more" or "proceed" based on their input.`;
           else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
             // Create a Media Matching workflow using template ID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.FAQ)) {
+            // Create a FAQ workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.FAQ);
           }
           
           if (newWorkflow) {
@@ -2080,6 +2088,10 @@ Respond with only "search_more" or "proceed" based on their input.`;
           else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
             // Create a Media Matching workflow using template ID
             newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.FAQ)) {
+            // Create a FAQ workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.FAQ);
           }
           
           if (newWorkflow) {
@@ -4942,6 +4954,10 @@ What would you like to do?`;
         else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
           // Create a Media Matching workflow using template ID
           newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
+        }
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.FAQ)) {
+          // Create a FAQ workflow using hardcoded UUID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.FAQ);
         }
         
         if (newWorkflow) {
