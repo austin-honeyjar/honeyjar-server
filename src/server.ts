@@ -13,6 +13,7 @@ import { join } from 'path';
 import logger from './utils/logger';
 import csvRoutes from './routes/csv.routes';
 import chatRoutes from './routes/chat.routes';
+import contextAwareChatRoutes from './routes/contextAwareChat.routes';
 import threadsRoutes from './routes/threads.routes';
 import assetRoutes from './routes/asset.routes';
 import metabaseRoutes from './routes/metabase.routes';
@@ -36,6 +37,7 @@ app.use(rateLimiter);
 app.use(config.server.apiPrefix + '/auth', authRoutes);
 app.use(config.server.apiPrefix + '/csv', csvRoutes);
 app.use(config.server.apiPrefix + '/chat', chatRoutes);
+app.use(config.server.apiPrefix + '/chat', contextAwareChatRoutes);
 app.use(config.server.apiPrefix + '/threads', threadsRoutes);
 app.use(config.server.apiPrefix + '/metabase', metabaseRoutes);
 app.use(config.server.apiPrefix + '/rocketreach', rocketreachRoutes);
@@ -358,6 +360,67 @@ async function initializeDatabase() {
       }
     } else {
       logger.info('Assets table already exists');
+    }
+
+    // Initialize context-aware chat support
+    try {
+      logger.info('Setting up context-aware chat support...');
+      
+      // Add context-aware fields to chat_threads table
+      await db.execute(sql`
+        ALTER TABLE chat_threads 
+        ADD COLUMN IF NOT EXISTS thread_type TEXT NOT NULL DEFAULT 'standard',
+        ADD COLUMN IF NOT EXISTS context_id UUID,
+        ADD COLUMN IF NOT EXISTS context_type TEXT,
+        ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true,
+        ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      `);
+
+      // Create indexes for better performance
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS idx_chat_threads_thread_type ON chat_threads(thread_type);
+        CREATE INDEX IF NOT EXISTS idx_chat_threads_context ON chat_threads(context_type, context_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_threads_user_active ON chat_threads(user_id, is_active);
+        CREATE INDEX IF NOT EXISTS idx_chat_threads_org_type ON chat_threads(org_id, thread_type);
+      `);
+
+      // Update existing threads to have proper thread_type
+      await db.execute(sql`
+        UPDATE chat_threads SET thread_type = 'standard' WHERE thread_type IS NULL OR thread_type = '';
+      `);
+
+      // Add check constraints
+      await db.execute(sql`
+        ALTER TABLE chat_threads 
+        ADD CONSTRAINT IF NOT EXISTS chk_thread_type 
+        CHECK (thread_type IN ('global', 'asset', 'workflow', 'standard'));
+      `);
+
+      // Create function to auto-update updated_at
+      await db.execute(sql`
+        CREATE OR REPLACE FUNCTION update_chat_threads_updated_at()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+        END;
+        $$ language 'plpgsql';
+      `);
+
+      // Create trigger for auto-updating updated_at
+      await db.execute(sql`
+        DROP TRIGGER IF EXISTS trigger_chat_threads_updated_at ON chat_threads;
+        CREATE TRIGGER trigger_chat_threads_updated_at
+            BEFORE UPDATE ON chat_threads
+            FOR EACH ROW
+            EXECUTE FUNCTION update_chat_threads_updated_at();
+      `);
+
+      logger.info('Context-aware chat support initialized successfully');
+    } catch (contextError) {
+      logger.error('Error setting up context-aware chat support:', contextError);
+      // Don't fail the entire initialization for this
     }
     
     // =============================================================================

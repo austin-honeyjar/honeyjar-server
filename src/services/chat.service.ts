@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { chatThreads, chatMessages } from "../db/schema";
 import { WorkflowService } from "./workflow.service";
+import { workflowContextService } from "./workflowContext.service";
 import { WorkflowStatus, StepStatus, StepType } from "../types/workflow";
 import { eq } from "drizzle-orm";
 import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow.js';
@@ -130,8 +131,299 @@ export class ChatService {
     // Get the current step before processing
     const currentStep = workflow.steps.find(step => step.id === currentStepId);
     
-    // Handle the step response using the current step ID
-    const stepResponse = await this.workflowService.handleStepResponse(currentStepId, content);
+    // === UNIVERSAL AI-DRIVEN WORKFLOW SWITCHING ===
+    try {
+      // Get current workflow name for context with enhanced resolution
+      let currentWorkflowName = this.getWorkflowNameFromTemplateId(workflow.templateId);
+      
+      // Enhanced fallback resolution for current workflow name
+      if (!currentWorkflowName) {
+        if (workflow.templateId === '00000000-0000-0000-0000-000000000012') {
+          currentWorkflowName = 'FAQ';
+        } else if (workflow.templateId === '00000000-0000-0000-0000-000000000011') {
+          currentWorkflowName = 'Blog Article';
+        } else if (workflow.templateId === '00000000-0000-0000-0000-000000000010') {
+          currentWorkflowName = 'Social Post';
+        } else if (workflow.templateId === '00000000-0000-0000-0000-000000000008') {
+          currentWorkflowName = 'Press Release';
+        } else if (currentStep?.name?.includes('FAQ') || currentStep?.description?.includes('FAQ')) {
+          currentWorkflowName = 'FAQ';
+        } else if (currentStep?.name?.includes('Blog') || currentStep?.description?.includes('blog')) {
+          currentWorkflowName = 'Blog Article';
+        } else {
+          currentWorkflowName = 'Unknown Workflow';
+        }
+      }
+      
+      logger.debug('Universal workflow switching - current workflow resolution', {
+        templateId: workflow.templateId,
+        resolvedWorkflowName: currentWorkflowName,
+        stepName: currentStep?.name,
+        userInput: content.substring(0, 50)
+      });
+      
+      // SECURITY CHECK: Only attempt AI switching if current workflow allows it
+      if (!workflowContextService.isAISwitchingEnabled(currentWorkflowName)) {
+        const securityConfig = workflowContextService.getWorkflowSecurityConfig(currentWorkflowName);
+        logger.info(`Skipping AI workflow switching for security-restricted workflow: ${currentWorkflowName} (${securityConfig?.security_level})`, {
+          reason: securityConfig?.reason || 'Security restrictions apply',
+          templateId: workflow.templateId,
+          stepName: currentStep?.name
+        });
+        
+        // For restricted workflows, proceed directly to enhanced processing without AI switching
+        // This ensures sensitive workflows maintain their rigid structure
+      } else {
+        logger.debug('Analyzing workflow switch intent', {
+          currentWorkflow: currentWorkflowName,
+          currentStep: currentStep?.name,
+          userInput: content,
+          isAISwitchingEnabled: true,
+          securityLevel: workflowContextService.getWorkflowSecurityConfig(currentWorkflowName)?.security_level || 'unknown'
+        });
+        
+        // Use universal AI-driven intent detection (only for AI-safe workflows)
+        const switchAnalysis = await workflowContextService.analyzeWorkflowSwitchIntent(
+          content,
+          currentWorkflowName,
+          currentStep?.name || 'Unknown Step'
+        );
+        
+        logger.info('Workflow switch analysis result', {
+          currentWorkflow: currentWorkflowName,
+          shouldSwitch: switchAnalysis.shouldSwitch,
+          targetWorkflow: switchAnalysis.targetWorkflow,
+          confidence: switchAnalysis.confidence,
+          reasoning: switchAnalysis.reasoning
+        });
+        
+        // Handle workflow switch intents with high confidence
+        if (switchAnalysis.shouldSwitch && switchAnalysis.confidence > 0.7 && switchAnalysis.targetWorkflow) {
+          // SECURITY CHECK: Ensure target workflow is also AI-safe
+          const targetSecurityConfig = workflowContextService.getWorkflowSecurityConfig(switchAnalysis.targetWorkflow);
+          
+          if (workflowContextService.isAISwitchingEnabled(switchAnalysis.targetWorkflow)) {
+            try {
+              logger.info('Executing universal workflow switch', {
+                fromWorkflow: currentWorkflowName,
+                fromSecurityLevel: workflowContextService.getWorkflowSecurityConfig(currentWorkflowName)?.security_level,
+                toWorkflow: switchAnalysis.targetWorkflow,
+                toSecurityLevel: targetSecurityConfig?.security_level,
+                confidence: switchAnalysis.confidence
+              });
+              
+              // Execute the universal workflow switch
+              const switchResult = await this.workflowService.executeWorkflowSwitch(
+                workflow.id,
+                switchAnalysis.targetWorkflow,
+                true // Transfer data
+              );
+              
+              if (switchResult.success && switchResult.newWorkflow) {
+                // Add success message with reasoning
+                const successMessage = `✅ Successfully switched to ${switchAnalysis.targetWorkflow}! ${switchAnalysis.reasoning}`;
+                await this.addMessage(threadId, successMessage, false);
+                
+                // Create debug data for frontend
+                const debugData = {
+                  workflowSwitchDetected: true,
+                  targetWorkflow: switchAnalysis.targetWorkflow,
+                  confidence: switchAnalysis.confidence,
+                  reasoning: switchAnalysis.reasoning,
+                  method: 'pattern-match',
+                  switchMethod: 'pattern',
+                  patternMatched: 'direct command'
+                };
+                
+                // Get the first prompt from the new workflow
+                const nextPrompt = await this.getNextPrompt(threadId, switchResult.newWorkflow.id);
+                
+                // Return response with debug data
+                return {
+                  response: nextPrompt,
+                  ...debugData
+                };
+              } else {
+                logger.warn('Universal workflow switch failed:', switchResult);
+              }
+            } catch (error) {
+              logger.error('Error in universal workflow switch:', error);
+            }
+          } else {
+            // Target workflow is security-restricted
+            const restrictedMessage = `I detected you want to switch to ${switchAnalysis.targetWorkflow}, but that workflow has security restrictions (${targetSecurityConfig?.security_level}) that prevent automatic switching. ${targetSecurityConfig?.reason || 'Security protocols apply.'}`;
+            await this.addMessage(threadId, restrictedMessage, false);
+            return restrictedMessage;
+          }
+        }
+        
+        // Handle moderate confidence switch intents by offering options (only AI-safe workflows)
+        if (switchAnalysis.shouldSwitch && switchAnalysis.confidence > 0.5) {
+          const availableWorkflows = workflowContextService.getAISafeWorkflows()
+            .filter(w => w.name !== currentWorkflowName)
+            .slice(0, 4) // Show top 4 options
+            .map(w => w.name)
+            .join(', ');
+          
+          const clarificationMessage = `I detected you might want to switch workflows. ${switchAnalysis.reasoning}. ` +
+            `Available options: ${availableWorkflows}. ` +
+            `Would you like to switch to a specific workflow, or continue with ${currentWorkflowName}?`;
+          
+          await this.addMessage(threadId, clarificationMessage, false);
+          return clarificationMessage;
+        }
+      }
+      
+    } catch (error) {
+      logger.error('Error in universal workflow switching detection:', error);
+      // Continue to enhanced processing
+    }
+    
+    // Handle the step response using enhanced processing with intent detection
+    const stepResponse = await this.workflowService.handleStepResponseEnhanced(currentStepId, content);
+    
+    // Check if JSON parsing detected a workflow switch intent (check multiple possible locations for the switch data)
+    let workflowSwitchData = (stepResponse as any).workflowSwitchDetected;
+    
+    // Also check if it's nested in the response or other possible locations
+    if (!workflowSwitchData && stepResponse.response) {
+      // Sometimes the switch data might be in the raw response
+      try {
+        const responseObj = typeof stepResponse.response === 'string' ? JSON.parse(stepResponse.response) : stepResponse.response;
+        workflowSwitchData = responseObj.workflowSwitchDetected;
+      } catch (error) {
+        // Response is not JSON, continue
+      }
+    }
+    
+    // Also check the enhancedResponse structure
+    if (!workflowSwitchData && stepResponse.enhancedResponse) {
+      workflowSwitchData = (stepResponse.enhancedResponse as any).workflowSwitchDetected;
+    }
+    
+    logger.debug('Checking for workflow switch data in step response', {
+      hasWorkflowSwitchData: !!workflowSwitchData,
+      stepResponseKeys: Object.keys(stepResponse),
+      workflowSwitchData: workflowSwitchData ? {
+        targetWorkflow: workflowSwitchData.targetWorkflow,
+        confidence: workflowSwitchData.confidence
+      } : null
+    });
+    
+    if (workflowSwitchData && workflowSwitchData.targetWorkflow) {
+      const { targetWorkflow, confidence, reasoning } = workflowSwitchData;
+      
+      logger.info('Processing AI-detected workflow switch from JSON response', {
+        currentWorkflow: this.getWorkflowNameFromTemplateId(workflow.templateId) || 'Unknown Workflow',
+        targetWorkflow,
+        confidence,
+        reasoning
+      });
+      
+      // Check if target workflow is AI-safe
+      if (workflowContextService.isAISwitchingEnabled(targetWorkflow)) {
+        try {
+          // Execute the workflow switch
+          const switchResult = await this.workflowService.executeWorkflowSwitch(
+            workflow.id,
+            targetWorkflow,
+            true // Transfer data
+          );
+          
+          if (switchResult.success && switchResult.newWorkflow) {
+            // Add success message with reasoning
+            const successMessage = `✅ Successfully switched to ${targetWorkflow}! ${reasoning}`;
+            await this.addMessage(threadId, successMessage, false);
+            
+            // Create debug data for frontend
+            const debugData = {
+              workflowSwitchDetected: true,
+              targetWorkflow: targetWorkflow,
+              confidence: confidence,
+              reasoning: reasoning,
+              method: 'ai-detection',
+              switchMethod: 'ai',
+              aiDetection: {
+                confidence: confidence,
+                reasoning: reasoning
+              }
+            };
+            
+            // Get the first prompt from the new workflow
+            const nextPrompt = await this.getNextPrompt(threadId, switchResult.newWorkflow.id);
+            
+            // Return response with debug data
+            return {
+              response: nextPrompt,
+              ...debugData
+            };
+          } else {
+            logger.warn('AI-detected workflow switch failed:', switchResult);
+            // Fall through to normal processing
+          }
+        } catch (error) {
+          logger.error('Error in AI-detected workflow switch:', error);
+          // Fall through to normal processing
+        }
+      } else {
+        // Target workflow is security-restricted
+        const restrictedMessage = `I detected you want to switch to ${targetWorkflow}, but that workflow has security restrictions that prevent automatic switching. Please start a new conversation for ${targetWorkflow}.`;
+        await this.addMessage(threadId, restrictedMessage, false);
+        return restrictedMessage;
+      }
+    }
+    
+    // Check if the enhanced response indicates a workflow switch request
+    if (stepResponse.enhancedResponse?.type === 'normal' && stepResponse.response.includes('Would you like me to switch')) {
+      // This is a workflow switch confirmation request - add the message and wait for confirmation
+      await this.addMessage(threadId, stepResponse.response, false);
+      return stepResponse.response;
+    }
+    
+    // Handle enhanced workflow switching scenarios
+    if (stepResponse.workflowSwitchSuggested) {
+      // User wants to switch workflows - add the suggestion message
+      await this.addMessage(threadId, stepResponse.response, false);
+      
+      // For now, just present the options. In the future, you could add buttons/UI for switching
+      return stepResponse.response;
+    }
+    
+    // Handle workflow switch confirmation
+    if (stepResponse.enhancedResponse && stepResponse.enhancedResponse.type === 'workflow_switch_request') {
+      await this.addMessage(threadId, stepResponse.response, false);
+      return stepResponse.response;
+    }
+    
+    // Check if this is a confirmation for a workflow switch
+    if (stepResponse.enhancedResponse?.type === 'normal' && content.toLowerCase().includes('switch') || 
+        content.toLowerCase().includes('yes') && stepResponse.response.includes('Social Post')) {
+      
+      try {
+        // Execute the workflow switch
+        const switchResult = await this.workflowService.executeWorkflowSwitch(
+          workflow.id,
+          'Social Post', // Target workflow - could be extracted from context
+          true // Transfer data
+        );
+        
+        if (switchResult.success && switchResult.newWorkflow) {
+          // Add success message
+          await this.addMessage(threadId, switchResult.message, false);
+          
+          // Get the first prompt from the new workflow
+          return this.getNextPrompt(threadId, switchResult.newWorkflow.id);
+        } else {
+          // Switch failed
+          await this.addMessage(threadId, switchResult.message, false);
+          return switchResult.message;
+        }
+      } catch (error) {
+        const errorMsg = "I had trouble switching workflows. Let's try continuing with the current workflow or starting fresh.";
+        await this.addMessage(threadId, errorMsg, false);
+        return errorMsg;
+      }
+    }
     
     // Add AI response to thread if provided by handleStepResponse
     if (stepResponse.response && stepResponse.response !== 'Workflow completed successfully.') { 
@@ -403,5 +695,15 @@ export class ChatService {
       });
       throw error;
     }
+  }
+
+  private getWorkflowNameFromTemplateId(templateId: string): string | undefined {
+    const workflowName = workflowContextService.getWorkflowNameByTemplateId(templateId);
+    logger.debug('Mapping template ID to workflow name', {
+      templateId,
+      workflowName: workflowName || 'undefined',
+      availableWorkflows: workflowContextService.getAvailableWorkflows()
+    });
+    return workflowName;
   }
 }

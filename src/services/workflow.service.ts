@@ -180,17 +180,544 @@ const TEMPLATE_UUIDS = {
   FAQ: '00000000-0000-0000-0000-000000000012'
 };
 
+// Add new interfaces for enhanced workflow functionality
+interface ControlIntent {
+  type: 'cancel' | 'switch' | 'back' | 'continue';
+  confidence: number;
+  targetWorkflow?: string;
+  reason?: string;
+}
+
+interface WorkflowTransition {
+  fromWorkflow: string;
+  toWorkflow: string;
+  dataTransfer: 'none' | 'basic' | 'full';
+  securityCheck: boolean;
+  transitionMessage: string;
+}
+
+interface IntentChange {
+  detected: boolean;
+  type: 'workflow_switch' | 'step_confusion' | 'cancel_request';
+  targetWorkflow?: string;
+  confidence: number;
+}
+
+interface EnhancedStepResponse {
+  type: 'normal' | 'workflow_switch_request' | 'clarification' | 'guidance' | 'cancellation';
+  message: string;
+  targetWorkflow?: string;
+  options?: string[];
+  nextStep?: any;
+  isComplete?: boolean;
+  generatedAsset?: string;
+  workflowSwitchDetected?: {  // ← Add this
+    targetWorkflow: string;
+    confidence: number;
+    reasoning: string;
+    offerMessage?: string;
+  };
+}
+
 export class WorkflowService {
   private dbService: WorkflowDBService;
   private openAIService: OpenAIService;
   private assetService: AssetService;
   private jsonDialogService: JsonDialogService;
 
+  // Enhanced workflow transitions configuration
+  private ALLOWED_TRANSITIONS: WorkflowTransition[] = [
+    {
+      fromWorkflow: 'Press Release',
+      toWorkflow: 'Social Post',
+      dataTransfer: 'basic',
+      securityCheck: true,
+      transitionMessage: 'I can help create a social post. I\'ll reuse some basic info from your press release context.'
+    },
+    {
+      fromWorkflow: 'Press Release', 
+      toWorkflow: 'Media Pitch',
+      dataTransfer: 'full',
+      securityCheck: true,
+      transitionMessage: 'Perfect! A media pitch pairs well with press releases. I\'ll adapt the content we\'ve discussed.'
+    },
+    {
+      fromWorkflow: 'Social Post',
+      toWorkflow: 'Press Release',
+      dataTransfer: 'basic',
+      securityCheck: true,
+      transitionMessage: 'Switching to press release creation. I\'ll use the context we\'ve established.'
+    },
+    {
+      fromWorkflow: 'Media Pitch',
+      toWorkflow: 'Press Release',
+      dataTransfer: 'full',
+      securityCheck: true,
+      transitionMessage: 'Great! Let\'s create a press release that complements your media pitch.'
+    },
+    {
+      fromWorkflow: 'Blog Article',
+      toWorkflow: 'Press Release',
+      dataTransfer: 'basic',
+      securityCheck: true,
+      transitionMessage: 'Switching to press release. I can adapt some of the content themes we\'ve discussed.'
+    },
+    {
+      fromWorkflow: 'FAQ',
+      toWorkflow: 'Press Release',
+      dataTransfer: 'basic',
+      securityCheck: true,
+      transitionMessage: 'Moving to press release creation. The information we\'ve gathered will be helpful.'
+    }
+  ];
+
   constructor() {
     this.dbService = new WorkflowDBService();
     this.openAIService = new OpenAIService();
     this.assetService = new AssetService();
     this.jsonDialogService = new JsonDialogService();
+  }
+
+  /**
+   * Enhanced user input processing with intent detection
+   */
+  async processUserInputWithIntent(input: string, currentStep: WorkflowStep, workflow: Workflow): Promise<EnhancedStepResponse> {
+    try {
+      // First check for workflow control intents
+      const controlIntent = await this.detectControlIntent(input);
+      
+      if (controlIntent.type === 'cancel' && controlIntent.confidence > 0.7) {
+        return this.handleWorkflowCancellation(workflow, controlIntent.reason);
+      }
+      
+      if (controlIntent.type === 'switch' && controlIntent.confidence > 0.7) {
+        return this.handleWorkflowSwitchRequest(workflow, controlIntent.targetWorkflow);
+      }
+      
+      if (controlIntent.type === 'back' && controlIntent.confidence > 0.7) {
+        return this.handleStepBack(workflow, currentStep);
+      }
+      
+      // If no high-confidence control intent, check for workflow confusion
+      const intentChange = await this.detectIntentChange(input, currentStep);
+      
+      if (intentChange.detected && intentChange.confidence > 0.6) {
+        return this.handleIntentChange(intentChange, currentStep, workflow);
+      }
+      
+      // Normal step processing with enhanced error handling
+      return this.processStepWithEnhancedErrorHandling(input, currentStep, workflow);
+      
+    } catch (error) {
+      logger.error('Error in enhanced user input processing:', error);
+      return this.handleProcessingError(error, currentStep, workflow, input);
+    }
+  }
+
+  /**
+   * Detect control intents (cancel, switch, back)
+   */
+  private async detectControlIntent(input: string): Promise<ControlIntent> {
+    try {
+      const prompt = `
+      Analyze this user input for workflow control intentions:
+      Input: "${input}"
+      
+      Detect if user wants to:
+      - cancel: "nevermind", "stop", "cancel", "quit", "forget it", "don't need this"
+      - switch: "do X instead", "change to Y", "actually I want Z", "let's do [something else]"
+      - back: "go back", "previous step", "undo", "restart this step"
+      - continue: normal workflow progression
+      
+      For 'switch' type, extract the target workflow name from these options:
+      - Press Release, Social Post, Media Pitch, Blog Article, FAQ, Media Matching, Launch Announcement
+      
+      Return JSON: {
+        "type": "cancel|switch|back|continue",
+        "confidence": 0.0-1.0,
+        "targetWorkflow": "workflow_name|null",
+        "reason": "brief explanation"
+      }`;
+      
+      const response = await this.openAIService.generateStepResponse(
+        {
+          id: 'intent-detection',
+          workflowId: 'temp',
+          stepType: StepType.JSON_DIALOG,
+          name: 'Intent Detection',
+          description: 'Detecting user intent',
+          prompt: '',
+          status: StepStatus.IN_PROGRESS,
+          order: 0,
+          dependencies: [],
+          metadata: { openai_instructions: prompt },
+          createdAt: new Date(),
+          updatedAt: new Date()
+        },
+        'Please analyze the input',
+        []
+      );
+      
+      return JSON.parse(response.responseText);
+    } catch (error) {
+      logger.error('Error detecting control intent:', error);
+      return { type: 'continue', confidence: 0, reason: 'Error in intent detection' };
+    }
+  }
+
+  /**
+   * Detect if user wants to change workflow type mid-conversation
+   */
+  private async detectIntentChange(input: string, step: WorkflowStep): Promise<IntentChange> {
+    try {
+      const prompt = `
+      Current step: "${step.name}" (${step.stepType})
+      User input: "${input}"
+      
+      Analyze if the user's input suggests they want to:
+      1. Switch to a different workflow type (e.g., from press release to social post)
+      2. Are confused about what information to provide
+      3. Want to cancel/stop the current process
+      
+      Look for patterns like:
+      - Mentioning different content types: "social post", "blog", "media pitch", etc.
+      - Confusion indicators: "I don't know", "what do you need", "how do I..."
+      - Cancellation requests: "never mind", "stop", "cancel"
+      
+      Return JSON: {
+        "detected": true|false,
+        "type": "workflow_switch|step_confusion|cancel_request",
+        "targetWorkflow": "workflow_name|null",
+        "confidence": 0.0-1.0
+      }`;
+      
+      const response = await this.openAIService.generateStepResponse(
+        {
+          id: 'intent-change-detection',
+          workflowId: 'temp',
+          stepType: StepType.JSON_DIALOG,
+          name: 'Intent Change Detection',
+          description: 'Detecting intent changes',
+          prompt: '',
+          status: StepStatus.IN_PROGRESS,
+          order: 0,
+          dependencies: [],
+          metadata: { openai_instructions: prompt },
+          createdAt: new Date(),
+          updatedAt: new Date()
+        },
+        'Please analyze the input',
+        []
+      );
+      
+      return JSON.parse(response.responseText);
+    } catch (error) {
+      logger.error('Error detecting intent change:', error);
+      return { detected: false, type: 'step_confusion', confidence: 0 };
+    }
+  }
+
+  /**
+   * Handle workflow cancellation request
+   */
+  private async handleWorkflowCancellation(workflow: Workflow, reason?: string): Promise<EnhancedStepResponse> {
+    try {
+      // Mark workflow as cancelled
+      await this.updateWorkflowStatus(workflow.id, WorkflowStatus.FAILED);
+      
+      const message = `I understand you'd like to cancel the current ${workflow.templateId} workflow. 
+      
+      Would you like to:
+      • Start a different workflow
+      • Return to the main menu
+      • Take a break and continue later`;
+      
+      return {
+        type: 'cancellation',
+        message,
+        options: ['start_different', 'main_menu', 'break'],
+        isComplete: true
+      };
+    } catch (error) {
+      logger.error('Error handling workflow cancellation:', error);
+      return {
+        type: 'normal',
+        message: 'I had trouble cancelling the workflow. Would you like to try again?',
+        isComplete: false
+      };
+    }
+  }
+
+  /**
+   * Handle workflow switch request
+   */
+  private async handleWorkflowSwitchRequest(workflow: Workflow, targetWorkflowName?: string): Promise<EnhancedStepResponse> {
+    try {
+      if (!targetWorkflowName) {
+        return {
+          type: 'clarification',
+          message: `I can help you switch to a different workflow. Which would you prefer?
+          
+          **Popular Options:**
+          • Press Release - Professional announcements
+          • Social Post - Social media content
+          • Media Pitch - Journalist outreach
+          • Blog Article - Long-form content
+          • FAQ - Questions and answers
+          
+          Or type the name of any other workflow you'd like to use.`,
+          options: ['Press Release', 'Social Post', 'Media Pitch', 'Blog Article', 'FAQ']
+        };
+      }
+      
+      const currentTemplateName = await this.getTemplateNameById(workflow.templateId);
+      const transition = this.findAllowedTransition(currentTemplateName, targetWorkflowName);
+      
+      if (!transition) {
+        return this.offerWorkflowAlternatives(workflow, targetWorkflowName);
+      }
+      
+      return {
+        type: 'workflow_switch_request',
+        message: `${transition.transitionMessage}
+        
+        Would you like me to:
+        • Switch to ${targetWorkflowName} (I'll transfer relevant context)
+        • Continue with current workflow
+        • Start ${targetWorkflowName} in a fresh session`,
+        targetWorkflow: targetWorkflowName,
+        options: ['switch_with_context', 'continue_current', 'fresh_session']
+      };
+    } catch (error) {
+      logger.error('Error handling workflow switch request:', error);
+      return {
+        type: 'normal',
+        message: 'I had trouble processing your workflow switch request. Could you please clarify what you\'d like to work on?',
+        isComplete: false
+      };
+    }
+  }
+
+  /**
+   * Handle intent change (workflow confusion, etc.)
+   */
+  private async handleIntentChange(intentChange: IntentChange, step: WorkflowStep, workflow: Workflow): Promise<EnhancedStepResponse> {
+    if (intentChange.type === 'workflow_switch') {
+      return this.handleWorkflowSwitchRequest(workflow, intentChange.targetWorkflow);
+    }
+    
+    if (intentChange.type === 'step_confusion') {
+      return {
+        type: 'clarification',
+        message: `I notice you might need some guidance for the "${step.name}" step.
+        
+        **What I need:** ${this.getStepRequirements(step)}
+        **Example:** ${this.getStepExample(step)}
+        
+        Would you like to:
+        • Continue with this workflow (I'll provide more guidance)
+        • Switch to a different workflow  
+        • Get step-by-step help`,
+        options: ['continue_with_help', 'switch_workflow', 'step_by_step_help']
+      };
+    }
+    
+    if (intentChange.type === 'cancel_request') {
+      return this.handleWorkflowCancellation(workflow, 'User requested cancellation');
+    }
+    
+    return {
+      type: 'normal',
+      message: 'I want to make sure I understand what you need. Could you provide a bit more detail?',
+      isComplete: false
+    };
+  }
+
+  /**
+   * Process step with enhanced error handling
+   */
+  private async processStepWithEnhancedErrorHandling(input: string, step: WorkflowStep, workflow: Workflow): Promise<EnhancedStepResponse> {
+    try {
+      // Use existing step processing logic
+      const result = await this.handleStepResponse(step.id, input);
+      
+      return {
+        type: 'normal',
+        message: result.response,
+        nextStep: result.nextStep,
+        isComplete: result.isComplete,
+        workflowSwitchDetected: result.workflowSwitchDetected
+      };
+    } catch (error) {
+      logger.error('Error in step processing:', error);
+      return this.handleStepError(error as Error, step, input, workflow);
+    }
+  }
+
+  /**
+   * Enhanced error handling with helpful guidance
+   */
+  private async handleStepError(error: Error, step: WorkflowStep, userInput: string, workflow: Workflow): Promise<EnhancedStepResponse> {
+    try {
+      const guidance = await this.generateStepGuidance(step, userInput, error);
+      
+      return {
+        type: 'guidance',
+        message: `I need some clarification for the "${step.name}" step. ${guidance.explanation}
+        
+        **What I need:** ${guidance.requirements}
+        **Example:** ${guidance.example}
+        
+        Or would you prefer to:
+        • Try a different workflow
+        • Get more detailed guidance
+        • Start over with this workflow`,
+        options: ['retry', 'switch_workflow', 'detailed_guidance', 'restart']
+      };
+    } catch (guidanceError) {
+      logger.error('Error generating step guidance:', guidanceError);
+      return {
+        type: 'normal',
+        message: `I'm having trouble with this step. Could you provide the information in a different way, or would you like to try a different workflow?`,
+        options: ['retry', 'switch_workflow']
+      };
+    }
+  }
+
+  /**
+   * Generate helpful guidance for a step
+   */
+  private async generateStepGuidance(step: WorkflowStep, userInput: string, error: Error): Promise<{explanation: string, requirements: string, example: string}> {
+    const prompt = `
+    Step: "${step.name}" (${step.stepType})
+    User input: "${userInput}"
+    Error: ${error.message}
+    
+    Generate helpful guidance explaining:
+    1. What went wrong in simple terms
+    2. What information is needed for this step
+    3. A clear example of good input
+    
+    Be encouraging and specific. Focus on helping the user succeed.
+    
+    Return JSON: {
+      "explanation": "brief explanation of what happened",
+      "requirements": "what information is needed",
+      "example": "concrete example of good input"
+    }`;
+    
+    const response = await this.openAIService.generateStepResponse(
+      {
+        id: 'guidance-generation',
+        workflowId: 'temp',
+        stepType: StepType.JSON_DIALOG,
+        name: 'Guidance Generation',
+        description: 'Generating helpful guidance',
+        prompt: '',
+        status: StepStatus.IN_PROGRESS,
+        order: 0,
+        dependencies: [],
+        metadata: { openai_instructions: prompt },
+        createdAt: new Date(),
+        updatedAt: new Date()
+      },
+      'Please generate guidance',
+      []
+    );
+    
+    return JSON.parse(response.responseText);
+  }
+
+  /**
+   * Find allowed workflow transition
+   */
+  private findAllowedTransition(fromWorkflow: string, toWorkflow: string): WorkflowTransition | null {
+    return this.ALLOWED_TRANSITIONS.find(t => 
+      t.fromWorkflow === fromWorkflow && t.toWorkflow === toWorkflow
+    ) || null;
+  }
+
+  /**
+   * Offer workflow alternatives when direct transition isn't allowed
+   */
+  private async offerWorkflowAlternatives(workflow: Workflow, requestedWorkflow: string): Promise<EnhancedStepResponse> {
+    const currentTemplateName = await this.getTemplateNameById(workflow.templateId);
+    
+    return {
+      type: 'clarification',
+      message: `I understand you want to work on ${requestedWorkflow}. For the best experience, I'd recommend:
+      
+      **Option 1:** Complete your current ${currentTemplateName} first, then start ${requestedWorkflow}
+      **Option 2:** Start ${requestedWorkflow} in a fresh session (I'll safely pause this one)
+      **Option 3:** Continue with ${currentTemplateName} and create ${requestedWorkflow} later
+      
+      Which would you prefer?`,
+      options: ['complete_first', 'fresh_session', 'continue_current']
+    };
+  }
+
+  /**
+   * Get step requirements for guidance
+   */
+  private getStepRequirements(step: WorkflowStep): string {
+    // Extract requirements from step metadata or provide defaults
+    if (step.metadata?.essential) {
+      return step.metadata.essential.join(', ');
+    }
+    
+    switch (step.stepType) {
+      case StepType.JSON_DIALOG:
+        return 'Specific information related to your content creation goals';
+      case StepType.USER_INPUT:
+        return 'Your input or decision for this step';
+      default:
+        return 'Information relevant to the current step';
+    }
+  }
+
+  /**
+   * Get step example for guidance
+   */
+  private getStepExample(step: WorkflowStep): string {
+    if (step.name.toLowerCase().includes('information')) {
+      return 'Company: TechStart Inc. We develop mobile apps. Announcing: New AI-powered productivity app launch.';
+    }
+    if (step.name.toLowerCase().includes('review')) {
+      return '"This looks great!" or "Can you make it more formal?" or "Add more details about the features"';
+    }
+    return 'Provide clear, specific information about what you need';
+  }
+
+  /**
+   * Get template name by ID
+   */
+  private async getTemplateNameById(templateId: string): Promise<string> {
+    const template = await this.getTemplate(templateId);
+    return template?.name || 'Unknown Workflow';
+  }
+
+  /**
+   * Handle processing errors gracefully
+   */
+  private handleProcessingError(error: unknown, step: WorkflowStep, workflow: Workflow, input: string): EnhancedStepResponse {
+    const errorObj = error instanceof Error ? error : new Error('Unknown error');
+    logger.error('Processing error in enhanced workflow:', { error: errorObj, stepId: step.id, workflowId: workflow.id });
+    
+    return {
+      type: 'guidance',
+      message: `I encountered an issue processing your request. Let me help you in a different way.
+      
+      For the "${step.name}" step, could you try:
+      • Providing more specific information
+      • Using simpler language
+      • Breaking down your request into smaller parts
+      
+      Or would you prefer to:
+      • Switch to a different workflow
+      • Get step-by-step guidance
+      • Start fresh`,
+      options: ['try_again', 'switch_workflow', 'step_guidance', 'start_fresh']
+    };
   }
 
   // Template Management
@@ -1163,6 +1690,12 @@ export class WorkflowService {
     response: string; // Message indicating step/workflow status
     nextStep?: any;   // Details of the next step, if any
     isComplete: boolean; // Indicates if the *workflow* is now complete
+    workflowSwitchDetected?: {
+      targetWorkflow: string;
+      confidence: number;
+      reasoning: string;
+      offerMessage?: string;
+    };
   }> {
     try {
       // 1. Get the current step being processed
@@ -3194,6 +3727,12 @@ Respond with only "search_more" or "proceed" based on their input.`;
     response: string;
     nextStep?: any;
     isComplete: boolean;
+    workflowSwitchDetected?: {
+      targetWorkflow: string;
+      confidence: number;
+      reasoning: string;
+      offerMessage?: string;
+    };
   }> {
     try {
       logger.info('Handling JSON dialog step', {
@@ -3902,7 +4441,9 @@ Respond with only "search_more" or "proceed" based on their input.`;
             prompt: nextQuestion,
             type: step.stepType
           },
-          isComplete: false
+          isComplete: false,
+          workflowSwitchDetected: result.workflowSwitchDetected
+
         };
       }
     } catch (error) {
@@ -6283,6 +6824,244 @@ RESPONSE FORMAT: Return ONLY the revised ${assetType} content, no JSON, no expla
         stepId
       });
       throw error;
+    }
+  }
+
+  /**
+   * Handle step back request
+   */
+  private async handleStepBack(workflow: Workflow, currentStep: WorkflowStep): Promise<EnhancedStepResponse> {
+    try {
+      // Find the previous step
+      const currentOrder = currentStep.order;
+      const previousStep = workflow.steps.find(s => s.order === currentOrder - 1);
+      
+      if (!previousStep) {
+        return {
+          type: 'clarification',
+          message: `You're already at the first step of this workflow. Would you like to:
+          
+          • Restart this workflow from the beginning
+          • Switch to a different workflow
+          • Cancel this workflow`,
+          options: ['restart', 'switch_workflow', 'cancel']
+        };
+      }
+      
+      // Reset the previous step to in-progress
+      await this.updateStep(previousStep.id, {
+        status: StepStatus.IN_PROGRESS,
+        userInput: undefined,
+        aiSuggestion: undefined
+      });
+      
+      // Update workflow current step
+      await this.updateWorkflowCurrentStep(workflow.id, previousStep.id);
+      
+      // Reset current step to pending
+      await this.updateStep(currentStep.id, {
+        status: StepStatus.PENDING,
+        userInput: undefined,
+        aiSuggestion: undefined
+      });
+      
+      return {
+        type: 'normal',
+        message: `Going back to the previous step: "${previousStep.name}". ${previousStep.prompt}`,
+        isComplete: false
+      };
+    } catch (error) {
+      logger.error('Error handling step back:', error);
+      return {
+        type: 'normal',
+        message: 'I had trouble going back to the previous step. Would you like to try again?',
+        isComplete: false
+      };
+    }
+  }
+
+  /**
+   * Enhanced handleStepResponse that includes intent detection and graceful switching
+   * This can be used as a drop-in replacement for the existing handleStepResponse
+   */
+  async handleStepResponseEnhanced(stepId: string, userInput: string): Promise<{
+    response: string;
+    nextStep?: any;
+    isComplete: boolean;
+    workflowSwitchSuggested?: boolean;
+    switchOptions?: string[];
+    enhancedResponse?: EnhancedStepResponse;
+  }> {
+    try {
+      // Get the step and workflow
+      const step = await this.dbService.getStep(stepId);
+      if (!step) {
+        throw new Error(`Step not found: ${stepId}`);
+      }
+
+      const workflow = await this.getWorkflow(step.workflowId);
+      if (!workflow) {
+        throw new Error(`Workflow not found: ${step.workflowId}`);
+      }
+
+      // Use enhanced processing
+      const enhancedResponse = await this.processUserInputWithIntent(userInput, step, workflow);
+
+      // Handle enhanced response types
+      switch (enhancedResponse.type) {
+        case 'workflow_switch_request':
+          return {
+            response: enhancedResponse.message,
+            isComplete: false,
+            workflowSwitchSuggested: true,
+            switchOptions: enhancedResponse.options,
+            enhancedResponse
+          };
+
+        case 'cancellation':
+          return {
+            response: enhancedResponse.message,
+            isComplete: true,
+            enhancedResponse
+          };
+
+        case 'clarification':
+        case 'guidance':
+          return {
+            response: enhancedResponse.message,
+            isComplete: false,
+            enhancedResponse
+          };
+
+        case 'normal':
+        default:
+          // For normal processing, return the standard response format
+          return {
+            response: enhancedResponse.message,
+            nextStep: enhancedResponse.nextStep,
+            isComplete: enhancedResponse.isComplete || false,
+            enhancedResponse
+          };
+      }
+    } catch (error) {
+      logger.error('Error in enhanced step response handling:', error);
+      
+      // Fallback to original method
+      try {
+        const fallbackResult = await this.handleStepResponse(stepId, userInput);
+        return {
+          ...fallbackResult,
+          enhancedResponse: {
+            type: 'normal',
+            message: fallbackResult.response,
+            isComplete: fallbackResult.isComplete
+          }
+        };
+      } catch (fallbackError) {
+        logger.error('Fallback method also failed:', fallbackError);
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Handle workflow switch execution after user confirms
+   */
+  async executeWorkflowSwitch(
+    currentWorkflowId: string,
+    targetWorkflowName: string,
+    transferData: boolean = true
+  ): Promise<{
+    newWorkflow?: Workflow;
+    message: string;
+    success: boolean;
+  }> {
+    try {
+      const currentWorkflow = await this.getWorkflow(currentWorkflowId);
+      if (!currentWorkflow) {
+        throw new Error('Current workflow not found');
+      }
+
+      // Mark current workflow as completed/cancelled
+      await this.updateWorkflowStatus(currentWorkflowId, WorkflowStatus.COMPLETED);
+
+      // Find the target template by name
+      const targetTemplate = await this.getTemplateByName(targetWorkflowName);
+      if (!targetTemplate) {
+        return {
+          message: `I couldn't find the "${targetWorkflowName}" workflow. Please choose from the available options.`,
+          success: false
+        };
+      }
+
+      // Create new workflow
+      const newWorkflow = await this.createWorkflow(currentWorkflow.threadId, targetTemplate.id);
+
+      // Transfer relevant data if requested
+      if (transferData) {
+        await this.transferWorkflowContext(currentWorkflow, newWorkflow);
+      }
+
+      // Add transition message
+      const transitionMessage = `✅ Successfully switched to ${targetWorkflowName}! ${transferData ? "I've carried over relevant information from our previous conversation." : "Starting fresh with this workflow."}`;
+
+      return {
+        newWorkflow,
+        message: transitionMessage,
+        success: true
+      };
+    } catch (error) {
+      logger.error('Error executing workflow switch:', error);
+      return {
+        message: 'I had trouble switching workflows. Would you like to try again?',
+        success: false
+      };
+    }
+  }
+
+  /**
+   * Transfer relevant context between workflows
+   */
+  private async transferWorkflowContext(fromWorkflow: Workflow, toWorkflow: Workflow): Promise<void> {
+    try {
+      // Extract information from completed steps in the old workflow
+      const collectedInfo: Record<string, any> = {};
+
+      for (const step of fromWorkflow.steps) {
+        if (step.status === StepStatus.COMPLETE && step.metadata?.collectedInformation) {
+          Object.assign(collectedInfo, step.metadata.collectedInformation);
+        }
+      }
+
+      if (Object.keys(collectedInfo).length === 0) {
+        return; // No information to transfer
+      }
+
+      // Find the first information collection step in the new workflow
+      const firstInfoStep = toWorkflow.steps.find(step => 
+        step.stepType === StepType.JSON_DIALOG && 
+        step.name.toLowerCase().includes('information')
+      );
+
+      if (firstInfoStep) {
+        // Pre-populate the new step with transferred information
+        await this.updateStep(firstInfoStep.id, {
+          metadata: {
+            ...firstInfoStep.metadata,
+            transferredInformation: collectedInfo,
+            hasTransferredData: true
+          }
+        });
+
+        logger.info('Transferred workflow context', {
+          fromWorkflow: fromWorkflow.id,
+          toWorkflow: toWorkflow.id,
+          transferredFields: Object.keys(collectedInfo)
+        });
+      }
+    } catch (error) {
+      logger.error('Error transferring workflow context:', error);
+      // Don't throw - context transfer is optional
     }
   }
 }

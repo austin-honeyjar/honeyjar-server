@@ -28,6 +28,12 @@ export class JsonDialogService {
     suggestedNextStep?: string;
     apiResponse: string;
     readyToGenerate?: boolean;
+    workflowSwitchDetected?: {
+      targetWorkflow: string;
+      confidence: number;
+      reasoning: string;
+      offerMessage?: string;
+    };
   }> {
     try {
       logger.info('Processing JSON dialog message', {
@@ -168,11 +174,18 @@ export class JsonDialogService {
         // Clean the response text to remove markdown code blocks if present
         let cleanedResponseText = openAIResult.responseText.trim();
         
-        // Remove markdown code blocks (```json ... ``` or ``` ... ```)
-        if (cleanedResponseText.startsWith('```json')) {
-          cleanedResponseText = cleanedResponseText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-        } else if (cleanedResponseText.startsWith('```')) {
-          cleanedResponseText = cleanedResponseText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+        // Handle explanatory text before JSON code blocks
+        // Look for patterns like "Here's the collected information:\n\n```json"
+        const jsonBlockMatch = cleanedResponseText.match(/```json\s*\n([\s\S]*?)\n\s*```/);
+        if (jsonBlockMatch) {
+          cleanedResponseText = jsonBlockMatch[1].trim();
+        } else {
+          // Fallback to original logic for other markdown patterns
+          if (cleanedResponseText.startsWith('```json')) {
+            cleanedResponseText = cleanedResponseText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+          } else if (cleanedResponseText.startsWith('```')) {
+            cleanedResponseText = cleanedResponseText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+          }
         }
         
         // Also handle cases where there might be backticks without the full markdown syntax
@@ -196,8 +209,27 @@ export class JsonDialogService {
         } else if (typeof responseData.isStepComplete === 'boolean' && responseData.isComplete === undefined) {
           responseData.isComplete = responseData.isStepComplete;
         } else if (responseData.isComplete === undefined && responseData.isStepComplete === undefined) {
-          // No completion status at all
-          throw new Error('Missing isComplete or isStepComplete boolean field in response');
+          // Check if this is a workflow switch detection response
+          if (responseData.workflow_switch_detected) {
+            logger.info('Workflow switch detected in JSON response', {
+              targetWorkflow: responseData.target_workflow,
+              confidence: responseData.confidence,
+              reasoning: responseData.reasoning
+            });
+            
+            // Set completion status for workflow switch responses
+            responseData.isComplete = false; // Don't complete the step, handle the switch
+            responseData.isStepComplete = false;
+            responseData.workflowSwitchDetected = {
+              targetWorkflow: responseData.target_workflow,
+              confidence: responseData.confidence,
+              reasoning: responseData.reasoning,
+              offerMessage: responseData.offer_message
+            };
+          } else {
+            // No completion status at all and not a workflow switch
+            throw new Error('Missing isComplete or isStepComplete boolean field in response');
+          }
         }
 
         // Handle extractedInformation vs collectedInformation
@@ -584,7 +616,8 @@ export class JsonDialogService {
         collectedInformation: responseData.collectedInformation || collectedInfo,
         suggestedNextStep: responseData.suggestedNextStep,
         apiResponse: openAIResult.responseText,
-        readyToGenerate: responseData.readyToGenerate || false
+        readyToGenerate: responseData.readyToGenerate || false,
+        workflowSwitchDetected: responseData.workflowSwitchDetected // Pass through workflow switch data
       };
     } catch (error) {
       logger.error('Error in JSON dialog processing', {

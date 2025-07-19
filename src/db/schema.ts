@@ -16,7 +16,13 @@ export const chatThreads = pgTable('chat_threads', {
   userId: text('user_id').notNull(),
   orgId: text('org_id'),
   title: text('title').notNull(),
+  threadType: text('thread_type').notNull().default('standard'), // 'global', 'asset', 'workflow', 'standard'
+  contextId: uuid('context_id'), // ID of related asset, workflow, etc.
+  contextType: text('context_type'), // 'asset', 'workflow', null for global
+  isActive: boolean('is_active').notNull().default(true),
+  metadata: jsonb('metadata').default('{}'), // Store additional context info
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Chat messages table

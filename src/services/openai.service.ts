@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { WorkflowStep } from '../types/workflow';
+import { workflowContextService } from './workflowContext.service';
 import logger from '../utils/logger';
 
 export class OpenAIService {
@@ -171,7 +172,97 @@ export class OpenAIService {
       previousResponsesCount: previousResponses.length
     });
 
-    let systemMessage = `You are a PR assistant helping with ${step.name}.\n\n`;
+    // === ADD UNIVERSAL WORKFLOW CONTEXT HEADER ===
+    let systemMessage = '';
+    
+    try {
+      // Get current workflow context from step metadata or fallback
+      let currentWorkflow = step.metadata?.currentWorkflow;
+      
+      // If no workflow in metadata, try to get it from template ID in the step metadata
+      if (!currentWorkflow || currentWorkflow === 'Current Workflow') {
+        // Check if we have template context in metadata
+        const templateId = step.metadata?.templateId;
+        if (templateId) {
+          currentWorkflow = workflowContextService.getWorkflowNameByTemplateId(templateId);
+          logger.debug('Resolved workflow name from template ID', {
+            stepId: step.id,
+            templateId,
+            resolvedWorkflow: currentWorkflow
+          });
+        }
+      }
+      
+      // If still no workflow name, try a direct lookup from step name or known templates
+      if (!currentWorkflow || currentWorkflow === 'Current Workflow') {
+        // Map common step patterns to workflows
+        if (step.name?.includes('Blog') || step.description?.includes('blog')) {
+          currentWorkflow = 'Blog Article';
+        } else if (step.name?.includes('Social') || step.description?.includes('social')) {
+          currentWorkflow = 'Social Post';  
+        } else if (step.name?.includes('Press') || step.description?.includes('press release')) {
+          currentWorkflow = 'Press Release';
+        } else if (step.name?.includes('FAQ') || step.description?.includes('FAQ') || step.name?.includes('Information Collection')) {
+          currentWorkflow = 'FAQ';
+        } else if (step.name?.includes('Media') && step.description?.includes('pitch')) {
+          currentWorkflow = 'Media Pitch';
+        }
+        
+        if (currentWorkflow && currentWorkflow !== 'Current Workflow') {
+          logger.debug('Resolved workflow name from step context', {
+            stepId: step.id,
+            stepName: step.name,
+            stepDescription: step.description,
+            resolvedWorkflow: currentWorkflow
+          });
+        }
+      }
+      
+      // Final fallback
+      currentWorkflow = currentWorkflow || 'Current Workflow';
+      const currentStepName = step.name || 'Current Step';
+      
+      logger.debug('Final workflow context for OpenAI', {
+        stepId: step.id,
+        finalWorkflow: currentWorkflow,
+        stepName: currentStepName,
+        hasSecurityConfig: !!workflowContextService.getWorkflowSecurityConfig(currentWorkflow)
+      });
+      
+      // SECURITY CHECK: Only add workflow context header if workflow allows it
+      const workflowContextHeader = workflowContextService.getWorkflowContextHeader(
+        currentWorkflow,
+        currentStepName
+      );
+      
+      // The getWorkflowContextHeader method already handles security checks internally
+      // It returns empty string for restricted workflows
+      if (workflowContextHeader.trim()) {
+        systemMessage += workflowContextHeader + '\n\n';
+        logger.debug('Added universal workflow context header', {
+          stepId: step.id,
+          workflow: currentWorkflow,
+          headerLength: workflowContextHeader.length,
+          securityLevel: workflowContextService.getWorkflowSecurityConfig(currentWorkflow)?.security_level || 'unknown'
+        });
+      } else {
+        const securityConfig = workflowContextService.getWorkflowSecurityConfig(currentWorkflow);
+        logger.debug('Skipped workflow context header due to security restrictions', {
+          stepId: step.id,
+          workflow: currentWorkflow,
+          securityLevel: securityConfig?.security_level || 'unknown',
+          reason: securityConfig?.reason || 'Security configuration prevents AI context headers',
+          aiContextHeadersEnabled: workflowContextService.isAIContextHeadersEnabled(currentWorkflow)
+        });
+      }
+      
+    } catch (error) {
+      logger.warn('Failed to add universal workflow context header:', error);
+      // Continue without the header if there's an error
+    }
+    
+    // === CONTINUE WITH EXISTING SYSTEM MESSAGE ===
+    systemMessage += `You are a PR assistant helping with ${step.name}.\n\n`;
     
     // Add step description
     if (step.description) {

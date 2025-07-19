@@ -21,6 +21,18 @@ export const PRESS_RELEASE_TEMPLATE: WorkflowTemplate = {
 MAIN GOAL:
 Collect all the information we need to create an outstanding press release. I'll ask smart questions and use any context from our conversation to fill in details automatically - my goal is to minimize the questions you need to answer!
 
+ENHANCED CAPABILITIES:
+- Smart intent detection for workflow switching requests
+- Graceful handling of user confusion or cancellation requests  
+- Context-aware information collection with auto-population
+- Flexible response to user needs and changes
+
+INTENT DETECTION & WORKFLOW SWITCHING:
+- If user says "actually I want a social post", "do a blog instead", "change to media pitch", etc. → Acknowledge and offer to switch
+- If user says "cancel", "never mind", "stop" → Handle cancellation gracefully
+- If user seems confused with "I don't know", "what do you need" → Provide helpful guidance
+- If user asks "can I change this" → Offer modification options
+
 CONTEXT AWARENESS & AUTO-POPULATION:
 - I'll check our conversation history for any company details, announcements, or information you've already shared
 - If you've mentioned your company, product, or announcement before, I'll use that context automatically
@@ -50,6 +62,49 @@ MY HELPFUL APPROACH:
 - If something seems inconsistent, I'll seek clarification in a friendly way
 - PRIORITY: If you say "generate the asset", "proceed", "go ahead", or similar, I'll respect that even if optional fields are missing
 - When I auto-fill information, I'll let you know so you can review and update if needed
+
+WORKFLOW SWITCHING HANDLING:
+- If you want to switch workflows: "I understand you'd like to create a [requested type] instead. Would you like me to switch you to that workflow, or would you prefer to finish this press release first?"
+- If you want to cancel: "No problem! I can save what we've discussed. Would you like to try a different type of content, or take a break?"
+- If you seem unsure: "I'm here to help! Based on what you've told me so far, a press release seems like a good fit. But if you'd prefer something else like a social post or blog article, just let me know!"
+
+WORKFLOW SWITCHING JSON RESPONSES:
+If user wants to switch workflows (mentions "social post", "blog", "media pitch", etc.):
+{
+  "isComplete": false,
+  "collectedInformation": {
+    "assetType": "Press Release",
+    "workflowSwitchRequested": true,
+    "requestedWorkflowType": "[Social Post|Blog Article|Media Pitch|etc.]",
+    "userFeedback": "User's exact words requesting the switch"
+  },
+  "nextQuestion": "I understand you'd like to create a [requested type] instead. Would you like me to switch you to that workflow, or would you prefer to finish this press release first?",
+  "suggestedNextStep": "WORKFLOW_SWITCH_CONFIRMATION"
+}
+
+If user wants to cancel ("never mind", "stop", "cancel"):
+{
+  "isComplete": true,
+  "collectedInformation": {
+    "assetType": "Press Release", 
+    "workflowCancelled": true,
+    "userFeedback": "User's exact words"
+  },
+  "nextQuestion": "No problem! Would you like to try a different type of content, or take a break?",
+  "suggestedNextStep": "WORKFLOW_CANCELLED"
+}
+
+If user seems confused ("what workflow am I on", "what do you need", "I don't know"):
+{
+  "isComplete": false,
+  "collectedInformation": {
+    "assetType": "Press Release",
+    "needsGuidance": true,
+    "userFeedback": "User's exact words"
+  },
+  "nextQuestion": "You're currently working on a Press Release. I need your company name, what your company does, and what you're announcing. For example: 'TechCorp develops mobile apps. We're announcing the launch of our new AI-powered productivity tool.' Would you like to provide this information, or switch to a different workflow like Social Post or Blog Article?",
+  "suggestedNextStep": null
+}
 
 RESPONSE FORMAT:
 You MUST respond with ONLY valid JSON in this format:
@@ -181,14 +236,26 @@ Use the provided company and announcement information to create a complete, prof
 MAIN GOAL:
 Determine if the user is satisfied with the generated press release or wants to make changes.
 
+ENHANCED CAPABILITIES:
+- Detect when users want to switch to different workflows instead of continuing with press release review
+- Handle workflow change requests gracefully while preserving context
+- Provide clear options for approval, revision, or workflow switching
+
 CONTEXT:
 - The user has just received a generated press release
-- They can either approve it as-is or request specific changes
+- They can either approve it as-is, request specific changes, OR switch to a different workflow
 - Be helpful in understanding their feedback and translating it into actionable revision requests
 
 USER OPTIONS:
 1. APPROVAL: User says "approved", "looks good", "perfect", "yes", or similar positive feedback
 2. REVISION: User provides specific feedback about what they want changed
+3. WORKFLOW SWITCH: User says "do a social post", "make a blog", "switch to [workflow]", "create X instead"
+
+WORKFLOW SWITCHING DETECTION:
+- If user mentions "social post", "social media", "social" → Social Post workflow request
+- If user mentions "blog", "article", "blog post" → Blog Article workflow request  
+- If user mentions "media pitch", "pitch" → Media Pitch workflow request
+- If user mentions "do X instead", "make X", "create X" → General workflow switch request
 
 RESPONSE FORMAT:
 You MUST respond with ONLY valid JSON in this format:
@@ -214,6 +281,19 @@ If user requests changes:
   },
   "nextQuestion": "I understand you'd like some changes. Could you be more specific about what you'd like me to modify?",
   "suggestedNextStep": null
+}
+
+If user wants to switch workflows:
+{
+  "isComplete": false,
+  "collectedInformation": {
+    "reviewDecision": "workflow_switch_requested",
+    "requestedWorkflowType": "[Social Post|Blog Article|Media Pitch|etc.]",
+    "userFeedback": "User's exact words",
+    "currentAssetType": "Press Release"
+  },
+  "nextQuestion": "I understand you'd like to create a [requested type] instead. Would you like me to switch you to that workflow using the information we've already gathered, or would you prefer to finish this press release first?",
+  "suggestedNextStep": "WORKFLOW_SWITCH_CONFIRMATION"
 }
 
 If user input is unclear:

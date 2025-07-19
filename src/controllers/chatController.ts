@@ -91,7 +91,18 @@ export const chatController = {
 
       res.status(201).json({
         message,
-        response
+        response: typeof response === 'string' ? response : response.response,
+        // Include debug data if present
+        ...(typeof response === 'object' && response !== null ? {
+          workflowSwitchDetected: response.workflowSwitchDetected,
+          targetWorkflow: response.targetWorkflow,
+          confidence: response.confidence,
+          reasoning: response.reasoning,
+          switchMethod: response.switchMethod,
+          method: response.method,
+          patternMatched: response.patternMatched,
+          aiDetection: response.aiDetection
+        } : {})
       });
     } catch (error) {
       logger.error('Error creating chat message:', error);
