@@ -1984,9 +1984,17 @@ export class MetabaseService {
           const englishArticles = author.articles.filter((article: any) => {
             const isEnglish = this.isEnglishArticle(article);
             if (!isEnglish) {
+              // Enhanced debug logging to show specific rejection reasons
+              const title = article.title?.substring(0, 100);
+              const textToAnalyze = `${article.title || ''} ${article.summary || article.extract || ''}`.trim();
+              const nonStandardChar = textToAnalyze.match(/[^\u0020-\u007E\u00A0-\u00FF\u2010-\u2019\u201C-\u201D\u2026\u2013\u2014\s]/);
+              
               logger.debug(`LANGUAGE FILTER: Article rejected for ${author.name}`, {
-                title: article.title?.substring(0, 100),
-                reason: 'Failed isEnglishArticle check'
+                title,
+                reason: 'Failed isEnglishArticle check',
+                firstNonStandardChar: nonStandardChar?.[0],
+                charCode: nonStandardChar?.[0]?.charCodeAt(0),
+                textLength: textToAnalyze.length
               });
             }
             return isEnglish;
@@ -2196,13 +2204,17 @@ export class MetabaseService {
       return false;
     }
     
-    // HARD REJECT: Check for non-Latin scripts (Japanese, Chinese, Korean, Arabic, Cyrillic, etc.)
-    const nonLatinScriptRegex = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\uAC00-\uD7AF\u0600-\u06FF\u0400-\u04FF\u0370-\u03FF]/;
+    // HARD REJECT: Check for non-Latin scripts using a simpler, more effective approach
+    // Instead of listing every possible non-English character, check if text contains mostly basic Latin + punctuation
+    const basicLatinAndPunctuation = /^[\u0020-\u007E\u00A0-\u00FF\u2010-\u2019\u201C-\u201D\u2026\u2013\u2014\s]*$/;
     
-    if (nonLatinScriptRegex.test(textToAnalyze)) {
-      logger.debug('Article rejected: contains non-Latin script characters', {
+    if (!basicLatinAndPunctuation.test(textToAnalyze)) {
+      // Find the first non-standard character for debugging
+      const nonStandardChar = textToAnalyze.match(/[^\u0020-\u007E\u00A0-\u00FF\u2010-\u2019\u201C-\u201D\u2026\u2013\u2014\s]/);
+      logger.debug('Article rejected: contains non-standard characters', {
         title: article.title?.substring(0, 50),
-        detectedChars: textToAnalyze.match(nonLatinScriptRegex)?.slice(0, 5)
+        firstNonStandardChar: nonStandardChar?.[0],
+        charCode: nonStandardChar?.[0]?.charCodeAt(0)
       });
       return false;
     }
@@ -2352,10 +2364,10 @@ export class MetabaseService {
     
     // Safety check: Immediately return 0 for clearly non-English content (non-Latin scripts only)
     const textToCheck = `${article.title || ''} ${article.summary || ''}`;
-    const nonLatinScriptRegex = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\uAC00-\uD7AF\u0600-\u06FF\u0400-\u04FF\u0370-\u03FF]/;
+    const basicLatinAndPunctuation = /^[\u0020-\u007E\u00A0-\u00FF\u2010-\u2019\u201C-\u201D\u2026\u2013\u2014\s]*$/;
     
-    if (nonLatinScriptRegex.test(textToCheck)) {
-      logger.debug('Relevance scoring: Article contains non-Latin script, returning 0 score', {
+    if (!basicLatinAndPunctuation.test(textToCheck)) {
+      logger.debug('Relevance scoring: Article contains non-standard characters, returning 0 score', {
         title: article.title?.substring(0, 50)
       });
       return 0;
