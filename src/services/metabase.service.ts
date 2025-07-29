@@ -1951,138 +1951,163 @@ export class MetabaseService {
     };
   }> {
     try {
-      logger.info('🔬 Starting algorithmic article analysis (NO AI)', {
-        authorsCount: searchResults?.authorResults?.length || 0,
+      logger.info('🔍 Starting Enhanced Algorithmic Article Analysis', {
         topic,
-        securityNote: 'Pure algorithmic approach - no OpenAI calls'
+        totalAuthors: searchResults.authorResults?.length || 0,
+        totalArticles: searchResults.authorResults?.reduce((sum: number, author: any) => sum + (author.articles?.length || 0), 0) || 0
+      });
+
+      // Extract AI-generated keywords from the workflow for enhanced matching
+      const aiKeywords = this.extractAIGeneratedKeywords(searchResults);
+      const keywordArray = this.prepareKeywordsForMatching(topic, aiKeywords);
+
+      logger.info('🎯 Enhanced Keywords for Relevance Matching', {
+        originalTopic: topic,
+        aiGeneratedKeywords: aiKeywords,
+        finalKeywordArray: keywordArray,
+        keywordCount: keywordArray.length
       });
 
       if (!searchResults?.authorResults) {
         throw new Error('No author results found in search data');
       }
 
+      // Initialize tracking variables
       let totalArticlesAnalyzed = 0;
-      let languageFiltered = 0;
-      const rankedAuthors = [];
+      let languageFilteredCount = 0;
 
-      // Process each author with algorithmic scoring
-      for (const author of searchResults.authorResults) {
-        if (!author.articles || author.articles.length === 0) {
-          continue;
-        }
-
-        // Filter articles by language
-        const englishArticles = author.articles.filter((article: any) => {
-          const isEnglish = this.isEnglishArticle(article);
-          if (!isEnglish) languageFiltered++;
-          return isEnglish;
-        });
-
-        if (englishArticles.length === 0) {
-          logger.info(`Skipping ${author.name} - no English articles found`);
-          continue;
-        }
-
-        totalArticlesAnalyzed += englishArticles.length;
-
-        // Calculate algorithmic scores for each article
-        const scoredArticles = englishArticles.map((article: any) => {
-          const relevanceScore = this.calculateAdvancedTopicRelevance(article, topic);
-          const relevanceFactors = this.getRelevanceFactors(article, topic);
+      // Process each author's articles
+      const authorAnalysisResults = searchResults.authorResults
+        .filter((author: any) => author.articles && author.articles.length > 0)
+        .map((author: any) => {
+          // Filter for English articles first
+          const englishArticles = author.articles.filter((article: any) => {
+            const isEnglish = this.isEnglishArticle(article);
+            if (!isEnglish) {
+              logger.debug(`LANGUAGE FILTER: Article rejected for ${author.name}`, {
+                title: article.title?.substring(0, 100),
+                reason: 'Failed isEnglishArticle check'
+              });
+            }
+            return isEnglish;
+          });
           
-          return {
-            ...article,
-            relevanceScore,
-            relevanceFactors,
-            title: article.title?.substring(0, 100) || 'No title',
-            summary: article.summary?.substring(0, 200) || 'No summary available'
-          };
-        });
+          languageFilteredCount += (author.articles.length - englishArticles.length);
 
-        // Sort articles by relevance score
-        scoredArticles.sort((a: any, b: any) => b.relevanceScore - a.relevanceScore);
+          if (englishArticles.length === 0) {
+            logger.info(`⚠️  Author ${author.name}: No English articles found (${author.articles.length} total articles filtered out)`);
+            return null;
+          }
 
-        // Calculate author-level metrics
-        const relevantArticles = scoredArticles.filter((a: any) => a.relevanceScore >= 15); // FIXED: Raised back from 10 to 15
-        const averageRelevanceScore = scoredArticles.reduce((sum: number, a: any) => sum + a.relevanceScore, 0) / scoredArticles.length;
-        
-        // Calculate algorithmic score components
-        const editorialScore = this.calculateEditorialRankScore(author);
-        const topicRelevanceScore = averageRelevanceScore;
-        const recencyScore = this.calculateRecencyScore(scoredArticles);
-        const sourceQualityScore = this.calculateSourceQualityScore(author);
+          logger.debug(`LANGUAGE FILTER: Author ${author.name}`, {
+            totalArticles: author.articles.length,
+            englishArticles: englishArticles.length,
+            filteredOut: author.articles.length - englishArticles.length
+          });
 
-        // Weighted total score
-        const algorithmicScore = 
-          (editorialScore * 0.25) +
-          (topicRelevanceScore * 0.35) +
-          (recencyScore * 0.20) +
-          (sourceQualityScore * 0.20);
+          // Calculate topic relevance for each article using enhanced keywords
+          const articlesWithRelevance = englishArticles.map((article: any) => {
+            const relevanceScore = this.calculateAdvancedTopicRelevance(article, topic, keywordArray);
+            const relevanceFactors = this.getRelevanceFactors(article, topic, keywordArray);
+            
+            console.log(`ENHANCED SCORING DEBUG - ${author.name}:`, {
+              articleTitle: article.title?.substring(0, 100),
+              relevanceScore,
+              relevanceFactors,
+              keywordsUsed: keywordArray.slice(0, 5), // Show first 5 keywords
+              languageCheck: 'PASSED'
+            });
 
-        // 🔧 DEBUG: Log scoring details for the first few authors
-        if (rankedAuthors.length < 3) {
-          logger.info(`🔬 SCORING DEBUG for ${author.name}:`, {
-            topic,
+            return {
+              ...article,
+              relevanceScore,
+              relevanceFactors
+            };
+          });
+
+          // Calculate author-level metrics
+          const relevantArticles = articlesWithRelevance.filter((a: any) => a.relevanceScore >= 15);
+          const averageRelevanceScore = articlesWithRelevance.reduce((sum: number, a: any) => sum + a.relevanceScore, 0) / articlesWithRelevance.length;
+          
+          // Calculate algorithmic score components
+          const editorialScore = this.calculateEditorialRankScore(author);
+          const topicRelevanceScore = averageRelevanceScore;
+          const recencyScore = this.calculateRecencyScore(articlesWithRelevance);
+          const sourceQualityScore = this.calculateSourceQualityScore(author);
+
+          // Calculate overall algorithmic score
+          const algorithmicScore = (
+            (editorialScore * 0.25) +      // 25% editorial rank
+            (topicRelevanceScore * 0.35) +  // 35% topic relevance
+            (recencyScore * 0.20) +         // 20% recency
+            (sourceQualityScore * 0.20)     // 20% source quality
+          );
+
+          const relevanceGrade = averageRelevanceScore >= 70 ? 'A' :
+                                 averageRelevanceScore >= 60 ? 'B' :
+                                 averageRelevanceScore >= 50 ? 'C' :
+                                 averageRelevanceScore >= 40 ? 'D' : 'F';
+
+          totalArticlesAnalyzed += englishArticles.length;
+
+          console.log(`ENHANCED SCORING DEBUG - ${author.name}:`, {
+            algorithmicScore,
             editorialScore,
-            topicRelevanceScore: Math.round(topicRelevanceScore * 10) / 10,
+            topicRelevanceScore,
             recencyScore,
             sourceQualityScore,
-            algorithmicScore: Math.round(algorithmicScore * 10) / 10,
             articleCount: englishArticles.length,
             relevantArticles: relevantArticles.length,
-            topScoredArticle: scoredArticles[0] ? {
-              title: scoredArticles[0].title?.substring(0, 80),
-              score: scoredArticles[0].relevanceScore
+            topScoredArticle: articlesWithRelevance[0] ? {
+              title: articlesWithRelevance[0].title?.substring(0, 80),
+              score: articlesWithRelevance[0].relevanceScore
             } : 'None'
           });
-        }
 
-        // Determine relevance grade
-        const relevanceGrade = averageRelevanceScore >= 80 ? 'High' :
-                              averageRelevanceScore >= 60 ? 'Medium' :
-                              averageRelevanceScore >= 40 ? 'Low' : 'Minimal';
+          // Extract expertise areas from article topics
+          const expertiseAreas = this.extractExpertiseAreas(articlesWithRelevance);
 
-        // Extract expertise areas from article topics
-        const expertiseAreas = this.extractExpertiseAreas(scoredArticles);
-
-        rankedAuthors.push({
-          rank: 0, // Will be set after sorting
-          authorId: author.authorId,
-          name: author.name,
-          organization: author.organization,
-          algorithmicScore: Math.round(algorithmicScore * 10) / 10,
-          editorialRank: this.extractEditorialRank(author),
-          recentRelevantArticles: relevantArticles.length,
-          totalRecentArticles: englishArticles.length,
-          averageRelevanceScore: Math.round(averageRelevanceScore * 10) / 10,
-          relevanceGrade,
-          mostRecentArticle: scoredArticles[0]?.publishedAt || '',
-          expertiseAreas,
-          publicationType: this.determinePublicationType(author.organization),
-          articleSnippets: scoredArticles.slice(0, 3).map((article: any) => ({
-            title: article.title,
-            summary: article.summary,
-            relevanceScore: article.relevanceScore,
-            publishedAt: article.publishedAt,
-            url: article.url,
-            relevanceFactors: article.relevanceFactors
-          })),
-          scoreBreakdown: {
-            editorial: Math.round(editorialScore * 0.25),
-            topicRelevance: Math.round(topicRelevanceScore * 0.35),
-            recency: Math.round(recencyScore * 0.20),
-            sourceQuality: Math.round(sourceQualityScore * 0.20)
-          }
-        });
-      }
+          return {
+            rank: 0, // Will be set after sorting
+            authorId: author.authorId,
+            name: author.name,
+            organization: author.organization,
+            algorithmicScore: Math.round(algorithmicScore * 10) / 10,
+            editorialRank: this.extractEditorialRank(author),
+            recentRelevantArticles: relevantArticles.length,
+            totalRecentArticles: englishArticles.length,
+            averageRelevanceScore: Math.round(averageRelevanceScore * 10) / 10,
+            relevanceGrade,
+            mostRecentArticle: articlesWithRelevance[0]?.publishedAt || '',
+            expertiseAreas,
+            publicationType: this.determinePublicationType(author.organization),
+            articleSnippets: articlesWithRelevance.slice(0, 3).map((article: any) => ({
+              title: article.title,
+              summary: article.summary,
+              relevanceScore: article.relevanceScore,
+              publishedAt: article.publishedAt,
+              url: article.url,
+              relevanceFactors: article.relevanceFactors
+            })),
+            scoreBreakdown: {
+              editorial: Math.round(editorialScore * 0.25),
+              topicRelevance: Math.round(topicRelevanceScore * 0.35),
+              recency: Math.round(recencyScore * 0.20),
+              sourceQuality: Math.round(sourceQualityScore * 0.20)
+            }
+          };
+        })
+        .filter((author: any) => author !== null); // Remove null entries
 
       // Sort authors by algorithmic score
-      rankedAuthors.sort((a, b) => b.algorithmicScore - a.algorithmicScore);
+      const rankedAuthors = authorAnalysisResults.sort((a: any, b: any) => b.algorithmicScore - a.algorithmicScore);
 
-      // Assign ranks
-      rankedAuthors.forEach((author, index) => {
+      // Add rank numbers
+      rankedAuthors.forEach((author: any, index: number) => {
         author.rank = index + 1;
       });
+
+      const authorsWithRelevantContent = rankedAuthors.filter((author: any) => author.recentRelevantArticles > 0).length;
 
       // Generate insights
       const coverageInsights = this.generateCoverageInsights(rankedAuthors, searchResults.authorResults);
@@ -2091,13 +2116,13 @@ export class MetabaseService {
         topic,
         analysisDate: new Date().toISOString(),
         totalAuthorsAnalyzed: rankedAuthors.length,
-        authorsWithRelevantContent: rankedAuthors.filter(a => a.averageRelevanceScore >= 40).length,
+        authorsWithRelevantContent,
         totalArticlesAnalyzed,
-        languageFiltered,
+        languageFiltered: languageFilteredCount,
         rankedAuthors,
         coverageInsights,
-        methodologyNote: "Algorithmic ranking using metadata analysis: editorial rank, topic relevance via indexTerms/semantics, article recency, and source quality. NO AI used for security compliance.",
-        top10Authors: rankedAuthors.slice(0, 10).map(author => ({
+        methodologyNote: "Enhanced algorithmic ranking using AI-generated keywords, metadata analysis: editorial rank, topic relevance via indexTerms/semantics/metadata, article recency, and source quality. NO AI used for security compliance.",
+        top10Authors: rankedAuthors.slice(0, 10).map((author: any) => ({
           rank: author.rank,
           name: author.name,
           organization: author.organization,
@@ -2108,13 +2133,15 @@ export class MetabaseService {
         }))
       };
 
-      logger.info('✅ Algorithmic analysis completed', {
+      logger.info('✅ Enhanced Algorithmic Analysis completed', {
         authorsAnalyzed: rankedAuthors.length,
         articlesAnalyzed: totalArticlesAnalyzed,
-        languageFiltered,
+        languageFiltered: languageFilteredCount,
+        aiKeywordsUsed: aiKeywords.length,
+        totalKeywords: keywordArray.length,
         topAuthor: rankedAuthors[0]?.name || 'None',
         topScore: rankedAuthors[0]?.algorithmicScore || 0,
-        securityCompliant: 'NO AI used'
+        securityCompliant: 'NO AI used for article analysis'
       });
 
       return { analysisResults };
@@ -2129,14 +2156,14 @@ export class MetabaseService {
   }
 
   /**
-   * Check if an article is in English based on language fields
+   * Check if an article is in English based on language fields and character analysis
    * @param article Article to check
    * @returns boolean indicating if article is in English
    */
   private isEnglishArticle(article: any): boolean {
     const englishIndicators = ['en', 'eng', 'english', 'en-us', 'en-gb'];
     
-    // Check multiple language fields
+    // First check explicit language fields
     const languageFields = [
       article.language,
       article.languageCode,
@@ -2145,103 +2172,348 @@ export class MetabaseService {
       article.source?.primaryLanguage
     ];
     
+    let hasExplicitLanguage = false;
     for (const field of languageFields) {
       if (field && typeof field === 'string') {
+        hasExplicitLanguage = true;
         const lang = field.toLowerCase().trim();
         if (englishIndicators.includes(lang)) {
           return true;
         }
+        // If we have explicit non-English language, reject immediately
+        if (lang && !englishIndicators.includes(lang)) {
+          logger.debug(`Article rejected: explicit non-English language: ${lang}`);
+          return false;
+        }
       }
     }
     
-    // If no language field is specified, assume English (default behavior)
-    return true;
+    // If no explicit language metadata, analyze the content more carefully
+    const textToAnalyze = `${article.title || ''} ${article.summary || article.extract || ''}`.trim();
+    
+    if (!textToAnalyze) {
+      logger.debug('Article rejected: no text content to analyze');
+      return false;
+    }
+    
+    // HARD REJECT: Check for non-Latin scripts (Japanese, Chinese, Korean, Arabic, Cyrillic, etc.)
+    const nonLatinScriptRegex = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\uAC00-\uD7AF\u0600-\u06FF\u0400-\u04FF\u0370-\u03FF]/;
+    
+    if (nonLatinScriptRegex.test(textToAnalyze)) {
+      logger.debug('Article rejected: contains non-Latin script characters', {
+        title: article.title?.substring(0, 50),
+        detectedChars: textToAnalyze.match(nonLatinScriptRegex)?.slice(0, 5)
+      });
+      return false;
+    }
+    
+    // Check for excessive non-ASCII characters (but be more lenient than before)
+    const nonAsciiCount = (textToAnalyze.match(/[^\x00-\x7F]/g) || []).length;
+    const nonAsciiPercentage = (nonAsciiCount / textToAnalyze.length) * 100;
+    
+    // Only reject if VERY high percentage of non-ASCII (likely foreign language with accents/special chars)
+    if (nonAsciiPercentage > 40) {
+      logger.debug('Article rejected: very high non-ASCII character percentage', {
+        title: article.title?.substring(0, 50),
+        nonAsciiPercentage: Math.round(nonAsciiPercentage)
+      });
+      return false;
+    }
+    
+    // Check for obvious non-English word patterns (but only if no explicit language metadata)
+    if (!hasExplicitLanguage) {
+      const textLower = textToAnalyze.toLowerCase();
+      const strongNonEnglishPatterns = [
+        /\b(der|die|das|und|ich|sie|mit|von|zu|auf|bei|nach|vor|über)\b.*\b(der|die|das|und|ich|sie)\b/, // German (multiple words)
+        /\b(que|de|la|le|et|dans|pour|avec|sur|par|sans|sous)\b.*\b(que|de|la|le|et)\b/, // French (multiple words)
+        /\b(el|la|de|en|con|por|para|del|al|los|las)\b.*\b(el|la|de|en|con)\b/, // Spanish (multiple words)
+        /\b(и|в|на|с|по|для|от|до|при|что|это|как)\b.*\b(и|в|на|с|по)\b/ // Russian (multiple words)
+      ];
+      
+      for (const pattern of strongNonEnglishPatterns) {
+        if (pattern.test(textLower)) {
+          logger.debug('Article rejected: contains strong non-English language patterns', {
+            title: article.title?.substring(0, 50),
+            pattern: pattern.toString()
+          });
+          return false;
+        }
+      }
+    }
+    
+    // Check if source looks like US/English publication
+    const source = (article.source || '').toLowerCase();
+    const usEnglishSources = [
+      'nytimes', 'wsj', 'cnn', 'fox', 'reuters', 'ap news', 'bloomberg', 'usa today',
+      'washington post', 'abc news', 'nbc news', 'cbs news', 'npr', 'pbs',
+      'techcrunch', 'wired', 'ars technica', 'the verge', 'engadget'
+    ];
+    
+    const isLikelyUSSource = usEnglishSources.some(usSource => source.includes(usSource));
+    
+    // If no language metadata but appears to be English content, allow it
+    if (!hasExplicitLanguage) {
+      const looksEnglish = 
+        nonAsciiPercentage < 10 && // Low special characters
+        textToAnalyze.length > 10 && // Has substantial content
+        /[a-zA-Z]/.test(textToAnalyze) && // Contains Latin letters
+        (isLikelyUSSource || (textToAnalyze.match(/\b(the|and|of|to|in|for|with|on|at|by|from|as|is|are|was|were|been|have|has|had|will|would|could|should)\b/gi)?.length || 0) > 2); // Common English words
+      
+      if (looksEnglish) {
+        logger.debug('Article accepted: appears to be English based on content analysis', {
+          title: article.title?.substring(0, 50),
+          textLength: textToAnalyze.length,
+          nonAsciiPercentage: Math.round(nonAsciiPercentage),
+          isLikelyUSSource
+        });
+        return true;
+      } else {
+        logger.debug('Article rejected: does not appear to be English content', {
+          title: article.title?.substring(0, 50),
+          textLength: textToAnalyze.length,
+          nonAsciiPercentage: Math.round(nonAsciiPercentage),
+          isLikelyUSSource
+        });
+        return false;
+      }
+    }
+    
+    // If we get here with explicit language metadata but it wasn't English, reject
+    logger.debug('Article rejected: has explicit language metadata but not English', {
+      title: article.title?.substring(0, 50)
+    });
+    return false;
   }
 
   /**
-   * Calculate advanced topic relevance using rich metadata
-   * @param article Article to analyze
-   * @param topic Target topic
-   * @returns Relevance score 0-100
+   * Extract AI-generated keywords from the workflow search results
    */
-  private calculateAdvancedTopicRelevance(article: any, topic: string): number {
-    const topicLower = topic.toLowerCase();
-    const topicKeywords = topicLower.split(/\s+/).filter(word => word.length > 2);
+  private extractAIGeneratedKeywords(searchResults: any): string[] {
+    try {
+      // Extract keywords from AI Author Generation step if available
+      const targetedKeywords = searchResults?.aiGeneratedKeywords || 
+                              searchResults?.authorResults?.[0]?.targetedKeywords ||
+                              searchResults?.metadata?.targetedKeywords ||
+                              [];
+      
+      if (Array.isArray(targetedKeywords) && targetedKeywords.length > 0) {
+        // Extract keyword strings from objects if structured
+        return targetedKeywords.map((item: any) => {
+          if (typeof item === 'string') return item;
+          if (item?.keyword) return item.keyword;
+          return item?.toString() || '';
+        }).filter(k => k.length > 0);
+      }
+      
+      return [];
+    } catch (error) {
+      logger.warn('Error extracting AI-generated keywords:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Prepare keywords for matching by combining topic, AI keywords, and related terms
+   */
+  private prepareKeywordsForMatching(topic: string, aiKeywords: string[]): string[] {
+    const keywords = new Set<string>();
+    
+    // Add original topic and its variations
+    keywords.add(topic.toLowerCase());
+    if (topic.includes(' ')) {
+      topic.split(' ').forEach(word => {
+        if (word.length > 2) keywords.add(word.toLowerCase());
+      });
+    }
+    
+    // Add AI-generated keywords
+    aiKeywords.forEach(keyword => {
+      keywords.add(keyword.toLowerCase());
+      // Add word variations
+      if (keyword.includes(' ')) {
+        keyword.split(' ').forEach(word => {
+          if (word.length > 2) keywords.add(word.toLowerCase());
+        });
+      }
+    });
+    
+    // Add related terms from our existing mapping
+    const relatedTerms = this.getRelatedTerms(topic);
+    relatedTerms.forEach(term => keywords.add(term.toLowerCase()));
+    
+    return Array.from(keywords);
+  }
+
+  /**
+   * Calculate advanced topic relevance using enhanced keywords and metadata
+   */
+  private calculateAdvancedTopicRelevance(article: any, topic: string, keywords?: string[]): number {
+    const keywordArray = keywords || [topic.toLowerCase()];
+    
+    // Safety check: Immediately return 0 for clearly non-English content (non-Latin scripts only)
+    const textToCheck = `${article.title || ''} ${article.summary || ''}`;
+    const nonLatinScriptRegex = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\uAC00-\uD7AF\u0600-\u06FF\u0400-\u04FF\u0370-\u03FF]/;
+    
+    if (nonLatinScriptRegex.test(textToCheck)) {
+      logger.debug('Relevance scoring: Article contains non-Latin script, returning 0 score', {
+        title: article.title?.substring(0, 50)
+      });
+      return 0;
+    }
     
     let totalScore = 0;
-    let maxScore = 100;
+    let maxPossibleScore = 0;
 
-    // 1. Title relevance (25% weight)
-    const titleScore = this.calculateTextRelevance(article.title || '', topicKeywords) * 0.25;
-    totalScore += titleScore;
+    // Text relevance (title + summary) - 40% weight
+    const textRelevance = this.calculateTextRelevance(
+      `${article.title || ''} ${article.summary || ''}`, 
+      keywordArray
+    );
+    totalScore += textRelevance * 0.40;
+    maxPossibleScore += 100 * 0.40;
 
-    // 2. Summary/content relevance (20% weight)
-    const contentScore = this.calculateTextRelevance(article.summary || article.extract || '', topicKeywords) * 0.20;
-    totalScore += contentScore;
+    // Enhanced metadata relevance - 25% weight
+    const metadataRelevance = this.calculateMetadataRelevance(article, keywordArray);
+    totalScore += metadataRelevance * 0.25;
+    maxPossibleScore += 100 * 0.25;
 
-    // 3. LexisNexis IndexTerms relevance (25% weight) - This is the key improvement!
-    const indexTermsScore = this.calculateIndexTermsRelevance(article.indexTerms || [], topicKeywords) * 0.25;
-    totalScore += indexTermsScore;
+    // IndexTerms relevance - 20% weight
+    if (article.indexTerms && Array.isArray(article.indexTerms)) {
+      const indexTermsRelevance = this.calculateIndexTermsRelevance(article.indexTerms, keywordArray);
+      totalScore += indexTermsRelevance * 0.20;
+    }
+    maxPossibleScore += 100 * 0.20;
 
-    // 4. Semantic entities relevance (15% weight)
-    const entitiesScore = this.calculateEntitiesRelevance(article.semantics?.entities || [], topicKeywords) * 0.15;
-    totalScore += entitiesScore;
+    // Entities relevance - 10% weight
+    if (article.semantics?.entities) {
+      const entitiesRelevance = this.calculateEntitiesRelevance(article.semantics.entities, keywordArray);
+      totalScore += entitiesRelevance * 0.10;
+    }
+    maxPossibleScore += 100 * 0.10;
 
-    // 5. Company mentions relevance (10% weight)
-    const companiesScore = this.calculateCompaniesRelevance(article.companies || [], topicKeywords) * 0.10;
-    totalScore += companiesScore;
+    // Companies relevance - 5% weight
+    if (article.companies && Array.isArray(article.companies)) {
+      const companiesRelevance = this.calculateCompaniesRelevance(article.companies, keywordArray);
+      totalScore += companiesRelevance * 0.05;
+    }
+    maxPossibleScore += 100 * 0.05;
 
-    // 6. Topics array relevance (5% weight)
-    const topicsScore = this.calculateTopicsArrayRelevance(article.topics || [], topicKeywords) * 0.05;
-    totalScore += topicsScore;
-
-    return Math.min(maxScore, Math.round(totalScore));
+    const finalScore = Math.min(100, (totalScore / maxPossibleScore) * 100);
+    
+    return finalScore;
   }
 
   /**
-   * Get human-readable relevance factors for an article
+   * Calculate metadata relevance using industry, source, and topic information
    */
-  private getRelevanceFactors(article: any, topic: string): string[] {
+  private calculateMetadataRelevance(article: any, keywords: string[]): number {
+    let score = 0;
+    
+    // Check source metadata
+    const source = (article.source || '').toLowerCase();
+    keywords.forEach(keyword => {
+      if (source.includes(keyword)) score += 20;
+    });
+    
+    // Check topics array
+    if (article.topics && Array.isArray(article.topics)) {
+      score += this.calculateTopicsArrayRelevance(article.topics, keywords);
+    }
+    
+    // Check for industry-specific metadata
+    const metadata = article.metadata || {};
+    const metadataText = JSON.stringify(metadata).toLowerCase();
+    keywords.forEach(keyword => {
+      if (metadataText.includes(keyword)) score += 10;
+    });
+    
+    // Check author organization for industry relevance
+    if (article.authorDetails?.organization) {
+      const orgText = article.authorDetails.organization.toLowerCase();
+      keywords.forEach(keyword => {
+        if (orgText.includes(keyword)) score += 15;
+      });
+    }
+    
+    return Math.min(100, score);
+  }
+
+  /**
+   * Get relevance factors with enhanced keyword matching
+   */
+  private getRelevanceFactors(article: any, topic: string, keywords?: string[]): string[] {
+    const keywordArray = keywords || [topic.toLowerCase()];
     const factors: string[] = [];
-    const topicLower = topic.toLowerCase();
-    const topicKeywords = topicLower.split(/\s+/).filter(word => word.length > 2);
 
-    // Check title matches
-    if (article.title && topicKeywords.some(keyword => article.title.toLowerCase().includes(keyword))) {
-      factors.push('Title matches topic');
-    }
+    // Check title and summary
+    const titleText = (article.title || '').toLowerCase();
+    const summaryText = (article.summary || '').toLowerCase();
+    
+    keywordArray.forEach(keyword => {
+      if (titleText.includes(keyword)) {
+        factors.push(`Title mentions "${keyword}"`);
+      }
+      if (summaryText.includes(keyword)) {
+        factors.push(`Summary mentions "${keyword}"`);
+      }
+    });
 
-    // Check index terms
+    // Check indexTerms
     if (article.indexTerms && Array.isArray(article.indexTerms)) {
-      const matchingTerms = article.indexTerms.filter((term: any) => 
-        topicKeywords.some(keyword => (term.name || '').toLowerCase().includes(keyword))
-      );
-      if (matchingTerms.length > 0) {
-        factors.push(`LexisNexis categorization: ${matchingTerms.map((t: any) => t.name).join(', ')}`);
-      }
+      article.indexTerms.forEach((term: any) => {
+        if (term.name) {
+          const termName = term.name.toLowerCase();
+          keywordArray.forEach(keyword => {
+            if (termName.includes(keyword)) {
+              factors.push(`Index term: ${term.name}`);
+            }
+          });
+        }
+      });
     }
 
-    // Check semantic entities
-    if (article.semantics?.entities && Array.isArray(article.semantics.entities)) {
-      const matchingEntities = article.semantics.entities.filter((entity: any) =>
-        topicKeywords.some(keyword => (entity.value || '').toLowerCase().includes(keyword))
-      );
-      if (matchingEntities.length > 0) {
-        factors.push(`Entities: ${matchingEntities.map((e: any) => e.value).join(', ')}`);
-      }
+    // Check entities
+    if (article.semantics?.entities) {
+      article.semantics.entities.forEach((entity: any) => {
+        if (entity.value) {
+          const entityValue = entity.value.toLowerCase();
+          keywordArray.forEach(keyword => {
+            if (entityValue.includes(keyword)) {
+              factors.push(`Entity: ${entity.value}`);
+            }
+          });
+        }
+      });
     }
 
-    // Check company mentions
+    // Check companies
     if (article.companies && Array.isArray(article.companies)) {
-      const matchingCompanies = article.companies.filter((company: any) =>
-        topicKeywords.some(keyword => (company.name || '').toLowerCase().includes(keyword))
-      );
-      if (matchingCompanies.length > 0) {
-        factors.push(`Companies: ${matchingCompanies.map((c: any) => c.name).join(', ')}`);
-      }
+      article.companies.forEach((company: any) => {
+        if (company.name) {
+          const companyName = company.name.toLowerCase();
+          keywordArray.forEach(keyword => {
+            if (companyName.includes(keyword) || this.isIndustryMatch(company.name, keyword)) {
+              factors.push(`Company: ${company.name}`);
+            }
+          });
+        }
+      });
     }
 
-    return factors.length > 0 ? factors : ['General content relevance'];
+    // Check metadata and source
+    const source = (article.source || '').toLowerCase();
+    keywordArray.forEach(keyword => {
+      if (source.includes(keyword)) {
+        factors.push(`Source relevance: ${keyword}`);
+      }
+    });
+
+    return factors.slice(0, 5); // Limit to top 5 factors
+  }
+
+  // Update the original calculateAdvancedTopicRelevance method signature for backward compatibility
+  private calculateTopicRelevance(article: any, topic: string): number {
+    return this.calculateAdvancedTopicRelevance(article, topic);
   }
 
   /**
