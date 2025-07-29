@@ -640,6 +640,47 @@ export class JsonDialogService {
   }
 
   /**
+   * Sanitize collected information to remove sensitive Metabase data before sending to OpenAI
+   * CRITICAL SECURITY: No news article content, summaries, URLs, or author data should reach OpenAI
+   */
+  private sanitizeForOpenAI(collectedInfo: Record<string, any>): Record<string, any> {
+    // Create a deep copy to avoid modifying the original
+    const sanitized = JSON.parse(JSON.stringify(collectedInfo));
+    
+    // Remove all Metabase search results and article data
+    if (sanitized.searchResults) {
+      logger.warn('🚨 SECURITY: Removing Metabase search results from OpenAI context', {
+        removedFields: Object.keys(sanitized.searchResults)
+      });
+      delete sanitized.searchResults;
+    }
+    
+    // Remove author results with article data
+    if (sanitized.authorResults) {
+      logger.warn('🚨 SECURITY: Removing author results with article data from OpenAI context');
+      delete sanitized.authorResults;
+    }
+    
+    // Remove any field containing article data
+    const dangerousFields = ['articles', 'articleData', 'metabaseResults', 'databaseResults', 'newsData'];
+    dangerousFields.forEach(field => {
+      if (sanitized[field]) {
+        logger.warn(`🚨 SECURITY: Removing ${field} from OpenAI context`);
+        delete sanitized[field];
+      }
+    });
+    
+    // Recursively sanitize nested objects
+    Object.keys(sanitized).forEach(key => {
+      if (typeof sanitized[key] === 'object' && sanitized[key] !== null) {
+        sanitized[key] = this.sanitizeForOpenAI(sanitized[key]);
+      }
+    });
+    
+    return sanitized;
+  }
+
+  /**
    * Create a simple system prompt for the AI
    */
   private createSystemPrompt(
@@ -761,9 +802,12 @@ If the user is asking a question or needs help:
       if (step.name.includes("Information Collection") || step.name.includes("Collection") || step.name === "Author Ranking & Selection") {
         const baseInstructions = step.metadata?.baseInstructions;
         if (baseInstructions) {
-          // Include the collected information context in the baseInstructions
-          const contextSection = Object.keys(collectedInfo).length > 0 
-            ? `\n\nCONTEXT FROM PREVIOUS STEPS:\n${JSON.stringify(collectedInfo, null, 2)}\n\nCRITICAL INSTRUCTIONS FOR INFORMATION COLLECTION:\n- You are in the INFORMATION COLLECTION phase, NOT the asset generation phase\n- Your task is ONLY to collect information needed for future asset generation\n- DO NOT generate any assets (press releases, social posts, media pitches, etc.)\n- DO NOT create any final content - only gather the required information\n- Ask follow-up questions to collect missing information\n- Use the context above to understand what has already been established (announcement type, asset type, etc.)\n- Once you have sufficient information, mark the step as complete to move to the Asset Generation phase\n- NEVER include generated asset content in your response`
+          // CRITICAL SECURITY: Sanitize collected information before sending to OpenAI
+          const sanitizedInfo = this.sanitizeForOpenAI(collectedInfo);
+          
+          // Include the sanitized collected information context in the baseInstructions
+          const contextSection = Object.keys(sanitizedInfo).length > 0 
+            ? `\n\nCONTEXT FROM PREVIOUS STEPS (SANITIZED):\n${JSON.stringify(sanitizedInfo, null, 2)}\n\nCRITICAL INSTRUCTIONS FOR INFORMATION COLLECTION:\n- You are in the INFORMATION COLLECTION phase, NOT the asset generation phase\n- Your task is ONLY to collect information needed for future asset generation\n- DO NOT generate any assets (press releases, social posts, media pitches, etc.)\n- DO NOT create any final content - only gather the required information\n- Ask follow-up questions to collect missing information\n- Use the context above to understand what has already been established (announcement type, asset type, etc.)\n- Once you have sufficient information, mark the step as complete to move to the Asset Generation phase\n- NEVER include generated asset content in your response`
             : '';
           
           // For Author Ranking & Selection, don't add the information collection instructions
@@ -778,10 +822,13 @@ If the user is asking a question or needs help:
       // Calculate what information we already have vs what we still need
       const infoTracking = this.generateInfoTrackingStatus(collectedInfo, requiredFields);
       
+      // CRITICAL SECURITY: Sanitize collected information before sending to OpenAI
+      const sanitizedInfo = this.sanitizeForOpenAI(collectedInfo);
+      
       return `GOAL: ${goal}${priorityInstructions}
 
-CURRENT COLLECTED INFORMATION:
-${JSON.stringify(collectedInfo, null, 2)}
+CURRENT COLLECTED INFORMATION (SANITIZED):
+${JSON.stringify(sanitizedInfo, null, 2)}
 
 INFORMATION TRACKING STATUS:
 ${infoTracking.formattedStatus}${formattedHistory}

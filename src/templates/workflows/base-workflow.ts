@@ -9,7 +9,7 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
       type: StepType.JSON_DIALOG,
       name: "Workflow Selection",
       description: "Select the type of workflow you'd like to create",
-      prompt: "Which workflow would you like to use? Please choose from:\n\n**Full Workflows:**\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Media Matching - For generating prioritized media contact lists based on topic relevance\n\n**Quick Asset Creation:**\n• Press Release - Draft PR announcement materials\n• Media Pitch - Build custom outreach with context\n• Social Post - Craft social copy in your brand voice\n• Blog Article - Create long-form POVs, news, or narratives\n• FAQ - Generate frequent questions and suggested responses\n• Quick Press Release - For creating a press release in just two steps\n\n**Testing & Development:**\n• Test Step Transitions - For testing step transitions and workflow completion\n• Dummy Workflow - For testing purposes",
+      prompt: "Which workflow would you like to use? Please choose from:\n\n**Full Workflows:**\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Media List Generator - Generate media contacts with dual ranking (algorithmic vs AI) and user choice\n• Media Matching - AI-suggested authors validated with recent article analysis\n\n**Quick Asset Creation:**\n• Press Release - Draft PR announcement materials\n• Media Pitch - Build custom outreach with context\n• Social Post - Craft social copy in your brand voice\n• Blog Article - Create long-form POVs, news, or narratives\n• FAQ - Generate frequent questions and suggested responses\n• Quick Press Release - For creating a press release in just two steps\n\n**Testing & Development:**\n• Test Step Transitions - For testing step transitions and workflow completion\n• Dummy Workflow - For testing purposes",
       order: 0,
       dependencies: [],
       metadata: {
@@ -17,6 +17,7 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
         options: [
           "Launch Announcement",
           "JSON Dialog PR Workflow",
+          "Media List Generator",
           "Media Matching",
           "Press Release",
           "Media Pitch",
@@ -33,7 +34,8 @@ TASK:
 Match user input to one of these workflows:
 - Launch Announcement: For product launches, features, or news releases
 - JSON Dialog PR Workflow: For creating press releases, media pitches, and PR assets
-- Media Matching: For generating prioritized media contact lists based on topic relevance
+- Media List Generator: Database search + dual ranking (algorithmic vs AI) with user choice
+- Media Matching: AI author suggestions validated with recent article analysis
 - Press Release: For creating professional press release announcements
 - Media Pitch: For creating personalized media outreach and pitches
 - Social Post: For creating social media content in your brand voice
@@ -52,7 +54,8 @@ MATCHING RULES:
 - If user mentions "launch", "product launch", "announcement", choose "Launch Announcement" 
 - If user mentions "JSON Dialog PR", "dialog", choose "JSON Dialog PR Workflow"
 - If user mentions "quick", "fast", "simple", "easy", choose "Quick Press Release"
-- If user mentions "media matching", "media contacts", "media list", "journalists", "reporters", choose "Media Matching"
+- If user mentions "media list", "media contacts list", "contact list", "dual ranking", "algorithmic vs AI", choose "Media List Generator"
+- If user mentions "media matching", "author validation", "AI suggestions", "article analysis", choose "Media Matching"
 - If user mentions "test", "dummy", "sample", "demo", choose "Dummy Workflow"
 - If user mentions "step", "transition", "test steps", choose "Test Step Transitions"
 - If no clear match, ask user to clarify with choices
