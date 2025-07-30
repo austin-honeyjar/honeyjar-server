@@ -640,6 +640,47 @@ export class JsonDialogService {
   }
 
   /**
+   * Sanitize collected information to remove sensitive Metabase data before sending to OpenAI
+   * CRITICAL SECURITY: No news article content, summaries, URLs, or author data should reach OpenAI
+   */
+  private sanitizeForOpenAI(collectedInfo: Record<string, any>): Record<string, any> {
+    // Create a deep copy to avoid modifying the original
+    const sanitized = JSON.parse(JSON.stringify(collectedInfo));
+    
+    // Remove all Metabase search results and article data
+    if (sanitized.searchResults) {
+      logger.warn('🚨 SECURITY: Removing Metabase search results from OpenAI context', {
+        removedFields: Object.keys(sanitized.searchResults)
+      });
+      delete sanitized.searchResults;
+    }
+    
+    // Remove author results with article data
+    if (sanitized.authorResults) {
+      logger.warn('🚨 SECURITY: Removing author results with article data from OpenAI context');
+      delete sanitized.authorResults;
+    }
+    
+    // Remove any field containing article data
+    const dangerousFields = ['articles', 'articleData', 'metabaseResults', 'databaseResults', 'newsData'];
+    dangerousFields.forEach(field => {
+      if (sanitized[field]) {
+        logger.warn(`🚨 SECURITY: Removing ${field} from OpenAI context`);
+        delete sanitized[field];
+      }
+    });
+    
+    // Recursively sanitize nested objects
+    Object.keys(sanitized).forEach(key => {
+      if (typeof sanitized[key] === 'object' && sanitized[key] !== null) {
+        sanitized[key] = this.sanitizeForOpenAI(sanitized[key]);
+      }
+    });
+    
+    return sanitized;
+  }
+
+  /**
    * Create a simple system prompt for the AI
    */
   private createSystemPrompt(
@@ -669,7 +710,7 @@ PRIORITY INSTRUCTIONS:
 3. If the user says "I don't know" for any information, mark it as UNAVAILABLE and DO NOT ask for it again
 4. NEVER ask for information that has already been provided - check conversation history thoroughly
 5. Maintain a helpful, flexible conversational style
-6. After collecting 70% or more of essential information, suggest generating an asset
+6. After collecting 60% or more of essential information, suggest generating an asset
 7. EXTRACT ALL RELEVANT INFORMATION from the user's input, even if it wasn't directly requested`;
     
     // Special case for workflow selection
@@ -761,9 +802,12 @@ If the user is asking a question or needs help:
       if (step.name.includes("Information Collection") || step.name.includes("Collection") || step.name === "Author Ranking & Selection") {
         const baseInstructions = step.metadata?.baseInstructions;
         if (baseInstructions) {
-          // Include the collected information context in the baseInstructions
-          const contextSection = Object.keys(collectedInfo).length > 0 
-            ? `\n\nCONTEXT FROM PREVIOUS STEPS:\n${JSON.stringify(collectedInfo, null, 2)}\n\nCRITICAL INSTRUCTIONS FOR INFORMATION COLLECTION:\n- You are in the INFORMATION COLLECTION phase, NOT the asset generation phase\n- Your task is ONLY to collect information needed for future asset generation\n- DO NOT generate any assets (press releases, social posts, media pitches, etc.)\n- DO NOT create any final content - only gather the required information\n- Ask follow-up questions to collect missing information\n- Use the context above to understand what has already been established (announcement type, asset type, etc.)\n- Once you have sufficient information, mark the step as complete to move to the Asset Generation phase\n- NEVER include generated asset content in your response`
+          // CRITICAL SECURITY: Sanitize collected information before sending to OpenAI
+          const sanitizedInfo = this.sanitizeForOpenAI(collectedInfo);
+          
+          // Include the sanitized collected information context in the baseInstructions
+          const contextSection = Object.keys(sanitizedInfo).length > 0 
+            ? `\n\nCONTEXT FROM PREVIOUS STEPS (SANITIZED):\n${JSON.stringify(sanitizedInfo, null, 2)}\n\nCRITICAL INSTRUCTIONS FOR INFORMATION COLLECTION:\n- You are in the INFORMATION COLLECTION phase, NOT the asset generation phase\n- Your task is ONLY to collect information needed for future asset generation\n- DO NOT generate any assets (press releases, social posts, media pitches, etc.)\n- DO NOT create any final content - only gather the required information\n- Ask follow-up questions to collect missing information\n- Use the context above to understand what has already been established (announcement type, asset type, etc.)\n- Once you have sufficient information, mark the step as complete to move to the Asset Generation phase\n- NEVER include generated asset content in your response`
             : '';
           
           // For Author Ranking & Selection, don't add the information collection instructions
@@ -778,10 +822,13 @@ If the user is asking a question or needs help:
       // Calculate what information we already have vs what we still need
       const infoTracking = this.generateInfoTrackingStatus(collectedInfo, requiredFields);
       
+      // CRITICAL SECURITY: Sanitize collected information before sending to OpenAI
+      const sanitizedInfo = this.sanitizeForOpenAI(collectedInfo);
+      
       return `GOAL: ${goal}${priorityInstructions}
 
-CURRENT COLLECTED INFORMATION:
-${JSON.stringify(collectedInfo, null, 2)}
+CURRENT COLLECTED INFORMATION (SANITIZED):
+${JSON.stringify(sanitizedInfo, null, 2)}
 
 INFORMATION TRACKING STATUS:
 ${infoTracking.formattedStatus}${formattedHistory}
@@ -797,7 +844,7 @@ TASK:
 5. IMPORTANT: Extract ALL relevant information from the current message, even if it wasn't directly asked for in your last question
 6. Look for information that might be relevant for ANY workflow step, not just the current focus
 7. If you detect information that might be useful for a future step, store it in the appropriate field in collectedInformation
-8. If 70% or more of essential information is collected, offer to proceed with generation
+8. If 60% or more of essential information is collected, offer to proceed with generation
 9. Return a JSON response
 
 RESPONSE FORMAT:
@@ -814,7 +861,7 @@ If all essential information is collected:
   "completionPercentage": 100
 }
 
-If 70% or more of essential information is collected:
+If 60% or more of essential information is collected:
 {
   "isComplete": false,
   "collectedInformation": {
@@ -839,7 +886,7 @@ If the user is asking a question or making a statement that needs direct respons
   "completionPercentage": ${infoTracking.completionPercentage}
 }
 
-If more information is needed and under 70% complete:
+If more information is needed and under 60% complete:
 {
   "isComplete": false,
   "collectedInformation": {
@@ -904,7 +951,7 @@ OPTIONAL INFORMATION (${optionalStatus.complete}/${optionalFields.length} comple
 ${this.formatFieldStatus(optionalFields, flattenedInfo)}
 
 COMPLETION STATUS: ${Math.round(completionPercentage * 100)}% complete
-${completionPercentage >= 0.7 ? "READY TO SUGGEST GENERATION: YES" : "READY TO SUGGEST GENERATION: NO"}`;
+${completionPercentage >= 0.6 ? "READY TO SUGGEST GENERATION: YES" : "READY TO SUGGEST GENERATION: NO"}`;
     
     return {
       formattedStatus,

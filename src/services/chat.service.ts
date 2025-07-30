@@ -165,13 +165,28 @@ export class ChatService {
        // Get the next step information
        const nextStepInfo = workflow.steps.find(step => step.id === stepResponse.nextStep?.id);
        
+       console.log('🔍 CHAT DEBUG: Found nextStep in response:', {
+         nextStepId: stepResponse.nextStep?.id,
+         nextStepName: stepResponse.nextStep?.name,
+         nextStepFound: !!nextStepInfo,
+         stepResponseComplete: stepResponse.isComplete
+       });
+       
        // Check if this next step should auto-execute
        if (nextStepInfo) {
+         console.log('🔍 CHAT DEBUG: Checking auto-execution for step:', nextStepInfo.name);
+         
          const autoExecCheck = await this.workflowService.checkAndHandleAutoExecution(
            nextStepInfo.id, 
            workflow.id, 
            threadId
          );
+
+         console.log('🔍 CHAT DEBUG: Auto-execution result:', {
+           autoExecuted: autoExecCheck.autoExecuted,
+           hasResult: !!autoExecCheck.result,
+           hasNextWorkflow: !!autoExecCheck.nextWorkflow
+         });
 
          if (autoExecCheck.autoExecuted) {
            if (autoExecCheck.nextWorkflow) {
