@@ -1,5 +1,6 @@
 import { AssetDBService } from "./assetDB.service";
-import { Asset, AssetCreationParams } from "../types/asset";
+import { Asset, AssetCreationParams, AssetContent } from "../types/asset";
+import { AssetContentHelper } from "../utils/asset-content-helper";
 import logger from "../utils/logger";
 import { OpenAIService } from "./openai.service";
 
@@ -97,7 +98,7 @@ export class AssetService {
     assetType: string;
     assetTitle: string;
     assetSubtitle?: string;
-    assetContent: string;
+    assetContent: AssetContent;
     assetMetadata?: any;
   } {
     const metadata = typeof stepData.metadata === 'string' 
@@ -107,11 +108,11 @@ export class AssetService {
     // For Asset Generation step, asset data could be in different places
     
     // Extract asset content - prefer metadata.generatedAsset first
-    let assetContent = '';
+    let rawContent = '';
     
     // First check for generatedAsset in metadata (highest priority)
     if (metadata.generatedAsset) {
-      assetContent = metadata.generatedAsset;
+      rawContent = metadata.generatedAsset;
       logger.info('Using generatedAsset from metadata as content source');
     }
     // Next try openAIResponse, but parse it to extract just the asset
@@ -120,25 +121,25 @@ export class AssetService {
         // Try to parse response as JSON to extract just asset content
         const parsedResponse = JSON.parse(stepData.openAIResponse);
         if (parsedResponse.asset) {
-          assetContent = parsedResponse.asset;
+          rawContent = parsedResponse.asset;
           logger.info('Successfully extracted asset from openAIResponse JSON');
         } else {
-          assetContent = stepData.openAIResponse;
+          rawContent = stepData.openAIResponse;
           logger.info('Using complete openAIResponse as content (no asset field found in JSON)');
         }
       } catch (e) {
         // If parsing fails, use the whole response
-        assetContent = stepData.openAIResponse;
+        rawContent = stepData.openAIResponse;
         logger.info('Using complete openAIResponse as content (not valid JSON)');
       }
     } 
     // Fall back to other possible content sources
     else if (metadata.generatedContent) {
-      assetContent = metadata.generatedContent;
+      rawContent = metadata.generatedContent;
     } else if (stepData.userInput && stepData.name.toLowerCase().includes('asset')) {
-      assetContent = stepData.userInput;
+      rawContent = stepData.userInput;
     } else if (stepData.aiSuggestion) {
-      assetContent = stepData.aiSuggestion;
+      rawContent = stepData.aiSuggestion;
     }
     
     // Extract asset type - check all the places where asset types are stored in workflows
@@ -152,6 +153,7 @@ export class AssetService {
                       stepData.name.includes('Social Post') ? 'Social Post' :
                       stepData.name.includes('Blog Post') ? 'Blog Post' :
                       stepData.name.includes('FAQ') ? 'FAQ Document' :
+                      stepData.name.includes('Media List') ? 'Media List' :
                       'Press Release'); // Default to Press Release instead of Document
     
     // Extract asset title - first try metadata, then step name or a default title
@@ -165,12 +167,17 @@ export class AssetService {
     // Use step name as asset name if not specified in metadata
     const assetName = metadata.assetName || stepData.name;
     
-    logger.info(`Extracted asset data: ${assetName} (${assetType}), content length: ${assetContent?.length || 0}`, {
+    // Parse content using AssetContentHelper to create structured content if appropriate
+    const assetContent = AssetContentHelper.fromLegacyContent(rawContent, assetType);
+    
+    logger.info(`Extracted asset data: ${assetName} (${assetType}), content length: ${AssetContentHelper.getContent(assetContent)?.length || 0}`, {
       foundInCollectedInfo: !!(collectedInfo.selectedAssetType || collectedInfo.assetType),
       foundInMetadata: !!metadata.assetType,
       foundInStepName: stepData.name.includes('Press Release') || stepData.name.includes('Media Pitch') || stepData.name.includes('Social Post'),
       collectedInfoKeys: Object.keys(collectedInfo),
-      metadataKeys: Object.keys(metadata)
+      metadataKeys: Object.keys(metadata),
+      isStructuredContent: AssetContentHelper.isStructured(assetContent),
+      hasContactDecorator: AssetContentHelper.hasDecorator(assetContent, 'contact')
     });
     
     // Return structured asset data
@@ -286,16 +293,27 @@ export class AssetService {
 
       // Process the edit with AI
       const updatedText = await this.processTextEdit(
-        asset.content,
+        AssetContentHelper.getContent(asset.content),
         selectedText,
         instruction,
         asset
       );
 
       // If no changes were made, return the original asset
-      if (updatedText === asset.content) {
+      if (updatedText === AssetContentHelper.getContent(asset.content)) {
         logger.info(`No changes made to asset ${assetId} content`);
         return asset;
+      }
+
+      // Create updated content - preserve structure if it was structured
+      let updatedContent: AssetContent;
+      if (AssetContentHelper.isStructured(asset.content)) {
+        updatedContent = {
+          ...asset.content,
+          content: updatedText
+        };
+      } else {
+        updatedContent = updatedText;
       }
 
       // Store the edit in edit history
@@ -309,7 +327,7 @@ export class AssetService {
 
       // Update the asset with new content and version
       const updatedAsset = await this.assetDBService.updateAsset(assetId, {
-        content: updatedText,
+        content: updatedContent,
         metadata: {
           ...asset.metadata,
           currentVersion: currentVersion + 1,
@@ -500,7 +518,14 @@ export class AssetService {
       
       // If cache version is newer, use cached content
       if (cachedAsset.version > (dbAsset.metadata?.currentVersion || 1)) {
-        dbAsset.content = cachedAsset.content;
+        if (AssetContentHelper.isStructured(dbAsset.content)) {
+          dbAsset.content = {
+            ...dbAsset.content,
+            content: cachedAsset.content
+          };
+        } else {
+          dbAsset.content = cachedAsset.content;
+        }
       }
       
       return dbAsset;
@@ -515,7 +540,7 @@ export class AssetService {
    */
   private updateAssetCache(assetId: string, asset: Asset): void {
     assetEditCache.set(assetId, {
-      content: asset.content,
+      content: AssetContentHelper.getContent(asset.content),
       lastEdited: new Date(),
       version: asset.metadata?.currentVersion || 1
     });

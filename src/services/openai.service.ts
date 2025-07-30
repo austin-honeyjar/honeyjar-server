@@ -375,15 +375,66 @@ EDITED TEXT:`;
   }
 
   /**
-   * Generate a contextual prompt for a workflow step based on previous steps context
-   * @param step The workflow step that needs a contextual prompt
-   * @param context Information gathered from previous completed steps
-   * @returns A personalized prompt that acknowledges previous context
+   * Sanitize context data to remove sensitive Metabase information before sending to OpenAI
+   * CRITICAL SECURITY: No news article content, summaries, URLs, or database results should reach OpenAI
+   */
+  private sanitizeContextForOpenAI(context: Record<string, any>): Record<string, any> {
+    // Create a deep copy to avoid modifying the original
+    const sanitized = JSON.parse(JSON.stringify(context));
+    
+    // Remove all Metabase search results and article data
+    if (sanitized.searchResults) {
+      logger.warn('🚨 SECURITY: Removing Metabase search results from OpenAI context in generateContextualPrompt', {
+        removedFields: Object.keys(sanitized.searchResults)
+      });
+      delete sanitized.searchResults;
+    }
+    
+    // Remove author results with article data
+    if (sanitized.authorResults) {
+      logger.warn('🚨 SECURITY: Removing author results with article data from OpenAI context in generateContextualPrompt');
+      delete sanitized.authorResults;
+    }
+    
+    // Remove any field containing article data
+    const dangerousFields = ['articles', 'articleData', 'metabaseResults', 'databaseResults', 'newsData'];
+    dangerousFields.forEach(field => {
+      if (sanitized[field]) {
+        logger.warn(`🚨 SECURITY: Removing ${field} from OpenAI context in generateContextualPrompt`);
+        delete sanitized[field];
+      }
+    });
+    
+    // Recursively sanitize nested objects
+    Object.keys(sanitized).forEach(key => {
+      if (typeof sanitized[key] === 'object' && sanitized[key] !== null) {
+        sanitized[key] = this.sanitizeContextForOpenAI(sanitized[key]);
+      }
+    });
+    
+    return sanitized;
+  }
+
+  /**
+   * Generate contextual prompts for workflow steps with dynamic context
+   * @param step The workflow step
+   * @param context Previous step context
+   * @returns Generated prompt
    */
   async generateContextualPrompt(
-    step: WorkflowStep,
+    step: WorkflowStep, 
     context: Record<string, any>
   ): Promise<string> {
+    // 🚨 CRITICAL SECURITY: Block AI calls for Contact Enrichment to prevent Metabase data leakage
+    if (step.name === "Contact Enrichment") {
+      logger.warn('🚨 SECURITY BLOCK: Preventing OpenAI call for Contact Enrichment step', {
+        stepName: step.name,
+        stepId: step.id || 'unknown',
+        reason: 'Contact Enrichment must be pure data lookup - no AI allowed'
+      });
+      return step.prompt || ''; // Return original prompt or empty string if undefined
+    }
+    
     try {
       logger.info('Generating contextual prompt', {
         stepName: step.name,
@@ -401,6 +452,9 @@ EDITED TEXT:`;
         return step.prompt || "";
       }
 
+      // CRITICAL SECURITY: Sanitize context before sending to OpenAI
+      const sanitizedContext = this.sanitizeContextForOpenAI(context);
+
       // Create a system prompt for generating contextual step prompts
       const systemPrompt = `You are a workflow prompt generator. Your task is to create a personalized, contextual prompt for a workflow step based on information from previous steps.
 
@@ -409,9 +463,9 @@ STEP INFORMATION:
 - Step Description: ${step.description}
 - Original Prompt: ${step.prompt}
 
-CONTEXT FROM PREVIOUS STEPS (JSON):
+CONTEXT FROM PREVIOUS STEPS (SANITIZED JSON):
 \`\`\`json
-${JSON.stringify(context, null, 2)}
+${JSON.stringify(sanitizedContext, null, 2)}
 \`\`\`
 
 TASK:
