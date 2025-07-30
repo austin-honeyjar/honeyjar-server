@@ -69,135 +69,60 @@ Only if the user's input is unclear or too vague:
         essential: ["collectedInformation"],
         initialPromptSent: false,
         autoExecute: true, // Auto-execute after completion
-        baseInstructions: `You are an AI author identification specialist. This is STEP 2 of 4 in the workflow.
-
-GOAL:
-Use AI to generate a list of 10 authors who are likely to write about the specified topic based on expertise and industry knowledge, PLUS generate 10 targeted keywords for enhanced algorithmic relevance matching.
-
-CONTEXT:
-You will receive the topic from Step 1. Your job is to generate relevant author suggestions who typically write about this topic, AND create targeted keywords that will improve algorithmic matching of their articles.
-
-TASK:
-1. Use the topic from Step 1 to generate relevant author suggestions
-2. Focus on journalists, reporters, and industry experts
-3. Include authors from various publication tiers (major news, trade publications, independent media)
-4. Consider both mainstream and specialized media authors
-5. Generate 10 targeted keywords for enhanced article relevance matching
-6. Prepare author list for Metabase article searches
-
-AUTHOR GENERATION LOGIC:
-1. Generate 10 author suggestions based on topic expertise
-2. Include variety across publication types and expertise levels
-3. Provide reasoning for each author suggestion
-4. Format for Metabase search compatibility
-5. Include alternative name variations for search accuracy
-
-KEYWORD GENERATION LOGIC:
-1. Generate 10 targeted keywords that are highly relevant to the topic
-2. Include industry-specific terms, technical terminology, and key concepts
-3. Consider variations (singular/plural, abbreviations, synonyms)
-4. Include company names, product names, and technology terms if relevant
-5. Focus on terms likely to appear in article titles, summaries, and metadata
+        baseInstructions: `Generate 10 real journalists and 10 keywords for this topic.
 
 REQUIREMENTS:
-1. Focus on actual journalists, reporters, and industry experts
-2. Include authors from various publication tiers:
-   - Major news outlets (NYT, WSJ, BBC, CNN, Reuters, etc.)
-   - Trade publications and industry magazines
-   - Independent media and specialized outlets
-   - Technology/business publications if relevant
-3. Consider both mainstream and specialized media authors
-4. Include alternative name formats for search accuracy
-5. Provide reasoning for each suggestion
-6. Generate precise keywords for algorithmic matching enhancement
+- 10 real journalist names (no placeholders like "John Doe")
+- Industry/trade publications prioritized for niche topics  
+- One author per publication (no duplicates)
+- Score recent topic relevance 1-10 for each author
+- 2-3 sentence reasoning explaining why contact each author
+- 10 relevant keywords
 
-GUIDELINES:
-- Prioritize authors you're confident actually exist and write about this topic
-- Include diversity in publication types and expertise levels
-- Use high priority for well-known experts, medium for specialized journalists, low for emerging voices
-- Alternative names should include common variations (with/without middle names, nicknames, etc.)
-- Focus on authors likely to have recent articles (active journalists)
-- Avoid fictional or uncertain author names
-- Keywords should be specific, searchable, and highly relevant to the topic
+PUBLICATION PRIORITIZATION:
+- **Niche topics**: Prioritize trade/industry publications over general news
+- **Broad topics**: Mix major outlets (NYT, WSJ, Reuters) with specialized media
+- **Focus**: Authors actively covering this topic area
+- **Include**: Tech/business publications for relevant topics
 
 CRITICAL INSTRUCTIONS:
-1. Generate REAL author names and details (not placeholders)
-2. Include the actual author list with names, organizations, and expertise in your nextQuestion response
-3. Include the 10 targeted keywords in your response for enhanced matching
-4. Use this exact format for nextQuestion:
+- Use REAL journalist names like "Kirsten Korosec", "Alex Davies", "Will Knight"
+- NO placeholder names like "John Doe", "Jane Smith", "Author Name"
+- Always return "isComplete": true to auto-proceed
+- Include actual author names in nextQuestion response
 
-"🤖 **AI Author Generation Complete!**
-
-I've identified 10 relevant authors who typically write about '[topic]':
-
-**Suggested Authors:**
-1. **[Actual Author Name]** ([Actual Organization]) - [Actual Expertise]
-2. **[Actual Author Name]** ([Actual Organization]) - [Actual Expertise]
-[... continue for all 10 authors using the REAL names from your suggestedAuthors array]
-
-**Generated Keywords for Enhanced Matching:**
-[keyword1], [keyword2], [keyword3], [keyword4], [keyword5], [keyword6], [keyword7], [keyword8], [keyword9], [keyword10]
-
-**Proceeding automatically to search for their recent articles...**"
-
-5. Make sure the nextQuestion shows the SAME author names that are in your suggestedAuthors array
-6. Make sure the keywords in nextQuestion match those in your targetedKeywords array
-7. IMPORTANT: Always return "isComplete": true to auto-proceed to the next step
-8. Never ask for user confirmation - the workflow should flow seamlessly
-
-CRITICAL: NEVER USE PLACEHOLDER NAMES!
-- Do NOT use fake names like "John Doe", "Jane Smith", "Author Name", etc.
-- ALWAYS use real journalist names like "Kirsten Korosec", "Alex Davies", "Will Knight"
-- Focus on actual tech/business reporters from major publications
-
-RESPONSE FORMAT (VALID JSON ONLY):
-
-FIRST RESPONSE (Auto-complete and proceed):
+JSON RESPONSE:
 {
   "isComplete": true,
   "collectedInformation": {
-    "topic": "original topic from step 1",
+    "topic": "the topic",
     "totalSuggestions": 10,
     "suggestedAuthors": [
       {
-        "id": "unique-id-1",
-        "name": "Full Author Name",
-        "alternativeNames": ["Alternative Name Format", "Another Format"],
-        "organization": "Primary Publication",
-        "expertise": "Specific area of expertise within the topic",
-        "reasoning": "Why this author is relevant - their background and typical coverage",
-        "publicationType": "major_news|trade_publication|independent|academic",
+        "id": "author-1",
+        "name": "Real Author Name",
+        "alternativeNames": ["Alt Name"],
+        "organization": "Publication Name", 
+        "expertise": "specific expertise area",
+        "reasoning": "2-3 sentence explanation of relevance",
+        "publicationType": "major_news|trade_publication|independent",
         "searchPriority": "high|medium|low",
-        "analysisInsight": "Two-sentence explanation of why this author is a valuable contact based on their known expertise, typical coverage areas, and relevance to the topic. This should be generated by AI using existing knowledge, not actual article content."
+        "recentTopicRelevance": 8,
+        "analysisInsight": "2-3 sentence why contact explanation"
       }
     ],
     "targetedKeywords": [
       {
-        "keyword": "specific keyword or phrase",
-        "category": "industry_term|technical_term|company_name|product_name|concept",
-        "priority": "high|medium|low",
-        "variations": ["variation1", "variation2"],
-        "reasoning": "Why this keyword is important for relevance matching"
+        "keyword": "relevant keyword",
+        "category": "industry_term|company_name|technical_term", 
+        "priority": "high|medium|low"
       }
     ],
-    "keywordSummary": "Brief explanation of keyword strategy for this topic",
-    "generationStrategy": "AI-based expertise matching with publication diversity and enhanced keyword targeting",
+    "generationStrategy": "AI-based expertise matching with publication diversity",
     "searchReadiness": true
   },
-  "nextQuestion": "🤖 **AI Author Generation Complete!**\n\nI've identified 10 relevant authors who typically write about '[topic]':\n\n**Suggested Authors:**\n[Format the 10 authors here with names and organizations]\n\n**Generated Keywords for Enhanced Matching:**\n[List the 10 keywords here]\n\n**Proceeding automatically to search for their recent articles...**",
+  "nextQuestion": "**AI Author Generation Complete!**\n\nI've identified 10 relevant authors who typically write about '[topic]':\n\n**Suggested Authors:**\n1. **[Author 1 Name]** ([Organization]) - Relevance: [X/10]\n2. **[Author 2 Name]** ([Organization]) - Relevance: [X/10]\n[...list all 10 with actual names from suggestedAuthors]\n\n**Keywords:** [list 10 keywords]\n\n**Proceeding automatically to search for their recent articles...**",
   "suggestedNextStep": "Metabase Article Search"
-}
-
-If AI generation has issues:
-{
-  "isComplete": false,
-  "collectedInformation": {
-    "topic": "original topic",
-    "error": "Description of the issue",
-    "partialResults": "any partial suggestions if available"
-  },
-  "nextQuestion": "Had trouble generating author suggestions for this topic. Please try a more specific or different topic.",
-  "suggestedNextStep": null
 }`
       }
     },
