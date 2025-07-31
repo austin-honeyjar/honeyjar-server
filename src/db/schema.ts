@@ -10,13 +10,25 @@ export const csvMetadata = pgTable('csv_metadata', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Thread type enum for context-aware chat
+export const threadTypeEnum = pgEnum('thread_type', ['global', 'asset', 'workflow', 'standard']);
+
+// Context type enum for context-aware chat
+export const contextTypeEnum = pgEnum('context_type', ['asset', 'workflow']);
+
 // Chat threads table
 export const chatThreads = pgTable('chat_threads', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull(),
   orgId: text('org_id'),
   title: text('title').notNull(),
+  threadType: threadTypeEnum('thread_type').default('standard').notNull(),
+  contextType: contextTypeEnum('context_type'),
+  contextId: text('context_id'),
+  isActive: boolean('is_active').default(true).notNull(),
+  metadata: jsonb('metadata'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Chat messages table
@@ -26,6 +38,7 @@ export const chatMessages = pgTable('chat_messages', {
   userId: text('user_id').notNull(),
   role: text('role').notNull(),
   content: jsonb('content').notNull(),
+  timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 

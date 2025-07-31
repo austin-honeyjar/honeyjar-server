@@ -13,6 +13,7 @@ import { join } from 'path';
 import logger from './utils/logger';
 import csvRoutes from './routes/csv.routes';
 import chatRoutes from './routes/chat.routes';
+import contextAwareChatRoutes from './routes/contextAwareChat.routes';
 import threadsRoutes from './routes/threads.routes';
 import assetRoutes from './routes/asset.routes';
 import metabaseRoutes from './routes/metabase.routes';
@@ -36,6 +37,7 @@ app.use(rateLimiter);
 app.use(config.server.apiPrefix + '/auth', authRoutes);
 app.use(config.server.apiPrefix + '/csv', csvRoutes);
 app.use(config.server.apiPrefix + '/chat', chatRoutes);
+app.use(config.server.apiPrefix + '/chat', contextAwareChatRoutes);
 app.use(config.server.apiPrefix + '/threads', threadsRoutes);
 app.use(config.server.apiPrefix + '/metabase', metabaseRoutes);
 app.use(config.server.apiPrefix + '/rocketreach', rocketreachRoutes);
@@ -953,15 +955,88 @@ async function initializeDatabase() {
   }
 }
 
+// Initialize context-aware chat support
+async function initializeContextAwareChat(): Promise<boolean> {
+  try {
+    logger.info('Initializing context-aware chat support...');
+    
+    // Check if context-aware columns exist, add them if not
+    await db.execute(sql`
+      DO $$ 
+      BEGIN
+        -- Add thread_type enum if not exists
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'thread_type') THEN
+          CREATE TYPE thread_type AS ENUM ('global', 'asset', 'workflow', 'standard');
+        END IF;
+        
+        -- Add context_type enum if not exists
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'context_type') THEN
+          CREATE TYPE context_type AS ENUM ('asset', 'workflow');
+        END IF;
+        
+        -- Add threadType column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'thread_type') THEN
+          ALTER TABLE chat_threads ADD COLUMN thread_type thread_type DEFAULT 'standard' NOT NULL;
+        END IF;
+        
+        -- Add contextType column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'context_type') THEN
+          ALTER TABLE chat_threads ADD COLUMN context_type context_type;
+        END IF;
+        
+        -- Add contextId column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'context_id') THEN
+          ALTER TABLE chat_threads ADD COLUMN context_id TEXT;
+        END IF;
+        
+        -- Add isActive column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'is_active') THEN
+          ALTER TABLE chat_threads ADD COLUMN is_active BOOLEAN DEFAULT true NOT NULL;
+        END IF;
+        
+        -- Add metadata column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'metadata') THEN
+          ALTER TABLE chat_threads ADD COLUMN metadata JSONB;
+        END IF;
+        
+        -- Add updatedAt column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'updated_at') THEN
+          ALTER TABLE chat_threads ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL;
+        END IF;
+        
+        -- Add timestamp column to chat_messages if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_messages' AND column_name = 'timestamp') THEN
+          ALTER TABLE chat_messages ADD COLUMN timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL;
+        END IF;
+        
+      END $$;
+    `);
+    
+    logger.info('✅ Context-aware chat support initialized successfully');
+    return true;
+  } catch (error) {
+    logger.error('Context-aware chat initialization error:', error);
+    return false;
+  }
+}
+
 // Start server
 if (process.env.NODE_ENV !== 'test') {
   const port = config.server.port || 3005;
   
-  // Initialize database first, then workflow templates, then start server
+  // Initialize database first, then context-aware chat, then workflow templates, then start server
   initializeDatabase()
     .then((dbSuccess) => {
       if (!dbSuccess) {
         logger.warn('Database initialization had errors, but continuing startup');
+      }
+      
+      // Initialize context-aware chat support
+      return initializeContextAwareChat();
+    })
+    .then((contextSuccess) => {
+      if (!contextSuccess) {
+        logger.warn('Context-aware chat initialization had errors, but continuing startup');
       }
       
       // Initialize workflow templates
