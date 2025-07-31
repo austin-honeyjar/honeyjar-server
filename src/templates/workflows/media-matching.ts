@@ -69,34 +69,74 @@ Only if the user's input is unclear or too vague:
         essential: ["collectedInformation"],
         initialPromptSent: false,
         autoExecute: true, // Auto-execute after completion
-        baseInstructions: `Generate 10 real journalists and 10 keywords for this topic.
+        baseInstructions: `Generate 20 potential journalists and 10 keywords for this topic. These will be filtered down to the top 10 based on actual article relevance.
+
+TWO-PHASE APPROACH:
+- **PHASE 1**: Generate 20 potential authors who might write about this topic
+- **PHASE 2**: Algorithmic filtering will reduce to top 10 with actual relevant recent articles
+- **GOAL**: Cast a wider net to ensure we find authors with real recent coverage
+
+🎯 **CRITICAL: RECENT PUBLICATION FOCUS**
+Your PRIMARY job is suggesting authors who have RECENTLY written about this SPECIFIC topic area (not just general industry). Think:
+- Who covered similar fundraising announcements in the past 6 months?
+- Which reporters specifically write about autonomous delivery/robotics (not just "tech")?
+- Who follows this exact company type, technology, or market segment?
+- What journalists have bylines on stories about related companies, funding rounds, or innovations?
 
 REQUIREMENTS:
-- 10 real journalist names (no placeholders like "John Doe")
+- 20 real journalist names (no placeholders like "John Doe")
 - Industry/trade publications prioritized for niche topics  
 - One author per publication (no duplicates)
-- Score recent topic relevance 1-10 for each author
-- 2-3 sentence reasoning explaining why contact each author
+- Score recent topic relevance 1-10 for each author based on likelihood they've written about THIS specific topic recently
+- 2-3 sentence reasoning explaining why contact each author AND what specific recent articles they likely wrote
 - 10 relevant keywords
 
-PUBLICATION PRIORITIZATION:
-- **Niche topics**: Prioritize trade/industry publications over general news
-- **Broad topics**: Mix major outlets (NYT, WSJ, Reuters) with specialized media
-- **Focus**: Authors actively covering this topic area
-- **Include**: Tech/business publications for relevant topics
+🔍 **ENHANCED AUTHOR SELECTION STRATEGY**:
+**STEP 1: Topic-Specific Beat Reporters**
+- Start with journalists who specifically cover the exact topic area (e.g., autonomous delivery, not just "transportation")
+- Look for reporters who regularly write about funding rounds in this specific industry
+- Include beat reporters from trade publications who focus on this niche
 
-CRITICAL INSTRUCTIONS:
-- Use REAL journalist names like "Kirsten Korosec", "Alex Davies", "Will Knight"
+**STEP 2: Company/Competitor Coverage**
+- Find authors who've written about similar companies, competitors, or industry players
+- Include journalists who covered related funding announcements or product launches
+- Look for reporters who follow specific investors, accelerators, or VCs in this space
+
+**STEP 3: Strategic Adjacent Coverage**
+- Include emerging voices and specialized beat reporters with relevant recent coverage
+- Consider authors who cover adjacent topics that frequently intersect (e.g., AI + logistics, robotics + urban planning)
+- Focus on authors likely to have written SOMETHING directly related in past 3-6 months
+
+**STEP 4: Publication Strategy**
+- Mix obvious tier-1 choices with niche specialists who have recent relevant coverage
+- Include less obvious but highly relevant specialists from trade publications
+- Prioritize active coverage over publication size for niche topics
+
+🎯 **PUBLICATION PRIORITIZATION**:
+**For Tech/Business Topics**: 
+- **First Priority**: Authors with recent coverage of similar companies, funding, or technology
+- **Trade Publications**: TechCrunch (funding), The Information (inside tech), Forbes (business), Axios (tech policy)
+- **Industry Specialist**: VentureBeat (funding), IEEE Spectrum (robotics), Supply Chain Dive (logistics)
+- **Major Outlets**: Only if they have reporters who specifically cover this beat
+
+**For Niche Topics**: 
+- **Prioritize trade/industry publications** with recent relevant coverage over general news
+- **Focus**: Authors actively covering this topic area with recent relevant content
+- **Include**: Specialized publications that readers in this industry actually follow
+
+🚨 **CRITICAL INSTRUCTIONS**:
+- Use REAL journalist names like "Kirsten Korosec" (TechCrunch autonomous vehicles), "Alex Davies" (Wired transportation tech), "Will Knight" (Wired AI)
 - NO placeholder names like "John Doe", "Jane Smith", "Author Name"
 - Always return "isComplete": true to auto-proceed
 - Include actual author names in nextQuestion response
+- For "reasoning" field: Specifically mention what recent articles they likely wrote about this topic
 
 JSON RESPONSE:
 {
   "isComplete": true,
   "collectedInformation": {
     "topic": "the topic",
-    "totalSuggestions": 10,
+    "totalSuggestions": 20,
     "suggestedAuthors": [
       {
         "id": "author-1",
@@ -104,11 +144,11 @@ JSON RESPONSE:
         "alternativeNames": ["Alt Name"],
         "organization": "Publication Name", 
         "expertise": "specific expertise area",
-        "reasoning": "2-3 sentence explanation of relevance",
+        "reasoning": "2-3 sentence explanation of relevance and what recent articles they likely wrote on this topic",
         "publicationType": "major_news|trade_publication|independent",
         "searchPriority": "high|medium|low",
         "recentTopicRelevance": 8,
-        "analysisInsight": "2-3 sentence why contact explanation"
+        "analysisInsight": "2-3 sentence why contact explanation based on their likely recent article coverage of this specific topic"
       }
     ],
     "targetedKeywords": [
@@ -118,10 +158,10 @@ JSON RESPONSE:
         "priority": "high|medium|low"
       }
     ],
-    "generationStrategy": "AI-based expertise matching with publication diversity",
+    "generationStrategy": "Two-phase: 20 potential authors, algorithmic filtering to top 10",
     "searchReadiness": true
   },
-  "nextQuestion": "**AI Author Generation Complete!**\n\nI've identified 10 relevant authors who typically write about '[topic]':\n\n**Suggested Authors:**\n1. **[Author 1 Name]** ([Organization]) - Relevance: [X/10]\n2. **[Author 2 Name]** ([Organization]) - Relevance: [X/10]\n[...list all 10 with actual names from suggestedAuthors]\n\n**Keywords:** [list 10 keywords]\n\n**Proceeding automatically to search for their recent articles...**",
+  "nextQuestion": "**AI Author Generation Complete!**\n\nI've identified 20 potential authors who might write about '[topic]'. These will be searched for actual recent articles and algorithmically filtered to the top 10 with real coverage:\n\n**Potential Authors for Article Search:**\n1. **[Author 1 Name]** ([Organization]) - Likelihood: [X/10]\n2. **[Author 2 Name]** ([Organization]) - Likelihood: [X/10]\n[...list all 20 with actual names from suggestedAuthors]\n\n**Keywords:** [list 10 keywords]\n\n**Proceeding automatically to search for their actual recent articles...**",
   "suggestedNextStep": "Metabase Article Search"
 }`
       }
@@ -146,8 +186,8 @@ JSON RESPONSE:
     {
       type: StepType.API_CALL,
       name: "Article Analysis & Ranking",
-      description: "Algorithmic analysis and ranking of authors by article relevance using metadata scoring",
-      prompt: "Analyzing articles using algorithmic scoring based on metadata, editorial rank, and topic relevance...",
+      description: "Algorithmic analysis and ranking of 20 potential authors, filtering down to top 10 with actual relevant recent articles using metadata scoring",
+      prompt: "Analyzing articles from 20 potential authors and filtering to top 10 with highest relevance scores...",
       order: 3,
       dependencies: ["Metabase Article Search"],
       metadata: {

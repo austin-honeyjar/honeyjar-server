@@ -6641,6 +6641,22 @@ RESPONSE FORMAT: Return ONLY the revised ${assetType} content, no JSON, no expla
         nextStepId: nextStep?.id
       });
 
+
+      // INJECT AI-GENERATED KEYWORDS for enhanced relevance scoring
+      if (context.targetedKeywords) {
+        searchResult.searchResults.aiGeneratedKeywords = context.targetedKeywords;
+        logger.info('🎯 Injected AI-Generated Keywords into search results', {
+          stepId,
+          keywordCount: context.targetedKeywords.length,
+          keywords: context.targetedKeywords.map((k: any) => k.keyword || k).slice(0, 5)
+        });
+      } else {
+        logger.warn('⚠️ No targetedKeywords found in context', {
+          contextKeys: Object.keys(context)
+        });
+      }
+
+
       // Update step metadata to indicate results have been shown
       const currentStep = await this.dbService.getStep(stepId);
       await this.updateStep(stepId, {
