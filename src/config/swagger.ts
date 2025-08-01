@@ -322,6 +322,87 @@ const options: swaggerJsdoc.Options = {
           },
           required: ['status', 'message', 'timestamp'],
         },
+        TestResult: {
+          type: 'object',
+          properties: {
+            success: {
+              type: 'boolean',
+              description: 'Whether the test was successful',
+            },
+            category: {
+              type: 'string',
+              enum: ['context', 'security', 'rag', 'workflow', 'integration', 'all'],
+              description: 'Test category',
+            },
+            tests: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: {
+                    type: 'string',
+                    description: 'Test name',
+                  },
+                  passed: {
+                    type: 'boolean',
+                    description: 'Whether the test passed',
+                  },
+                  duration: {
+                    type: 'number',
+                    description: 'Test duration in milliseconds',
+                  },
+                  error: {
+                    type: 'string',
+                    description: 'Error message if test failed',
+                  },
+                  data: {
+                    type: 'object',
+                    description: 'Test result data',
+                  },
+                },
+              },
+            },
+            summary: {
+              type: 'string',
+              description: 'Summary of test results',
+            },
+          },
+          required: ['success', 'category', 'tests', 'summary'],
+        },
+        SecurityClassification: {
+          type: 'object',
+          properties: {
+            securityLevel: {
+              type: 'string',
+              enum: ['public', 'internal', 'confidential', 'restricted'],
+              description: 'Detected security level',
+            },
+            detectedSensitiveInfo: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+              description: 'Types of sensitive information detected',
+            },
+            confidence: {
+              type: 'number',
+              description: 'Confidence score for classification',
+            },
+            piiDetected: {
+              type: 'boolean',
+              description: 'Whether PII was detected',
+            },
+            phiDetected: {
+              type: 'boolean',
+              description: 'Whether PHI was detected',
+            },
+            financialDetected: {
+              type: 'boolean',
+              description: 'Whether financial data was detected',
+            },
+          },
+          required: ['securityLevel', 'detectedSensitiveInfo', 'confidence'],
+        },
       },
     },
     security: [
