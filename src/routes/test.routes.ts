@@ -1129,10 +1129,10 @@ router.post('/dev-analysis', async (req: Request, res: Response) => {
       const knowledgeSource = {
         id: 'user-knowledge',
         type: 'user_profile',
-        relevanceScore: 0.7,
+        relevanceScore: 0.9, // Increased priority for user profile
         snippet: typeof userKnowledge.value === 'object' && userKnowledge.value !== null
-          ? `Company: ${userKnowledge.value.companyName || 'N/A'}, Industry: ${userKnowledge.value.industry || 'N/A'}, Tone: ${userKnowledge.value.preferredTone || 'N/A'}`
-          : 'User knowledge base available',
+          ? `USER PROFILE: This user works at ${userKnowledge.value.companyName || '[Company Not Set]'} in the ${userKnowledge.value.industry || '[Industry Not Set]'} industry${userKnowledge.value.jobTitle ? ` as a ${userKnowledge.value.jobTitle}` : ''}. When communicating, use a ${userKnowledge.value.preferredTone || 'professional'} tone. Always reference their company and role context when relevant to provide personalized, contextually aware responses. This is their primary workplace information that should inform all interactions.`
+          : 'USER PROFILE: User knowledge base available for personalized responses.',
         metadata: {
           sourceType: 'user_profile',
           sourceCategory: 'personal_preferences',

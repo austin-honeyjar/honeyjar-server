@@ -63,6 +63,7 @@ export interface UserKnowledge {
   industry?: string;
   companySize?: string;
   headquarters?: string;
+  jobTitle?: string; // User's job title from onboarding
   preferredTone?: string;
   preferredWorkflows?: string[];
   defaultPlatforms?: string[];
@@ -663,6 +664,7 @@ Return the sanitized content:`;
         industry: knowledge.industry,
         companySize: knowledge.companySize,
         headquarters: knowledge.headquarters,
+        jobTitle: knowledge.jobTitle,
         preferredTone: knowledge.preferredTone,
         preferredWorkflows: knowledge.preferredWorkflows,
         defaultPlatforms: knowledge.defaultPlatforms,
@@ -676,6 +678,7 @@ Return the sanitized content:`;
           industry: knowledge.industry,
           companySize: knowledge.companySize,
           headquarters: knowledge.headquarters,
+          jobTitle: knowledge.jobTitle,
           preferredTone: knowledge.preferredTone,
           preferredWorkflows: knowledge.preferredWorkflows,
           defaultPlatforms: knowledge.defaultPlatforms,
@@ -715,6 +718,7 @@ Return the sanitized content:`;
         industry: kb.industry || undefined,
         companySize: kb.companySize || undefined,
         headquarters: kb.headquarters || undefined,
+        jobTitle: kb.jobTitle || undefined,
         preferredTone: kb.preferredTone || undefined,
         preferredWorkflows: kb.preferredWorkflows as string[] || undefined,
         defaultPlatforms: kb.defaultPlatforms as string[] || undefined,

@@ -17,6 +17,7 @@ import contextAwareChatRoutes from './routes/contextAwareChat.routes';
 import ragRoutes from './routes/rag.routes';
 import threadsRoutes from './routes/threads.routes';
 import assetRoutes from './routes/asset.routes';
+import userRoutes from './routes/user.routes';
 import metabaseRoutes from './routes/metabase.routes';
 import rocketreachRoutes from './routes/rocketreach.routes';
 import newsRoutes from './routes/news.routes';
@@ -27,6 +28,9 @@ import { backgroundWorker } from './workers/backgroundWorker';
 import testRoutes from './routes/test.routes';
 import fs from 'fs';
 import { WorkflowContextService } from './services/workflowContextService';
+import { authMiddleware } from './middleware/auth.middleware';
+import { requestLogger } from './middleware/logger.middleware';
+import { errorHandler } from './middleware/error.middleware';
 
 // Initialize express app
 export const app = express();
@@ -49,6 +53,7 @@ app.use(config.server.apiPrefix + '/rocketreach', rocketreachRoutes);
 app.use(config.server.apiPrefix + '/news', newsRoutes);
 app.use(config.server.apiPrefix + '/test', testRoutes);
 app.use(config.server.apiPrefix + '/assets', assetRoutes);
+app.use(config.server.apiPrefix + '/user', userRoutes);
 
 // Health check routes (unversioned)
 app.use('/health', healthRoutes);
@@ -1101,6 +1106,7 @@ async function initializeRAGSystem(): Promise<boolean> {
             industry TEXT,
             company_size TEXT,
             headquarters TEXT,
+            job_title TEXT,
             preferred_tone TEXT,
             preferred_workflows JSONB,
             default_platforms JSONB,
@@ -1339,7 +1345,16 @@ async function initializeRAGSystem(): Promise<boolean> {
         END $$;
       `);
       
-      logger.info('✅ pgvector columns added to existing tables');
+      // Add job_title column to user_knowledge_base for onboarding integration
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_knowledge_base' AND column_name = 'job_title') THEN
+            ALTER TABLE user_knowledge_base ADD COLUMN job_title TEXT;
+          END IF;
+        END $$;
+      `);
+      
+      logger.info('✅ pgvector columns and user onboarding fields added to existing tables');
     } catch (pgvectorColumnError) {
       logger.warn('⚠️ Error adding pgvector columns (may already exist):', pgvectorColumnError);
     }

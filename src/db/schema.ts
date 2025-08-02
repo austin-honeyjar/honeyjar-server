@@ -532,6 +532,9 @@ export const userKnowledgeBase = pgTable('user_knowledge_base', {
   companySize: text('company_size'),
   headquarters: text('headquarters'),
   
+  // User Information
+  jobTitle: text('job_title'), // User's job title from onboarding
+  
   // User Preferences
   preferredTone: text('preferred_tone'), // formal, casual, professional
   preferredWorkflows: jsonb('preferred_workflows'), // ["Press Release", "Social Post"]

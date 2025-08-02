@@ -1,13 +1,14 @@
 import { Request, Response } from 'express';
 import { db } from '../db';
-import { chatMessages, chatThreads } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { chatThreads, chatMessages } from '../db/schema';
+import { eq, and, desc } from 'drizzle-orm';
 import logger from '../utils/logger';
 import { CreateChatInput, CreateThreadInput } from '../validators/chat.validator';
 import { WorkflowService } from '../services/workflow.service';
 import { ChatService } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';
 import { simpleCache } from '../utils/simpleCache';
+import { upgradedWorkflowService } from '../services/workflow-upgraded.service'; // Changed from enhancedWorkflowService
 
 export const chatController = {
   // Create a new chat message
@@ -60,7 +61,7 @@ export const chatController = {
         .returning();
 
       // Handle the message in the workflow
-      const workflowService = new WorkflowService();
+      const workflowService = upgradedWorkflowService; // Changed from enhancedWorkflowService
       const chatService = new ChatService();
       
       // Pass a flag to chatService indicating that we've already created the user message
@@ -186,7 +187,7 @@ export const chatController = {
         .orderBy(chatMessages.createdAt);
 
       // Get workflow state
-      const workflowService = new WorkflowService();
+      const workflowService = upgradedWorkflowService; // Changed from enhancedWorkflowService
       const workflow = await workflowService.getWorkflowByThreadId(threadId);
 
       // Get current step information including step type
@@ -262,7 +263,7 @@ export const chatController = {
         .returning();
 
       // Initialize workflow for the thread
-      const workflowService = new WorkflowService();
+      const workflowService = upgradedWorkflowService; // Changed from enhancedWorkflowService
       const chatService = new ChatService();
 
       try {
@@ -354,7 +355,7 @@ export const chatController = {
       }
 
       // Delete any associated workflow
-      const workflowService = new WorkflowService();
+      const workflowService = upgradedWorkflowService; // Changed from enhancedWorkflowService
       const workflow = await workflowService.getWorkflowByThreadId(threadId);
       if (workflow) {
         await workflowService.deleteWorkflow(workflow.id);

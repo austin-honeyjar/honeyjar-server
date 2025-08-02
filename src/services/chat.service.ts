@@ -1,16 +1,18 @@
-import { db } from "../db";
-import { chatThreads, chatMessages } from "../db/schema";
-import { WorkflowService } from "./workflow.service";
-import { WorkflowStatus, StepStatus, StepType } from "../types/workflow";
-import { eq } from "drizzle-orm";
+import { randomUUID } from 'crypto';
+import { sql, eq } from 'drizzle-orm';
+import { db } from '../db';
+import { chatThreads, chatMessages } from '../db/schema';
+import { WorkflowService } from './workflow.service';
+import { upgradedWorkflowService } from './workflow-upgraded.service'; // Changed from enhancedWorkflowService
+import { WorkflowStatus, StepStatus, StepType, WorkflowStep } from '../types/workflow';
 import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow.js';
-import logger from "../utils/logger";
+import logger from '../utils/logger';
 
 export class ChatService {
-  private workflowService: WorkflowService;
+  private workflowService: typeof upgradedWorkflowService; // Updated type
 
   constructor() {
-    this.workflowService = new WorkflowService();
+    this.workflowService = upgradedWorkflowService; // Changed from enhancedWorkflowService
   }
 
   async createThread(userId: string, title: string) {
