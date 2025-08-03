@@ -1272,8 +1272,6 @@ export class WorkflowService {
     }
   }
 
-
-
   /**
    * Handle a user's response to a workflow step
    */
@@ -4700,9 +4698,6 @@ Respond with only "search_more" or "proceed" based on their input.`;
   // This method was only used by the removed legacy JSON PR endpoints.
   // Modern message processing routes through Enhanced Service via
   // handleStepResponseWithContext() and handleStepResponse().
-  //
-  // Removed method:
-  // - handleJsonMessage() - Use handleStepResponse() or Enhanced Service instead
 
   /**
    * Handle workflow completion and potential transitions
@@ -6609,16 +6604,25 @@ CRITICAL: Return raw JSON only, no markdown formatting, no code blocks, no backt
         userInput: userInput.substring(0, 50) + '...'
       });
 
+      // 🔧 IMPROVEMENT: Add timeout wrapper for JSON processing
+      const JSON_PROCESSING_TIMEOUT = 30000; // 30 seconds
+      
       // Get conversation history for context
       const conversationHistory = await this.getThreadConversationHistory(workflow.threadId, 10);
 
-      // Process with JsonDialogService
-      const result = await this.jsonDialogService.processMessage(step, userInput, conversationHistory, workflow.threadId);
+      // 🔧 IMPROVEMENT: Wrap JsonDialogService in timeout
+      const result = await Promise.race([
+        this.jsonDialogService.processMessage(step, userInput, conversationHistory, workflow.threadId),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('JSON processing timeout')), JSON_PROCESSING_TIMEOUT)
+        )
+      ]) as any;
 
       logger.info('Asset Review JSON dialog result', {
         isStepComplete: result.isStepComplete,
         reviewDecision: result.collectedInformation?.reviewDecision,
-        hasChanges: !!(result.collectedInformation?.requestedChanges?.length)
+        hasChanges: !!(result.collectedInformation?.requestedChanges?.length),
+        hasRevisedAsset: !!(result.collectedInformation?.revisedAsset)
       });
 
       // Update step with user input
@@ -6626,81 +6630,156 @@ CRITICAL: Return raw JSON only, no markdown formatting, no code blocks, no backt
         userInput: userInput,
         metadata: {
           ...step.metadata,
-          collectedInformation: result.collectedInformation
+          collectedInformation: result.collectedInformation,
+          lastProcessedAt: new Date().toISOString()
         }
       });
 
-      // Check the review decision
+      // 🔧 IMPROVEMENT: Enhanced approval detection with explicit patterns
       const reviewDecision = result.collectedInformation?.reviewDecision;
+      const userInputLower = userInput.toLowerCase().trim();
+      
+      // Define explicit approval patterns
+      const approvalPatterns = [
+        'approved', 'approve', 'looks good', 'perfect', 'yes', 'ok', 'good', 
+        'great', 'fine', 'this is good', "it's good", 'that works', 'looks great',
+        'love it', 'awesome', 'excellent', 'ready', 'publish', 'go ahead'
+      ];
+      
+      // Check for explicit approval in user input (safety check)
+      const isExplicitApproval = approvalPatterns.some(pattern => 
+        userInputLower.includes(pattern) && !userInputLower.includes('not') && !userInputLower.includes("don't")
+      );
 
-      if (reviewDecision === 'approved') {
-        // User approved - complete the step and workflow
-        await this.dbService.updateStep(step.id, {
-          status: StepStatus.COMPLETE
+      // 🔧 IMPROVEMENT: Handle approval with better validation
+      if (reviewDecision === 'approved' || (isExplicitApproval && reviewDecision !== 'revision_requested')) {
+        logger.info('Asset Review: Approval detected', {
+          reviewDecision,
+          isExplicitApproval,
+          userInput: userInput.substring(0, 50)
         });
 
+        // Mark step as complete
+        await this.dbService.updateStep(step.id, {
+          status: StepStatus.COMPLETE,
+          userInput,
+          metadata: {
+            ...step.metadata,
+            reviewDecision: 'approved',
+            approvedAt: new Date().toISOString()
+          }
+        });
+
+        // Mark workflow as completed
         await this.dbService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
         await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
 
-        const approvalMessage = "Asset approved! Your workflow is now complete.";
+        const completionMessage = result.collectedInformation?.message || 
+          "Asset approved! Your workflow is now complete.";
         
-        // NOTE: Don't send addDirectMessage here - the calling service will send the returned response
-        // This prevents duplicate messages when Enhanced Service delegates to this method
-
-        // 🔄 AUTO-TRANSITION: Create new Base Workflow for continued conversation
-        try {
-          logger.info('🔄 AUTO-TRANSITION: Creating new Base Workflow after completion', {
-            completedWorkflowId: workflow.id.substring(0, 8),
-            threadId: workflow.threadId.substring(0, 8)
-          });
-          
-          // Create a silent Base Workflow (no initial prompt)
-          const newWorkflow = await this.createWorkflow(workflow.threadId, 'Base Workflow', true);
-          
-          logger.info('✅ AUTO-TRANSITION: New Base Workflow created successfully', {
-            newWorkflowId: newWorkflow.id.substring(0, 8),
-            threadId: workflow.threadId.substring(0, 8)
-          });
-          
-        } catch (error) {
-          logger.error('❌ AUTO-TRANSITION: Failed to create new Base Workflow', {
-            error: error instanceof Error ? error.message : 'Unknown error',
-            completedWorkflowId: workflow.id.substring(0, 8),
-            threadId: workflow.threadId.substring(0, 8)
-          });
-          
-          // Don't fail the completion if auto-transition fails
-        }
+        // Add completion message
+        await this.addDirectMessage(workflow.threadId, completionMessage);
 
         return {
-          response: approvalMessage,
+          response: completionMessage,
           isComplete: true
         };
-      } 
-      else if (reviewDecision === 'revision_generated') {
-        // New template generated the revision directly
+      }
+
+      // 🔧 IMPROVEMENT: Handle unclear input with better user guidance
+      if (reviewDecision === 'unclear' || !reviewDecision) {
+        const clarificationMessage = result.collectedInformation?.message || 
+          "I want to make sure I understand correctly. Are you happy with the content as-is, or would you like me to make some changes? If changes, please let me know what specifically you'd like modified.";
+
+        await this.addDirectMessage(workflow.threadId, clarificationMessage);
+        
+        return {
+          response: clarificationMessage,
+          nextStep: {
+            id: step.id,
+            name: step.name,
+            prompt: clarificationMessage,
+            type: step.stepType
+          },
+          isComplete: false
+        };
+      }
+
+      // 🔧 IMPROVEMENT: Handle cross-workflow requests
+      if (reviewDecision === 'cross_workflow_request') {
+        const requestedAssetType = result.collectedInformation?.requestedAssetType;
+        const crossWorkflowMessage = result.collectedInformation?.message || 
+          `I can help with that! Let me start a ${requestedAssetType} workflow for you.`;
+
+        // Mark current step as complete since we're switching workflows
+        await this.dbService.updateStep(step.id, {
+          status: StepStatus.COMPLETE,
+          userInput,
+          metadata: {
+            ...step.metadata,
+            reviewDecision: 'cross_workflow_request',
+            requestedAssetType
+          }
+        });
+
+        await this.addDirectMessage(workflow.threadId, crossWorkflowMessage);
+
+        return {
+          response: crossWorkflowMessage,
+          nextStep: {
+            workflowSuggestion: requestedAssetType
+          },
+          isComplete: false
+        };
+      }
+
+      // 🔧 IMPROVEMENT: Handle revision_generated (AI already provided revision)
+      if (reviewDecision === 'revision_generated') {
         const revisedAsset = result.collectedInformation?.revisedAsset;
         
         if (!revisedAsset) {
-          throw new Error('Revised asset not found in response');
+          logger.error('revision_generated but no revisedAsset found', {
+            stepId: step.id,
+            reviewDecision,
+            collectedInfo: result.collectedInformation
+          });
+          
+          // 🔧 IMPROVEMENT: Better fallback with user notification
+          const fallbackMessage = "I had trouble generating the revision. Could you please specify your changes again, and I'll create an updated version for you?";
+          await this.addDirectMessage(workflow.threadId, fallbackMessage);
+          
+          return {
+            response: fallbackMessage,
+            nextStep: {
+              id: step.id,
+              name: step.name,
+              prompt: fallbackMessage,
+              type: step.stepType
+            },
+            isComplete: false
+          };
         }
 
-        // Get asset type
+        // Get asset type for proper messaging
+        const assetGenerationStep = workflow.steps.find(s => s.name === "Asset Generation");
         const assetType = step.metadata?.assetType || 
                          result.collectedInformation?.assetType || 
-                         "Blog Post"; // Default to Blog Post if not found
+                         assetGenerationStep?.metadata?.assetType || 
+                         'content';
 
         // Store the revised asset
         await this.dbService.updateStep(step.id, {
           metadata: {
             ...step.metadata,
             generatedAsset: revisedAsset,
+            originalAsset: assetGenerationStep?.metadata?.generatedAsset,
             revisionHistory: [
               ...(step.metadata?.revisionHistory || []),
               {
                 userFeedback: userInput,
                 requestedChanges: result.collectedInformation?.requestedChanges || [],
-                revisedAt: new Date().toISOString()
+                revisedAt: new Date().toISOString(),
+                method: 'ai_generated'
               }
             ]
           }
@@ -6719,11 +6798,8 @@ CRITICAL: Return raw JSON only, no markdown formatting, no code blocks, no backt
           }
         );
 
-        // Present the revised asset with the next question from the template
-        const reviewPrompt = result.nextQuestion || `Please review the revised ${assetType}. Let me know if you'd like any additional changes, or if you're satisfied with it.`;
-        
-        // NOTE: Don't send addDirectMessage here - the calling service will send the returned response
-        // This prevents duplicate messages when Enhanced Service delegates to this method
+        const reviewPrompt = result.collectedInformation?.nextQuestion || 
+          `Here's your updated ${assetType}. Please review and let me know if you need further changes or if you're satisfied.`;
 
         return {
           response: reviewPrompt,
@@ -6736,6 +6812,8 @@ CRITICAL: Return raw JSON only, no markdown formatting, no code blocks, no backt
           isComplete: false
         };
       }
+
+      // 🔧 IMPROVEMENT: Handle revision_requested with better validation
       else if (reviewDecision === 'revision_requested') {
         // User wants changes - regenerate the asset
         const requestedChanges = result.collectedInformation?.requestedChanges || [];
@@ -6762,19 +6840,37 @@ CRITICAL: Return raw JSON only, no markdown formatting, no code blocks, no backt
         const originalAsset = assetGenerationStep?.metadata?.generatedAsset || step.metadata?.generatedAsset;
         
         if (!originalAsset) {
-          throw new Error('Original asset not found for revision');
+          logger.error('Original asset not found for revision', {
+            stepId: step.id,
+            workflowId: workflow.id,
+            assetGenerationStep: !!assetGenerationStep
+          });
+          
+          const errorMessage = "I couldn't find the original content to revise. Let me regenerate it for you.";
+          await this.addDirectMessage(workflow.threadId, errorMessage);
+          
+          return {
+            response: errorMessage,
+            nextStep: {
+              id: step.id,
+              name: step.name,
+              prompt: errorMessage,
+              type: step.stepType
+            },
+            isComplete: false
+          };
         }
 
         // Get asset type
         const assetType = step.metadata?.assetType || 
                          result.collectedInformation?.assetType || 
                          assetGenerationStep?.metadata?.assetType || 
-                         "Press Release";
+                         'content';
 
         // Send revision message
         await this.addDirectMessage(workflow.threadId, `Revising your ${assetType} based on your feedback...`);
 
-        // Create revision prompt
+        // 🔧 IMPROVEMENT: Enhanced revision prompt with better structure
         const revisionPrompt = `ORIGINAL ASSET:
 ${originalAsset}
 
@@ -6788,154 +6884,150 @@ TASK: Revise the ${assetType} incorporating all the requested changes while main
 
 RESPONSE FORMAT: Return ONLY the revised ${assetType} content, no JSON, no explanations.`;
 
-        // Create a step for revision
-        const revisionStep = {
-          ...step,
-          metadata: {
-            ...step.metadata,
-            openai_instructions: revisionPrompt
+        try {
+          // Create a step for revision with timeout
+          const revisionStep = {
+            ...step,
+            metadata: {
+              ...step.metadata,
+              openai_instructions: revisionPrompt
+            }
+          };
+
+          // 🔧 IMPROVEMENT: Add timeout for revision generation
+          const REVISION_TIMEOUT = 45000; // 45 seconds
+          
+          const revisionResult = await Promise.race([
+            this.openAIService.generateStepResponse(revisionStep, revisionPrompt, []),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Revision generation timeout')), REVISION_TIMEOUT)
+            )
+          ]) as any;
+
+          let revisedAsset = revisionResult.responseText.trim();
+
+          // 🔧 IMPROVEMENT: Validate revised asset is not empty
+          if (!revisedAsset || revisedAsset.length < 50) {
+            throw new Error('Generated revision is too short or empty');
           }
-        };
 
-        // Generate revised asset
-        const revisionResult = await this.openAIService.generateStepResponse(
-          revisionStep,
-          revisionPrompt,
-          []
-        );
+          // Store the revised asset
+          await this.dbService.updateStep(step.id, {
+            metadata: {
+              ...step.metadata,
+              generatedAsset: revisedAsset,
+              originalAsset: originalAsset,
+              revisionHistory: [
+                ...(step.metadata?.revisionHistory || []),
+                {
+                  userFeedback: userInput,
+                  requestedChanges: requestedChanges,
+                  revisedAt: new Date().toISOString(),
+                  method: 'openai_generated'
+                }
+              ]
+            }
+          });
 
-        let revisedAsset = revisionResult.responseText.trim();
+          // Add revised asset using unified structured messaging
+          await this.addAssetMessage(
+            workflow.threadId,
+            revisedAsset,
+            assetType,
+            step.id,
+            step.name,
+            {
+              isRevision: true,
+              showCreateButton: true
+            }
+          );
 
-        // Store the revised asset
-        await this.dbService.updateStep(step.id, {
-          metadata: {
-            ...step.metadata,
-            generatedAsset: revisedAsset,
-            originalAsset: originalAsset,
-            revisionHistory: [
-              ...(step.metadata?.revisionHistory || []),
-              {
-                userFeedback: userInput,
-                requestedChanges: requestedChanges,
-                revisedAt: new Date().toISOString()
-              }
-            ]
-          }
-        });
+          // Ask for next review
+          const reviewPrompt = `Please review the revised ${assetType}. Let me know if you'd like any additional changes, or if you're satisfied with it.`;
 
-        // Add revised asset using unified structured messaging
-        await this.addAssetMessage(
-          workflow.threadId,
-          revisedAsset,
-          assetType,
-          step.id,
-          step.name,
-          {
-            isRevision: true,
-            showCreateButton: true
-          }
-        );
+          return {
+            response: reviewPrompt,
+            nextStep: {
+              id: step.id,
+              name: step.name,
+              prompt: reviewPrompt,
+              type: step.stepType
+            },
+            isComplete: false
+          };
 
+        } catch (revisionError) {
+          logger.error('Error generating revision', {
+            error: revisionError instanceof Error ? revisionError.message : 'Unknown error',
+            stepId: step.id,
+            requestedChanges
+          });
 
-        // Ask for next review
-        const reviewPrompt = `Please review the revised ${assetType}. Let me know if you'd like any additional changes, or if you're satisfied with it.`;
-        
-        // NOTE: Don't send addDirectMessage here - the calling service will send the returned response
-        // This prevents duplicate messages when Enhanced Service delegates to this method
+          const errorMessage = revisionError instanceof Error && revisionError.message.includes('timeout')
+            ? "The revision is taking longer than expected. Could you please try requesting the changes again?"
+            : "I had trouble creating the revision. Could you please rephrase your requested changes and try again?";
 
-        return {
-          response: reviewPrompt,
-          nextStep: {
-            id: step.id,
-            name: step.name,
-            prompt: reviewPrompt,
-            type: step.stepType
-          },
-          isComplete: false
-        };
-      }
-      else if (reviewDecision === 'revision_generated') {
-        // New template generated the revision directly
-        const revisedAsset = result.collectedInformation?.revisedAsset;
-        
-        if (!revisedAsset) {
-          throw new Error('Revised asset not found in response');
+          await this.addDirectMessage(workflow.threadId, errorMessage);
+
+          return {
+            response: errorMessage,
+            nextStep: {
+              id: step.id,
+              name: step.name,
+              prompt: errorMessage,
+              type: step.stepType
+            },
+            isComplete: false
+          };
         }
-
-        // Get asset type
-        const assetType = step.metadata?.assetType || 
-                         result.collectedInformation?.assetType || 
-                         "Blog Post";
-
-        // Store the revised asset
-        await this.dbService.updateStep(step.id, {
-          metadata: {
-            ...step.metadata,
-            generatedAsset: revisedAsset,
-            revisionHistory: [
-              ...(step.metadata?.revisionHistory || []),
-              {
-                userFeedback: userInput,
-                requestedChanges: result.collectedInformation?.requestedChanges || [],
-                revisedAt: new Date().toISOString()
-              }
-            ]
-          }
-        });
-
-        // Add revised asset using unified structured messaging
-        await this.addAssetMessage(
-          workflow.threadId,
-          revisedAsset,
-          assetType,
-          step.id,
-          step.name,
-          {
-            isRevision: true,
-            showCreateButton: true
-          }
-        );
-
-        // Present the revised asset with the next question from the template
-        const reviewPrompt = result.nextQuestion || `Please review the revised ${assetType}. Let me know if you'd like any additional changes, or if you're satisfied with it.`;
-        await this.addDirectMessage(workflow.threadId, reviewPrompt);
-
-        return {
-          response: reviewPrompt,
-          nextStep: {
-            id: step.id,
-            name: step.name,
-            prompt: reviewPrompt,
-            type: step.stepType
-          },
-          isComplete: false
-        };
-      }
-      else {
-        // Unclear or need clarification
-        const clarificationMessage = result.nextQuestion || 
-          "I want to make sure I understand. Are you happy with the asset as-is, or would you like me to make some changes? If changes, please let me know what specifically you'd like modified.";
-        
-        await this.addDirectMessage(workflow.threadId, clarificationMessage);
-
-        return {
-          response: clarificationMessage,
-          nextStep: {
-            id: step.id,
-            name: step.name,
-            prompt: clarificationMessage,
-            type: step.stepType
-          },
-          isComplete: false
-        };
       }
 
-    } catch (error) {
-      logger.error('Error handling Asset Review step', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      // 🔧 IMPROVEMENT: Default fallback for unknown review decisions
+      logger.warn('Unknown review decision in Asset Review', {
+        reviewDecision,
+        userInput: userInput.substring(0, 50),
         stepId: step.id
       });
-      throw error;
+
+      const fallbackMessage = "I'm not sure I understood your feedback correctly. Could you please let me know if you're happy with the content as-is, or if you'd like me to make specific changes?";
+      await this.addDirectMessage(workflow.threadId, fallbackMessage);
+
+      return {
+        response: fallbackMessage,
+        nextStep: {
+          id: step.id,
+          name: step.name,
+          prompt: fallbackMessage,
+          type: step.stepType
+        },
+        isComplete: false
+      };
+
+    } catch (error) {
+      logger.error('Error in Asset Review step', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stepId: step.id,
+        userInput: userInput.substring(0, 50)
+      });
+
+      // 🔧 IMPROVEMENT: User-friendly error handling
+      const isTimeout = error instanceof Error && error.message.includes('timeout');
+      const errorMessage = isTimeout
+        ? "The review is taking longer than expected. Please try again with your feedback."
+        : "I encountered an issue processing your review. Could you please try again?";
+
+      await this.addDirectMessage(workflow.threadId, errorMessage);
+
+      return {
+        response: errorMessage,
+        nextStep: {
+          id: step.id,
+          name: step.name,
+          prompt: errorMessage,
+          type: step.stepType
+        },
+        isComplete: false
+      };
     }
   }
 
@@ -7083,8 +7175,7 @@ RESPONSE FORMAT: Return ONLY the revised ${assetType} content, no JSON, no expla
 
       // Update step with results
       await this.updateStep(stepId, {
-        status: StepStatus.IN_PROGRESS, // Keep step active until user confirms
-        aiSuggestion: JSON.stringify(searchResult),
+        status: StepStatus.COMPLETE,
         metadata: {
           topic,
           authorsSearched: searchResult.searchResults.authorsSearched,
