@@ -187,8 +187,9 @@ CONTEXT:
 - Be helpful in understanding their feedback and translating it into actionable revision requests
 
 USER OPTIONS:
-1. APPROVAL: User says "approved", "looks good", "perfect", "yes", or similar positive feedback
-2. REVISION: User provides specific feedback about what they want changed
+1. APPROVAL: User says positive words like "approved", "looks good", "perfect", "yes", "ok", "good", "great", "fine", "this is good", "it's good", "that works"
+2. REVISION: User requests specific changes like "change X", "add Y", "make it Z", "use more/less", "different tone"
+3. UNCLEAR: User input is ambiguous - ask for clarification
 
 RESPONSE FORMAT:
 You MUST respond with ONLY valid JSON in this format:
@@ -204,7 +205,7 @@ If user approves the press release:
   "suggestedNextStep": null
 }
 
-If user requests changes:
+If user requests changes (revisions to current press release):
 {
   "isComplete": false,
   "collectedInformation": {
@@ -214,6 +215,18 @@ If user requests changes:
   },
   "nextQuestion": "I understand you'd like some changes. Could you be more specific about what you'd like me to modify?",
   "suggestedNextStep": null
+}
+
+If user requests different asset type (social post, blog, etc.):
+{
+  "isComplete": true,
+  "collectedInformation": {
+    "reviewDecision": "cross_workflow_request",
+    "requestedAssetType": "Detected asset type (Social Post, Blog Article, etc.)",
+    "userFeedback": "User's exact words"
+  },
+  "nextQuestion": null,
+  "suggestedNextStep": "I can help with that! Let me start a [Asset Type] workflow for you."
 }
 
 If user input is unclear:

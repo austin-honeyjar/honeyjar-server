@@ -23,11 +23,13 @@ Collect all the necessary information to create high-quality social media conten
 
 CONTEXT:
 - This is specifically for creating social media posts only
+- Check for carried-over context from previous workflows first
 - Adapt your questions based on what information has already been provided
 - Track completion percentage as fields are filled
 - PRIORITIZE AUTOFILLING over asking questions - only ask about truly required information
 - If the user says they don't know or they don't have that information, skip that requirement and move on to the next one.
 - When autofilling information, clearly inform the user so they can review and update if needed
+- If context was carried over from another workflow, use that information and inform the user
 
 REQUIRED INFORMATION FOR SOCIAL POST (ask questions only if missing):
 - Company name and description
@@ -148,10 +150,17 @@ FORMATTING REQUIREMENTS:
 - Ensure all claims are concrete and verifiable
 
 RESPONSE FORMAT:
-Return a JSON object with ONLY the social media posts, no additional text:
-{"asset": "**LinkedIn Post:**\n\n[Your complete LinkedIn post content here]\n\n**Twitter/X Post:**\n\n[Your complete Twitter post content here]"}
+Return the social media posts directly as plain text, not as JSON:
 
-IMPORTANT: The asset field should contain ONLY the social media posts themselves, with no additional commentary, instructions, or explanatory text. The content should be ready to copy and paste directly to social platforms.`
+**LinkedIn Post:**
+
+[Your complete LinkedIn post content here]
+
+**Twitter/X Post:**
+
+[Your complete Twitter post content here]
+
+IMPORTANT: Return ONLY the social media posts themselves, with no additional commentary, instructions, or explanatory text. Do not wrap in JSON. The content should be ready to copy and paste directly to social platforms.`
         }
       }
     },
@@ -177,8 +186,9 @@ CONTEXT:
 - Be helpful in understanding their feedback and translating it into actionable revision requests
 
 USER OPTIONS:
-1. APPROVAL: User says "approved", "looks good", "perfect", "yes", or similar positive feedback
-2. REVISION: User provides specific feedback about what they want changed
+1. APPROVAL: User says positive words like "approved", "looks good", "perfect", "yes", "ok", "good", "great", "fine", "this is good", "it's good", "that works"
+2. REVISION: User requests specific changes like "change X", "add Y", "make it Z", "use more/less", "different tone"
+3. UNCLEAR: User input is ambiguous - ask for clarification
 
 RESPONSE FORMAT:
 You MUST respond with ONLY valid JSON in this format:
@@ -194,7 +204,7 @@ If user approves the social posts:
   "suggestedNextStep": null
 }
 
-If user requests changes:
+If user requests changes (revisions to current social post):
 {
   "isComplete": false,
   "collectedInformation": {
@@ -204,6 +214,18 @@ If user requests changes:
   },
   "nextQuestion": "I understand you'd like some changes. Could you be more specific about what you'd like me to modify?",
   "suggestedNextStep": null
+}
+
+If user requests different asset type (press release, blog, etc.):
+{
+  "isComplete": true,
+  "collectedInformation": {
+    "reviewDecision": "cross_workflow_request",
+    "requestedAssetType": "Detected asset type (Press Release, Blog Article, etc.)",
+    "userFeedback": "User's exact words"
+  },
+  "nextQuestion": null,
+  "suggestedNextStep": "I can help with that! Let me start a [Asset Type] workflow for you."
 }
 
 If user input is unclear:

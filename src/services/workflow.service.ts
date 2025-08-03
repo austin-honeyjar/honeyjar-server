@@ -512,7 +512,7 @@ export class WorkflowService {
   }
 
   // Workflow Management
-  async createWorkflow(threadId: string, templateId: string): Promise<Workflow> {
+  async createWorkflow(threadId: string, templateId: string, silent: boolean = false): Promise<Workflow> {
     console.log(`=== WORKFLOW CREATION DEBUG ===`);
     console.log(`Proceeding to create workflow with templateId: ${templateId} for threadId: ${threadId}`);
 
@@ -590,9 +590,14 @@ export class WorkflowService {
 
         if (isFirstStep && stepDefinition.prompt) {
           firstStepId = createdStep.id;
-          // Send the first step's prompt as a message from the AI
+          
+          if (!silent) {
+            // Send the first step's prompt as a message from the AI
             await this.addDirectMessage(threadId, stepDefinition.prompt || "");
             console.log(`✅ Sent first step prompt to thread ${threadId}`);
+          } else {
+            console.log(`🔇 Silent mode: Skipped sending initial prompt to thread ${threadId}`);
+          }
         }
       }
 
@@ -1039,22 +1044,93 @@ export class WorkflowService {
           // Add a direct message with the selection
           await this.addDirectMessage(workflow.threadId, `Selected workflow: ${selectedWorkflow}`);
           
-          return selectedWorkflow;
-        } else if (jsonDialogResult.nextQuestion) {
-          // Need more clarification
-          await this.addDirectMessage(workflow.threadId, jsonDialogResult.nextQuestion);
+          // 🚀 CRITICAL FIX: After completing workflow selection, check for next step auto-execution
+          logger.info('Workflow Selection completed, checking for next step auto-execution', {
+            stepId,
+            selectedWorkflow,
+            workflowId: workflow.id
+          });
           
-          // Don't complete the step yet
+          // Get the updated workflow to find the next step
+          const updatedWorkflow = await this.dbService.getWorkflow(workflow.id);
+          if (updatedWorkflow) {
+            const sortedSteps = updatedWorkflow.steps.sort((a, b) => a.order - b.order);
+            const currentStepIndex = sortedSteps.findIndex(s => s.id === stepId);
+            const nextStep = sortedSteps[currentStepIndex + 1];
+            
+            if (nextStep) {
+              console.log('🔍 WORKFLOW SELECTION: Found next step after Workflow Selection:', {
+                nextStepName: nextStep.name,
+                nextStepType: nextStep.stepType,
+                autoExecuteRaw: nextStep.metadata?.autoExecute
+              });
+              
+              // Mark the next step as IN_PROGRESS
+              await this.dbService.updateStep(nextStep.id, {
+                status: StepStatus.IN_PROGRESS
+              });
+              
+              // Check if next step should auto-execute
+              const nextStepAutoExecute = nextStep.metadata?.autoExecute;
+              const nextStepShouldAutoExecute = nextStepAutoExecute === true || nextStepAutoExecute === "true";
+              
+              if ((nextStep.stepType === StepType.GENERATE_THREAD_TITLE || 
+                   nextStep.stepType === StepType.API_CALL ||
+                   nextStep.stepType === StepType.JSON_DIALOG) && 
+                  nextStepShouldAutoExecute) {
+                
+                console.log('🚀 WORKFLOW SELECTION: Auto-executing next step immediately:', nextStep.name);
+                
+                try {
+                  // Auto-execute the next step
+                  const autoExecResult = await this.handleStepResponse(nextStep.id, "auto-execute");
+                  logger.info('Auto-executed next step after Workflow Selection', {
+                    nextStepName: nextStep.name,
+                    autoExecResult: autoExecResult ? 'success' : 'no result'
+                  });
+                } catch (autoExecError) {
+                  logger.error('Error auto-executing step after Workflow Selection', {
+                    nextStepId: nextStep.id,
+                    nextStepName: nextStep.name,
+                    error: autoExecError instanceof Error ? autoExecError.message : 'Unknown error'
+                  });
+                }
+              } else {
+                console.log('🔍 WORKFLOW SELECTION: Next step does not auto-execute:', {
+                  stepName: nextStep.name,
+                  stepType: nextStep.stepType,
+                  autoExecute: nextStepAutoExecute,
+                  shouldAutoExecute: nextStepShouldAutoExecute
+                });
+              }
+            } else {
+              console.log('🔍 WORKFLOW SELECTION: No next step found after Workflow Selection');
+            }
+          }
+          
+          return selectedWorkflow;
+        } else if (jsonDialogResult.isStepComplete && jsonDialogResult.collectedInformation?.mode === 'conversational') {
+          // Handle conversational mode - simple completion flow
+          
+          // Update the step with conversational mode metadata
           await this.dbService.updateStep(stepId, {
-            status: StepStatus.IN_PROGRESS,
+            status: StepStatus.COMPLETE,
             metadata: {
               ...step.metadata,
-              collectedInformation: jsonDialogResult.collectedInformation || {}
+              collectedInformation: {
+                ...jsonDialogResult.collectedInformation,
+                mode: 'conversational' // Explicitly ensure mode is saved
+              }
             }
           });
-        
-          // Return empty string to indicate no valid selection yet
-          return '';
+          
+          const response = jsonDialogResult.collectedInformation?.conversationalResponse || 'Here to help with your PR needs!';
+          await this.addDirectMessage(workflow.threadId, response);
+          return ''; // No workflow selected, normal completion will trigger new base workflow
+        } else {
+          // Fallback - should not happen with binary mode
+          await this.addDirectMessage(workflow.threadId, 'How can I help you today?');
+          return ''; // Complete the step to trigger new base workflow
         }
       }
       
@@ -1196,6 +1272,8 @@ export class WorkflowService {
     }
   }
 
+
+
   /**
    * Handle a user's response to a workflow step
    */
@@ -1209,6 +1287,29 @@ export class WorkflowService {
       const step = await this.dbService.getStep(stepId);
       if (!step) throw new Error(`Step not found: ${stepId}`);
       const workflowId = step.workflowId;
+
+      // 🚀 CRITICAL: Check for auto-execution BEFORE processing user input
+      // This ensures auto-execute steps run immediately when they become active
+      const stepAutoExecute = step.metadata?.autoExecute;
+      const stepShouldAutoExecute = stepAutoExecute === true || stepAutoExecute === "true";
+      
+      console.log('🚀 INITIAL AUTO-EXEC CHECK:', {
+        stepName: step.name,
+        stepType: step.stepType,
+        autoExecuteRaw: stepAutoExecute,
+        shouldAutoExecute: stepShouldAutoExecute,
+        userInput: userInput.substring(0, 20)
+      });
+
+      if (stepShouldAutoExecute && (
+          step.stepType === StepType.GENERATE_THREAD_TITLE || 
+          step.stepType === StepType.API_CALL ||
+          step.stepType === StepType.JSON_DIALOG
+      )) {
+        console.log('🚀 AUTO-EXECUTING STEP IMMEDIATELY:', step.name);
+        // Override user input to trigger auto-execution
+        userInput = "auto-execute";
+      }
       
       // Handle JSON_DIALOG step type for Media List Generator - Author Ranking & Selection FIRST
       // This must come before the generic JSON_DIALOG handler to avoid being bypassed
@@ -1261,9 +1362,9 @@ export class WorkflowService {
         
         // Get the template for the appropriate asset type
         let templateName = "pressRelease";
-        if (collectedInfo.selectedAssetType) {
+        if (collectedInfo.assetType) {
           // Try to find the appropriate template based on asset type
-          const assetType = collectedInfo.selectedAssetType.toLowerCase().replace(/\s+/g, '');
+          const assetType = collectedInfo.assetType.toLowerCase().replace(/\s+/g, '');
           
           const templateMap: Record<string, string> = {
             'pressrelease': 'pressRelease',
@@ -1365,7 +1466,7 @@ export class WorkflowService {
         
         // Get the generated content directly from the response
         const assetContent = result.responseText;
-        const assetType = collectedInfo.selectedAssetType || "Press Release";
+        const assetType = collectedInfo.assetType || "Press Release";
         
         // Store the generated asset
         await this.dbService.updateStep(stepId, {
@@ -1915,6 +2016,22 @@ Respond with only "search_more" or "proceed" based on their input.`;
             // Create a FAQ workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.FAQ);
           }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.BLOG_ARTICLE)) {
+            // Create a Blog Article workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.BLOG_ARTICLE);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.PRESS_RELEASE)) {
+            // Create a Press Release workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.PRESS_RELEASE);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_PITCH)) {
+            // Create a Media Pitch workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_PITCH);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.SOCIAL_POST)) {
+            // Create a Social Post workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.SOCIAL_POST);
+          }
           
           if (newWorkflow) {
             // Don't send a message about starting the workflow - keep it silent
@@ -1972,16 +2089,33 @@ Respond with only "search_more" or "proceed" based on their input.`;
         // Get the workflow to get the threadId
         const workflow = await this.dbService.getWorkflow(workflowId);
         if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
+
+        // Get context from the previous completed step (Workflow Selection)
+        const workflowSelectionStep = workflow.steps.find(s => s.name === "Workflow Selection" && s.status === "complete");
+        if (!workflowSelectionStep) throw new Error('Workflow Selection step not found or not complete');
         
-        // Find the workflow selection step to get the selected workflow
-        const workflowSelectionStep = workflow.steps.find(s => s.name === "Workflow Selection");
-        if (!workflowSelectionStep) throw new Error(`Workflow Selection step not found`);
-        
-        // Get the selected workflow from the step data
         const selectedWorkflow = workflowSelectionStep.aiSuggestion || 
                                 workflowSelectionStep.metadata?.collectedInformation?.selectedWorkflow;
+        const conversationalResponse = workflowSelectionStep.metadata?.collectedInformation?.conversationalResponse;
         
-        if (!selectedWorkflow) {
+        // Check if this is conversational mode by presence of conversational response
+        const isConversationalMode = !!conversationalResponse && !selectedWorkflow;
+
+        // DEBUG: Log what we actually have
+        console.log('🔍 TITLE GENERATION DEBUG (FROM PREVIOUS STEP):', {
+          stepId,
+          workflowSelectionStepFound: !!workflowSelectionStep,
+          selectedWorkflow,
+          hasConversationalResponse: !!conversationalResponse,
+          isConversationalMode,
+          conversationalResponsePreview: conversationalResponse ? conversationalResponse.substring(0, 50) + '...' : null
+        });
+        
+        if (!selectedWorkflow && !isConversationalMode) {
+          throw new Error('No workflow selection found for automatic title generation');
+        }
+        
+        if (!selectedWorkflow && !isConversationalMode) {
           throw new Error('No workflow selection found for automatic title generation');
         }
         
@@ -1992,8 +2126,10 @@ Respond with only "search_more" or "proceed" based on their input.`;
           day: 'numeric'
         });
         
-        const threadTitle = `${selectedWorkflow} - ${currentDate}`;
-        
+        const threadTitle = isConversationalMode 
+          ? `PR Chat - ${currentDate}`
+          : `${selectedWorkflow} - ${currentDate}`;
+
         console.log(`AUTO-GENERATING THREAD TITLE: '${threadTitle}' for thread ${workflow.threadId}`);
         logger.info('Auto-generating thread title with GENERATE_THREAD_TITLE step', { 
           stepId, 
@@ -2015,43 +2151,66 @@ Respond with only "search_more" or "proceed" based on their input.`;
             
             if (updated) {
               console.log(`SILENT THREAD TITLE UPDATED: Thread ${workflow.threadId} title set to "${threadTitle}"`);
-              logger.info('Silently updated thread title in database', { threadId: workflow.threadId, title: threadTitle });
-            }
-          } catch (error) {
-            logger.error('Error silently updating thread title', { threadId: workflow.threadId, title: threadTitle, error });
+                          logger.info('Silently updated thread title in database', { threadId: workflow.threadId, title: threadTitle });
           }
+        } catch (error) {
+          logger.error('Error silently updating thread title', { threadId: workflow.threadId, title: threadTitle, error });
         }
-        
-        // Mark the step as complete
-        await this.dbService.updateStep(stepId, {
-          status: StepStatus.COMPLETE,
-          userInput: "auto-generated",
-          aiSuggestion: threadTitle,
-          metadata: {
-            ...step.metadata,
-            autoGenerated: true,
-            generatedTitle: threadTitle,
-            selectedWorkflow: selectedWorkflow
-          }
-        });
-        
-        // Since this is the base workflow and we've completed title generation,
-        // we need to transition to the selected workflow
-        logger.info('Thread title auto-generated, transitioning to selected workflow', {
-          workflowId,
-          threadId: workflow.threadId,
-          selectedWorkflow
-        });
-        
-        // Mark the base workflow as COMPLETED
-        await this.dbService.updateWorkflowStatus(workflowId, WorkflowStatus.COMPLETED);
-        await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
-        
-        // Create the appropriate workflow type
-        let newWorkflow: Workflow | null = null;
-        
-        try {
-          if (selectedWorkflow.includes(WORKFLOW_TYPES.LAUNCH_ANNOUNCEMENT)) {
+      }
+      
+      // Mark the step as complete
+      await this.dbService.updateStep(stepId, {
+        status: StepStatus.COMPLETE,
+        userInput: "auto-generated",
+        aiSuggestion: threadTitle,
+        metadata: {
+          ...step.metadata,
+          autoGenerated: true,
+          generatedTitle: threadTitle,
+          selectedWorkflow: selectedWorkflow
+        }
+      });
+      
+      // Since this is the base workflow and we've completed title generation,
+      // we need to transition to the selected workflow
+      logger.info('Thread title auto-generated, transitioning to selected workflow', {
+        workflowId,
+        threadId: workflow.threadId,
+        selectedWorkflow
+      });
+      
+      // Mark the base workflow as COMPLETED
+      await this.dbService.updateWorkflowStatus(workflowId, WorkflowStatus.COMPLETED);
+      await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
+      
+              // For conversational mode, start a new base workflow for next user input
+        if (isConversationalMode) {
+          logger.info('Conversational mode completed - starting new base workflow', {
+            workflowId,
+            threadId: workflow.threadId,
+            conversationalResponse: conversationalResponse?.substring(0, 50) + '...'
+          });
+          
+              // Create a new base workflow for the next conversation (silent - no immediate prompt)
+    const newBaseWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.BASE_WORKFLOW, true);
+
+    logger.info('New base workflow created for continued conversation (silent mode)', {
+      newWorkflowId: newBaseWorkflow.id,
+      threadId: workflow.threadId,
+      silentMode: true
+    });
+          
+          return {
+            response: 'Ready for next question',
+            isComplete: true // This conversation is complete, but new workflow is ready
+          };
+        }
+      
+      // Create the appropriate workflow type
+      let newWorkflow: Workflow | null = null;
+      
+      try {
+        if (selectedWorkflow.includes(WORKFLOW_TYPES.LAUNCH_ANNOUNCEMENT)) {
             // Create a Launch Announcement workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT);
           } 
@@ -2078,6 +2237,22 @@ Respond with only "search_more" or "proceed" based on their input.`;
           else if (selectedWorkflow.includes(WORKFLOW_TYPES.FAQ)) {
             // Create a FAQ workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.FAQ);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.BLOG_ARTICLE)) {
+            // Create a Blog Article workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.BLOG_ARTICLE);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.PRESS_RELEASE)) {
+            // Create a Press Release workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.PRESS_RELEASE);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_PITCH)) {
+            // Create a Media Pitch workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_PITCH);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.SOCIAL_POST)) {
+            // Create a Social Post workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.SOCIAL_POST);
           }
           
           if (newWorkflow) {
@@ -2215,13 +2390,13 @@ Respond with only "search_more" or "proceed" based on their input.`;
       const updatedWorkflow = await this.dbService.getWorkflow(workflowId);
       if (!updatedWorkflow) throw new Error(`Workflow not found after update: ${workflowId}`);
 
-      // 4. Check if this is the base workflow with "Thread Title and Summary" step completed
+      // 4. Check if this is the base workflow with "Auto Generate Thread Title" step completed
       const isBaseWorkflow = updatedWorkflow.templateId.includes("base-workflow");
-      const hasTitleStep = updatedWorkflow.steps.some(s => s.name === "Thread Title and Summary");
-      const isTitleStepComplete = step.name === "Thread Title and Summary" && step.status === StepStatus.COMPLETE;
+      const hasTitleStep = updatedWorkflow.steps.some(s => s.name === "Auto Generate Thread Title");
+      const isTitleStepComplete = step.name === "Auto Generate Thread Title" && step.status === StepStatus.COMPLETE;
       
       if (isBaseWorkflow && hasTitleStep && isTitleStepComplete) {
-        logger.info('Base workflow thread title step completed, transitioning to selected workflow', {
+        logger.info('Base workflow Auto Generate Thread Title step completed, transitioning to selected workflow', {
           workflowId,
           threadId: updatedWorkflow.threadId
         });
@@ -2279,6 +2454,22 @@ Respond with only "search_more" or "proceed" based on their input.`;
             // Create a FAQ workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.FAQ);
           }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.BLOG_ARTICLE)) {
+            // Create a Blog Article workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.BLOG_ARTICLE);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.PRESS_RELEASE)) {
+            // Create a Press Release workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.PRESS_RELEASE);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_PITCH)) {
+            // Create a Media Pitch workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.MEDIA_PITCH);
+          }
+          else if (selectedWorkflow.includes(WORKFLOW_TYPES.SOCIAL_POST)) {
+            // Create a Social Post workflow using hardcoded UUID
+            newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.SOCIAL_POST);
+          }
           
           if (newWorkflow) {
             // Add a message that we've started the new workflow
@@ -2327,6 +2518,14 @@ Respond with only "search_more" or "proceed" based on their input.`;
       // 5. Find the next pending step whose dependencies are met
       // Sort steps by order to ensure we find the correct next one
       const sortedSteps = updatedWorkflow.steps.sort((a, b) => a.order - b.order);
+      
+      console.log('🔍 WORKFLOW DEBUG: Looking for next step after', step.name, {
+        workflowId: updatedWorkflow.id.substring(0, 8),
+        templateId: updatedWorkflow.templateId.substring(0, 8),
+        completedStepName: step.name,
+        allSteps: sortedSteps.map(s => ({ name: s.name, status: s.status, order: s.order, dependencies: s.dependencies }))
+      });
+      
       const nextStep = sortedSteps.find(s =>
         s.status === StepStatus.PENDING && // Must be pending
         // Dependencies must be met (either no dependencies or all dependency steps are complete)
@@ -2337,6 +2536,13 @@ Respond with only "search_more" or "proceed" based on their input.`;
           })
         )
       );
+      
+      console.log('🔍 WORKFLOW DEBUG: Next step search result:', {
+        nextStepFound: !!nextStep,
+        nextStepName: nextStep?.name,
+        nextStepType: nextStep?.stepType,
+        nextStepAutoExecute: nextStep?.metadata?.autoExecute
+      });
 
       // 6. If a next step is found
       if (nextStep) {
@@ -2357,15 +2563,31 @@ Respond with only "search_more" or "proceed" based on their input.`;
         });
 
         // Check if this is an API_CALL or GENERATE_THREAD_TITLE step that should auto-execute
+        const nextStepAutoExecute = nextStep.metadata?.autoExecute;
+        const nextStepShouldAutoExecute = nextStepAutoExecute === true || nextStepAutoExecute === "true";
+        
+        console.log('🔍 AUTO-EXEC DEBUG: Checking if next step should auto-execute:', {
+          stepName: nextStep.name,
+          stepType: nextStep.stepType,
+          autoExecuteRaw: nextStepAutoExecute,
+          shouldAutoExecute: nextStepShouldAutoExecute,
+          isValidType: nextStep.stepType === StepType.API_CALL || nextStep.stepType === StepType.GENERATE_THREAD_TITLE || nextStep.stepType === StepType.JSON_DIALOG
+        });
+        
         if ((nextStep.stepType === StepType.API_CALL || 
              nextStep.stepType === StepType.GENERATE_THREAD_TITLE ||
              nextStep.stepType === StepType.JSON_DIALOG) && 
-            nextStep.metadata?.autoExecute) {
+            nextStepShouldAutoExecute) {
           logger.info('Auto-executing step', {
             stepId: nextStep.id,
             stepName: nextStep.name,
             stepType: nextStep.stepType,
             workflowId
+          });
+          
+          console.log('🚀 AUTO-EXEC: Starting auto-execution for', nextStep.name, {
+            stepId: nextStep.id.substring(0, 8),
+            stepType: nextStep.stepType
           });
           
           try {
@@ -2561,6 +2783,12 @@ Respond with only "search_more" or "proceed" based on their input.`;
           userId: "system"
         });
       
+      logger.info('📤 ORIGINAL SERVICE: Direct message added to database', {
+        threadId: threadId.substring(0, 8),
+        messageLength: messageContent.length,
+        messagePreview: messageContent.substring(0, 100) + '...',
+        source: 'Original Service'
+      });
       console.log(`DIRECT MESSAGE ADDED: '${messageContent.substring(0, 50)}...' to thread ${threadId}`);
     } catch (error) {
       logger.error('Error adding direct message', {
@@ -3442,7 +3670,10 @@ Respond with only "search_more" or "proceed" based on their input.`;
       }
 
       // Special handling for auto-execution of JSON_DIALOG steps
-      if (step.metadata?.autoExecute && userInput === "auto-execute") {
+      const stepAutoExecute = step.metadata?.autoExecute;
+      const stepShouldAutoExecute = stepAutoExecute === true || stepAutoExecute === "true";
+      
+      if (stepShouldAutoExecute && userInput === "auto-execute") {
         logger.info('Auto-executing JSON_DIALOG step with context from previous steps', {
           stepId: step.id,
           stepName: step.name
@@ -3558,7 +3789,7 @@ Respond with only "search_more" or "proceed" based on their input.`;
       // Store the user input and any collected information
       await this.dbService.updateStep(step.id, {
         // Update status based on completion
-        status: result.isStepComplete ? StepStatus.COMPLETE : StepStatus.IN_PROGRESS,
+        status: (result.isStepComplete || result.isComplete) ? StepStatus.COMPLETE : StepStatus.IN_PROGRESS,
         userInput: userInput,
         metadata: {
           ...step.metadata,
@@ -3607,16 +3838,147 @@ Respond with only "search_more" or "proceed" based on their input.`;
       }
 
       // If the step is complete, move to the next step
-      if (result.isStepComplete) {
+      if (result.isStepComplete || result.isComplete) {
         logger.info('Step is complete - moving to next step', {
           currentStep: step.name,
           suggestedNextStep: result.suggestedNextStep
         });
         
+        // DEBUG: Log step completion for Workflow Selection
+        if (step.name === "Workflow Selection") {
+          const resultAny = result as any;
+          logger.info('🔍 WORKFLOW SELECTION STEP COMPLETION DEBUG', {
+            stepId: step.id,
+            stepName: step.name,
+            hasCollectedInfo: !!result.collectedInformation,
+            topLevelMode: resultAny.mode,
+            collectedInfoMode: result.collectedInformation?.mode,
+            hasSelectedWorkflow: !!result.collectedInformation?.selectedWorkflow,
+            hasConversationalResponse: !!result.collectedInformation?.conversationalResponse,
+            collectedInfo: JSON.stringify(result.collectedInformation, null, 2),
+            fullResult: JSON.stringify(result, null, 2)
+          });
+        }
+        
         // Handle special case for Workflow Selection - save selected workflow
         if (step.name === "Workflow Selection" && result.collectedInformation?.selectedWorkflow) {
           await this.dbService.updateStep(step.id, {
             aiSuggestion: result.collectedInformation.selectedWorkflow
+          });
+          
+          // 🚀 CRITICAL FIX: Auto-execute next step after Workflow Selection completes
+          logger.info('🚀 JSON DIALOG: Workflow Selection completed, checking for next step auto-execution', {
+            stepId: step.id,
+            selectedWorkflow: result.collectedInformation.selectedWorkflow,
+            workflowId: workflow.id
+          });
+          
+          // Get the updated workflow to find the next step
+          const updatedWorkflow = await this.dbService.getWorkflow(workflow.id);
+          if (updatedWorkflow) {
+            const sortedSteps = updatedWorkflow.steps.sort((a, b) => a.order - b.order);
+            const currentStepIndex = sortedSteps.findIndex(s => s.id === step.id);
+            const nextStep = sortedSteps[currentStepIndex + 1];
+            
+            if (nextStep) {
+              console.log('🔍 JSON DIALOG: Found next step after Workflow Selection:', {
+                nextStepName: nextStep.name,
+                nextStepType: nextStep.stepType,
+                autoExecuteRaw: nextStep.metadata?.autoExecute
+              });
+              
+              // Mark the next step as IN_PROGRESS
+              await this.dbService.updateStep(nextStep.id, {
+                status: StepStatus.IN_PROGRESS
+              });
+              
+              // Check if next step should auto-execute
+              const nextStepAutoExecute = nextStep.metadata?.autoExecute;
+              const nextStepShouldAutoExecute = nextStepAutoExecute === true || nextStepAutoExecute === "true";
+              
+              if ((nextStep.stepType === StepType.GENERATE_THREAD_TITLE || 
+                   nextStep.stepType === StepType.API_CALL ||
+                   nextStep.stepType === StepType.JSON_DIALOG) && 
+                  nextStepShouldAutoExecute) {
+                
+                console.log('🚀 JSON DIALOG: Auto-executing next step immediately:', nextStep.name);
+                
+                try {
+                  // Auto-execute the next step in the background
+                  setTimeout(async () => {
+                    try {
+                      const autoExecResult = await this.handleStepResponse(nextStep.id, "auto-execute");
+                      logger.info('✅ JSON DIALOG: Auto-executed next step after Workflow Selection', {
+                        nextStepName: nextStep.name,
+                        autoExecResult: autoExecResult ? 'success' : 'no result'
+                      });
+                    } catch (bgError) {
+                      logger.error('❌ JSON DIALOG: Background auto-execution failed', {
+                        nextStepId: nextStep.id,
+                        nextStepName: nextStep.name,
+                        error: bgError instanceof Error ? bgError.message : 'Unknown error'
+                      });
+                    }
+                  }, 100); // Small delay to ensure current request completes first
+                  
+                } catch (autoExecError) {
+                  logger.error('❌ JSON DIALOG: Error setting up auto-execution', {
+                    nextStepId: nextStep.id,
+                    nextStepName: nextStep.name,
+                    error: autoExecError instanceof Error ? autoExecError.message : 'Unknown error'
+                  });
+                }
+              } else {
+                console.log('🔍 JSON DIALOG: Next step does not auto-execute:', {
+                  stepName: nextStep.name,
+                  stepType: nextStep.stepType,
+                  autoExecute: nextStepAutoExecute,
+                  shouldAutoExecute: nextStepShouldAutoExecute
+                });
+              }
+            } else {
+              console.log('🔍 JSON DIALOG: No next step found after Workflow Selection');
+            }
+          }
+        }
+        // Handle special case for Workflow Selection - conversational mode
+        else if (step.name === "Workflow Selection" && result.collectedInformation?.conversationalResponse) {
+          const conversationalResponse = result.collectedInformation.conversationalResponse;
+          
+          logger.info('🎉 CONVERSATIONAL MODE DETECTED - Sending response', {
+            stepId: step.id,
+            threadId: workflow.threadId,
+            response: conversationalResponse.substring(0, 100) + '...',
+            responseLength: conversationalResponse.length,
+            detectionMethod: 'conversationalResponse_exists'
+          });
+          
+          try {
+            // Send the conversational response to the user
+            await this.addDirectMessage(workflow.threadId, conversationalResponse);
+            
+            logger.info('✅ CONVERSATIONAL RESPONSE SENT SUCCESSFULLY', {
+              stepId: step.id,
+              threadId: workflow.threadId,
+              responseLength: conversationalResponse.length
+            });
+          } catch (error) {
+            logger.error('❌ FAILED TO SEND CONVERSATIONAL RESPONSE', {
+              stepId: step.id,
+              threadId: workflow.threadId,
+              error: (error as Error).message
+            });
+          }
+          
+          // Save conversational mode metadata
+          await this.dbService.updateStep(step.id, {
+            metadata: {
+              ...step.metadata,
+              collectedInformation: {
+                ...result.collectedInformation,
+                mode: 'conversational'
+              }
+            }
           });
         }
         
@@ -3838,7 +4200,7 @@ Respond with only "search_more" or "proceed" based on their input.`;
               };
               
               const templateName = templateMap[templateKey] || 'socialPost';
-              const template = updatedNextStep?.metadata?.templates?.[templateName] || nextStep.metadata?.templates?.[templateName];
+              let template = updatedNextStep?.metadata?.templates?.[templateName] || nextStep.metadata?.templates?.[templateName];
               
               logger.info('Asset Generation auto-execution - Template selection', {
                 assetType,
@@ -3851,6 +4213,9 @@ Respond with only "search_more" or "proceed" based on their input.`;
               if (!template) {
                 throw new Error(`Template not found for asset type: ${assetType}`);
               }
+
+              // Note: Context injection will be handled by the enhanced service wrapper
+              // This auto-execution will be intercepted by enhanced service when available
               
               // Create custom step with the template
               const customStep = {
@@ -4019,6 +4384,31 @@ Respond with only "search_more" or "proceed" based on their input.`;
                 // No review step, complete the workflow
                 await this.dbService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
                 await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
+                
+                // 🔄 AUTO-TRANSITION: Create new Base Workflow for continued conversation
+                try {
+                  logger.info('🔄 AUTO-TRANSITION: Creating new Base Workflow after completion (no review)', {
+                    completedWorkflowId: workflow.id.substring(0, 8),
+                    threadId: workflow.threadId.substring(0, 8)
+                  });
+                  
+                  // Create a silent Base Workflow (no initial prompt)
+                  const newWorkflow = await this.createWorkflow(workflow.threadId, 'Base Workflow', true);
+                  
+                  logger.info('✅ AUTO-TRANSITION: New Base Workflow created successfully (no review)', {
+                    newWorkflowId: newWorkflow.id.substring(0, 8),
+                    threadId: workflow.threadId.substring(0, 8)
+                  });
+                  
+                } catch (error) {
+                  logger.error('❌ AUTO-TRANSITION: Failed to create new Base Workflow (no review)', {
+                    error: error instanceof Error ? error.message : 'Unknown error',
+                    completedWorkflowId: workflow.id.substring(0, 8),
+                    threadId: workflow.threadId.substring(0, 8)
+                  });
+                  
+                  // Don't fail the completion if auto-transition fails
+                }
                 
                 return {
                   response: `${assetType} generated successfully.`,
@@ -4306,71 +4696,13 @@ Respond with only "search_more" or "proceed" based on their input.`;
     return this.dbService.getWorkflow(workflow.id) as Promise<Workflow>;
   }
 
-  /**
-   * Handle a user message using the JSON response approach
-   */
-  async handleJsonMessage(workflowId: string, stepId: string, userInput: string): Promise<{
-    response: string;
-    nextStep?: any;
-    isComplete: boolean;
-    generatedAsset?: string;
-    debug?: any;
-  }> {
-    try {
-      logger.info('Processing message with JSON workflow', {
-        workflowId,
-        stepId,
-        userInputLength: userInput.length
-      });
-
-      // 1. Get current workflow and step
-      const workflow = await this.getWorkflow(workflowId);
-      if (!workflow) {
-        throw new Error(`Workflow not found: ${workflowId}`);
-      }
-
-      const currentStep = workflow.steps.find(s => s.id === stepId);
-      if (!currentStep) {
-        throw new Error(`Step not found: ${stepId}`);
-      }
-      
-      // Remove duplicate prompt sending - handleJsonDialogStep will handle this
-      // if (currentStep.prompt && !currentStep.metadata?.initialPromptSent) {
-      //   await this.addDirectMessage(workflow.threadId, currentStep.prompt);
-      //   
-      //   // Mark that we've sent the prompt
-      //   await this.dbService.updateStep(currentStep.id, {
-      //     metadata: { ...currentStep.metadata, initialPromptSent: true }
-      //   });
-      //   
-      //   logger.info(`Sent initial prompt for JSON step ${currentStep.name} in handleJsonMessage`);
-      // }
-
-      // Special case for Test Step Transitions, Step 4
-      const template = await this.dbService.getTemplate(workflow.templateId);
-      const isTestWorkflow = template && template.name === WORKFLOW_TYPES.TEST_STEP_TRANSITIONS;
-      const isFinalStep = currentStep.name === "Step 4";
-      const isCorrectInput = userInput.trim() === "4";
-      
-      if (isTestWorkflow && isFinalStep && isCorrectInput) {
-        logger.info('Test workflow final step (Step 4) detected in handleJsonMessage', {
-          workflowId,
-          threadId: workflow.threadId
-        });
-        
-        // Process with handleJsonDialogStep which now has special handling for this case
-        return await this.handleJsonDialogStep(currentStep, userInput);
-      }
-
-      // 2. Handle user input based on current step type - use standard JSON dialog for all steps
-        return await this.handleJsonDialogStep(currentStep, userInput);
-    } catch (error) {
-      logger.error('Error handling JSON message', {
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-      throw error;
-    }
-  }
+  // REMOVED: Legacy handleJsonMessage method
+  // This method was only used by the removed legacy JSON PR endpoints.
+  // Modern message processing routes through Enhanced Service via
+  // handleStepResponseWithContext() and handleStepResponse().
+  //
+  // Removed method:
+  // - handleJsonMessage() - Use handleStepResponse() or Enhanced Service instead
 
   /**
    * Handle workflow completion and potential transitions
@@ -4472,20 +4804,26 @@ Respond with only "search_more" or "proceed" based on their input.`;
         stepId: step.id,
         stepName: step.name,
         stepType: step.stepType,
+        autoExecuteRawValue: step.metadata?.autoExecute,
         hasAutoExecute: !!step.metadata?.autoExecute,
         metadataKeys: Object.keys(step.metadata || {})
       });
 
       // Check if this step should auto-execute
+      // Handle both boolean true and string "true" values for autoExecute
+      const autoExecuteValue = step.metadata?.autoExecute;
+      const hasAutoExecute = autoExecuteValue === true || autoExecuteValue === "true";
+      
       const shouldAutoExecute = (step.stepType === StepType.GENERATE_THREAD_TITLE || 
                                 step.stepType === StepType.API_CALL ||
                                 step.stepType === StepType.JSON_DIALOG) && 
-                               !!step.metadata?.autoExecute;
+                               hasAutoExecute;
 
       console.log('🔍 AUTO-EXEC DEBUG: Should auto-execute?', {
         stepType: step.stepType,
-        isValidType: step.stepType === StepType.API_CALL,
-        hasAutoExecute: !!step.metadata?.autoExecute,
+        isValidType: step.stepType === StepType.GENERATE_THREAD_TITLE || step.stepType === StepType.API_CALL || step.stepType === StepType.JSON_DIALOG,
+        autoExecuteRawValue: autoExecuteValue,
+        hasAutoExecute: hasAutoExecute,
         shouldAutoExecute
       });
 
@@ -5205,6 +5543,22 @@ What would you like to do?`;
         else if (selectedWorkflow.includes(WORKFLOW_TYPES.FAQ)) {
           // Create a FAQ workflow using hardcoded UUID
           newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.FAQ);
+        }
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.BLOG_ARTICLE)) {
+          // Create a Blog Article workflow using hardcoded UUID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.BLOG_ARTICLE);
+        }
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.PRESS_RELEASE)) {
+          // Create a Press Release workflow using hardcoded UUID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.PRESS_RELEASE);
+        }
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_PITCH)) {
+          // Create a Media Pitch workflow using hardcoded UUID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_PITCH);
+        }
+        else if (selectedWorkflow.includes(WORKFLOW_TYPES.SOCIAL_POST)) {
+          // Create a Social Post workflow using hardcoded UUID
+          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.SOCIAL_POST);
         }
         
         if (newWorkflow) {
@@ -6289,13 +6643,99 @@ CRITICAL: Return raw JSON only, no markdown formatting, no code blocks, no backt
         await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
 
         const approvalMessage = "Asset approved! Your workflow is now complete.";
-        await this.addDirectMessage(workflow.threadId, approvalMessage);
+        
+        // NOTE: Don't send addDirectMessage here - the calling service will send the returned response
+        // This prevents duplicate messages when Enhanced Service delegates to this method
+
+        // 🔄 AUTO-TRANSITION: Create new Base Workflow for continued conversation
+        try {
+          logger.info('🔄 AUTO-TRANSITION: Creating new Base Workflow after completion', {
+            completedWorkflowId: workflow.id.substring(0, 8),
+            threadId: workflow.threadId.substring(0, 8)
+          });
+          
+          // Create a silent Base Workflow (no initial prompt)
+          const newWorkflow = await this.createWorkflow(workflow.threadId, 'Base Workflow', true);
+          
+          logger.info('✅ AUTO-TRANSITION: New Base Workflow created successfully', {
+            newWorkflowId: newWorkflow.id.substring(0, 8),
+            threadId: workflow.threadId.substring(0, 8)
+          });
+          
+        } catch (error) {
+          logger.error('❌ AUTO-TRANSITION: Failed to create new Base Workflow', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            completedWorkflowId: workflow.id.substring(0, 8),
+            threadId: workflow.threadId.substring(0, 8)
+          });
+          
+          // Don't fail the completion if auto-transition fails
+        }
 
         return {
           response: approvalMessage,
           isComplete: true
         };
       } 
+      else if (reviewDecision === 'revision_generated') {
+        // New template generated the revision directly
+        const revisedAsset = result.collectedInformation?.revisedAsset;
+        
+        if (!revisedAsset) {
+          throw new Error('Revised asset not found in response');
+        }
+
+        // Get asset type
+        const assetType = step.metadata?.assetType || 
+                         result.collectedInformation?.assetType || 
+                         "Blog Post"; // Default to Blog Post if not found
+
+        // Store the revised asset
+        await this.dbService.updateStep(step.id, {
+          metadata: {
+            ...step.metadata,
+            generatedAsset: revisedAsset,
+            revisionHistory: [
+              ...(step.metadata?.revisionHistory || []),
+              {
+                userFeedback: userInput,
+                requestedChanges: result.collectedInformation?.requestedChanges || [],
+                revisedAt: new Date().toISOString()
+              }
+            ]
+          }
+        });
+
+        // Add revised asset using unified structured messaging
+        await this.addAssetMessage(
+          workflow.threadId,
+          revisedAsset,
+          assetType,
+          step.id,
+          step.name,
+          {
+            isRevision: true,
+            showCreateButton: true
+          }
+        );
+
+        // Present the revised asset with the next question from the template
+        const reviewPrompt = result.nextQuestion || `Please review the revised ${assetType}. Let me know if you'd like any additional changes, or if you're satisfied with it.`;
+        
+        // NOTE: Don't send addDirectMessage here - the calling service will send the returned response
+        // This prevents duplicate messages when Enhanced Service delegates to this method
+
+        return {
+          response: reviewPrompt,
+          nextStep: {
+            id: step.id,
+            name: step.name,
+            prompt: reviewPrompt,
+            type: step.stepType
+          },
+          isComplete: false
+        };
+      }
       else if (reviewDecision === 'revision_requested') {
         // User wants changes - regenerate the asset
         const requestedChanges = result.collectedInformation?.requestedChanges || [];
@@ -6399,6 +6839,65 @@ RESPONSE FORMAT: Return ONLY the revised ${assetType} content, no JSON, no expla
 
         // Ask for next review
         const reviewPrompt = `Please review the revised ${assetType}. Let me know if you'd like any additional changes, or if you're satisfied with it.`;
+        
+        // NOTE: Don't send addDirectMessage here - the calling service will send the returned response
+        // This prevents duplicate messages when Enhanced Service delegates to this method
+
+        return {
+          response: reviewPrompt,
+          nextStep: {
+            id: step.id,
+            name: step.name,
+            prompt: reviewPrompt,
+            type: step.stepType
+          },
+          isComplete: false
+        };
+      }
+      else if (reviewDecision === 'revision_generated') {
+        // New template generated the revision directly
+        const revisedAsset = result.collectedInformation?.revisedAsset;
+        
+        if (!revisedAsset) {
+          throw new Error('Revised asset not found in response');
+        }
+
+        // Get asset type
+        const assetType = step.metadata?.assetType || 
+                         result.collectedInformation?.assetType || 
+                         "Blog Post";
+
+        // Store the revised asset
+        await this.dbService.updateStep(step.id, {
+          metadata: {
+            ...step.metadata,
+            generatedAsset: revisedAsset,
+            revisionHistory: [
+              ...(step.metadata?.revisionHistory || []),
+              {
+                userFeedback: userInput,
+                requestedChanges: result.collectedInformation?.requestedChanges || [],
+                revisedAt: new Date().toISOString()
+              }
+            ]
+          }
+        });
+
+        // Add revised asset using unified structured messaging
+        await this.addAssetMessage(
+          workflow.threadId,
+          revisedAsset,
+          assetType,
+          step.id,
+          step.name,
+          {
+            isRevision: true,
+            showCreateButton: true
+          }
+        );
+
+        // Present the revised asset with the next question from the template
+        const reviewPrompt = result.nextQuestion || `Please review the revised ${assetType}. Let me know if you'd like any additional changes, or if you're satisfied with it.`;
         await this.addDirectMessage(workflow.threadId, reviewPrompt);
 
         return {

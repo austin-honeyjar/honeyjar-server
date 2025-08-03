@@ -288,7 +288,8 @@ export class ContextAwareChatService {
       await db
         .insert(chatMessages)
         .values({
-          threadId,
+          threadId: threadId,
+          userId: 'system', // System messages use 'system' as userId
           role: 'system',
           content: message,
           timestamp: new Date()

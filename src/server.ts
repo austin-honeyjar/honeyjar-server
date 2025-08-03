@@ -31,6 +31,7 @@ import { WorkflowContextService } from './services/workflowContextService';
 import { authMiddleware } from './middleware/auth.middleware';
 import { requestLogger } from './middleware/logger.middleware';
 import { errorHandler } from './middleware/error.middleware';
+import devRoutes from './routes/dev';
 
 // Initialize express app
 export const app = express();
@@ -54,6 +55,12 @@ app.use(config.server.apiPrefix + '/news', newsRoutes);
 app.use(config.server.apiPrefix + '/test', testRoutes);
 app.use(config.server.apiPrefix + '/assets', assetRoutes);
 app.use(config.server.apiPrefix + '/user', userRoutes);
+
+// Dev routes (only in development/staging)
+if (process.env.NODE_ENV !== 'production') {
+  app.use(config.server.apiPrefix + '/dev', devRoutes);
+  logger.info('Enhanced workflow dev routes available at /api/dev');
+}
 
 // Health check routes (unversioned)
 app.use('/health', healthRoutes);
@@ -957,6 +964,88 @@ async function initializeDatabase() {
     } catch (rocketReachError) {
       logger.error('Error creating RocketReach tables:', rocketReachError);
       // Don't fail the server startup for RocketReach table issues
+    }
+    
+    // =============================================================================
+    // ENHANCED WORKFLOW TABLES INITIALIZATION
+    // =============================================================================
+    
+    // Check if enhanced workflow tables exist and create them if needed
+    logger.info('Checking for enhanced workflow tables...');
+    
+    try {
+      // Check if user_knowledge_base table exists for enhanced workflow
+      const enhancedWorkflowTableCheck = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_name = 'enhanced_chat_messages'
+        );
+      `);
+      
+      if (!enhancedWorkflowTableCheck[0]?.exists) {
+        logger.info('Enhanced workflow tables not found, creating them...');
+        
+        // Create enhanced workflow tables
+        await db.execute(sql`
+          -- Enhanced chat messages with security and context
+          CREATE TABLE IF NOT EXISTS enhanced_chat_messages (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            thread_id UUID NOT NULL,
+            content TEXT NOT NULL,
+            role VARCHAR(20) NOT NULL,
+            security_level VARCHAR(20) NOT NULL DEFAULT 'internal',
+            security_tags TEXT[] DEFAULT '{}',
+            contains_pii BOOLEAN DEFAULT FALSE,
+            context_layers JSONB NOT NULL DEFAULT '{}',
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+          );
+
+          -- Conversation contexts for learning
+          CREATE TABLE IF NOT EXISTS conversation_contexts (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            thread_id UUID NOT NULL,
+            workflow_id UUID,
+            workflow_type VARCHAR(100),
+            step_name VARCHAR(255),
+            intent VARCHAR(255),
+            outcome VARCHAR(50),
+            user_satisfaction DECIMAL(2,1),
+            time_spent INTEGER,
+            security_level VARCHAR(20),
+            security_tags TEXT[],
+            context_used TEXT[],
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+          );
+        `);
+        
+        // Create indexes for enhanced workflow tables
+        logger.info('Creating indexes for enhanced workflow tables...');
+        await db.execute(sql`
+          -- Enhanced chat messages indexes
+          CREATE INDEX IF NOT EXISTS idx_enhanced_chat_messages_thread ON enhanced_chat_messages(thread_id);
+          CREATE INDEX IF NOT EXISTS idx_enhanced_chat_messages_security ON enhanced_chat_messages(security_level);
+          CREATE INDEX IF NOT EXISTS idx_enhanced_chat_messages_context ON enhanced_chat_messages USING gin(context_layers);
+          CREATE INDEX IF NOT EXISTS idx_enhanced_chat_messages_security_tags ON enhanced_chat_messages USING gin(security_tags);
+          
+          -- Conversation contexts indexes  
+          CREATE INDEX IF NOT EXISTS idx_conversation_contexts_thread ON conversation_contexts(thread_id);
+          CREATE INDEX IF NOT EXISTS idx_conversation_contexts_workflow ON conversation_contexts(workflow_type);
+          CREATE INDEX IF NOT EXISTS idx_conversation_contexts_intent ON conversation_contexts(intent, outcome);
+          CREATE INDEX IF NOT EXISTS idx_conversation_contexts_security ON conversation_contexts(security_level);
+        `);
+        
+        logger.info('Enhanced workflow tables and indexes created successfully');
+        
+      } else {
+        logger.info('Enhanced workflow tables already exist');
+      }
+      
+    } catch (enhancedWorkflowError) {
+      logger.error('Error creating enhanced workflow tables:', enhancedWorkflowError);
+      // Don't fail the server startup for enhanced workflow table issues
     }
     
     return true;

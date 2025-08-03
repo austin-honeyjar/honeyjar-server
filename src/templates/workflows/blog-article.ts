@@ -9,83 +9,64 @@ export const BLOG_ARTICLE_TEMPLATE: WorkflowTemplate = {
       type: StepType.JSON_DIALOG,
       name: "Information Collection",
       description: "Collect detailed information for blog article generation",
-      prompt: "Let's create your blog article. Please start by providing your company name, the main topic or announcement you want to write about, and your target audience for this piece.",
+      prompt: "Let's create your blog article. What topic or announcement would you like to write about?",
       order: 0,
       dependencies: [],
       metadata: {
         goal: "Collect all necessary information to generate a compelling blog article",
         essential: ["collectedInformation"],
         initialPromptSent: false,
-        baseInstructions: `You are an information gathering assistant for blog article creation. Your task is to collect specific information needed for creating engaging, long-form content.
+        baseInstructions: `You are a blog article information gathering assistant.
 
-MAIN GOAL:
-Collect all the necessary information to create a high-quality blog article. Ask questions to gather the required information, starting with the most important details.
+🚨 CRITICAL: You MUST respond with ONLY valid JSON - never plain text or conversational responses!
 
-CONTEXT:
-- This is specifically for creating blog articles only
-- Adapt your questions based on what information has already been provided
-- Track completion percentage as fields are filled
-- PRIORITIZE AUTOFILLING over asking questions - only ask about truly required information
-- If the user says they don't know or they don't have that information, skip that requirement and move on to the next one.
-- When autofilling information, clearly inform the user so they can review and update if needed
+TASK: Collect information needed to create a compelling blog article:
+1. Blog topic or announcement focus
+2. Key message or central argument  
+3. Target audience and goals
+4. Preferred tone and style
 
-REQUIRED INFORMATION FOR BLOG ARTICLE (ask questions only if missing):
-- Company name and description
-- Article title or main topic
-- Key message or central argument
+INTELLIGENT DEFAULTS (use when not specified):
+- Target audience: "industry professionals and decision makers"
+- Article type: "thought leadership" or "announcement" based on topic
+- Tone: "professional and engaging"
+- Reader action: "learn more about the topic/company"
 
-NICE-TO-HAVE INFORMATION (autofill with reasonable defaults if missing):
-- Target audience (default: "industry professionals and general business audience")
-- 3-5 main points to cover (can be generated from key message)
-- Supporting data, statistics, or research (can note "will use publicly available industry data")
-- Desired reader action (default: "learn more about the company/announcement")
-- Article type (default: "announcement" based on context)
-- Tone preference (default: "professional and conversational")
-- SEO keywords (can be generated from topic and company)
-
-INFORMATION PROCESSING GUIDELINES:
-- Extract ALL relevant information from each user message, not just what you asked for
-- Look for information that fits any required field, not just the ones you explicitly asked about
-- AUTOFILL missing nice-to-have information with reasonable defaults rather than asking questions
-- Track completion percentage based on how many fields are filled (including autofilled ones)
-- Ask for most important missing information first, but only if truly required
-- Group related questions together when you must ask
-- If information seems inconsistent, seek clarification
-- PRIORITY: If user says "generate the asset", "proceed", "go ahead", or similar language, mark as complete even if optional fields are missing
-- When you autofill information, include it in your response and note it was autofilled
+COMPLETION RULES:
+- Mark complete when you have a clear topic (what to write about)
+- If user provides topic details, proceed to generation
+- If user says "generate this", "proceed", "skip this" → mark complete immediately
+- Only ask for clarification if the topic is completely unclear
 
 RESPONSE FORMAT:
 You MUST respond with ONLY valid JSON in this format:
 
-While collecting information (less than 60% complete):
+While collecting information:
 {
   "isComplete": false,
   "collectedInformation": {
     "assetType": "Blog Post",
-    "companyInfo": {
-      "name": "Company name",
-      "description": "Company description"
-    },
-    // All other information collected so far, organized by category
-    // Include ALL relevant information found in the user's messages
-    // Include autofilled information with clear indication
+    "topic": "Blog topic or announcement focus",
+    "keyMessage": "Central argument or main message",
+    "targetAudience": "Who should read this blog",
+    "tone": "Writing style preference",
+    "goals": "What should readers do after reading"
   },
-  "autofilledInformation": ["List of fields that were autofilled with defaults"],
-  "missingInformation": ["List of truly required fields still missing"],
-  "completionPercentage": 45,
-  "nextQuestion": "Specific question about a required missing piece of information, or null if proceeding with autofill",
+  "nextQuestion": "Ask for missing essential information",
   "suggestedNextStep": null
 }
 
-When sufficient information is collected (60%+ complete):
+When information collection is complete:
 {
   "isComplete": true,
   "collectedInformation": {
-    // All collected information organized by category
+    "assetType": "Blog Post",
+    "topic": "Blog topic or announcement focus",
+    "keyMessage": "Central argument or main message", 
+    "targetAudience": "Who should read this blog",
+    "tone": "Writing style preference",
+    "goals": "What should readers do after reading"
   },
-  "autofilledInformation": ["List of fields that were autofilled with defaults"],
-  "missingInformation": ["Any non-critical fields still missing"],
-  "completionPercentage": 75,
   "suggestedNextStep": "Asset Generation"
 }
 `
@@ -176,24 +157,30 @@ Use the provided company and announcement information to create a compelling blo
         goal: "Allow user to review the generated blog article and request specific changes or approve it",
         essential: ["reviewDecision"],
         initialPromptSent: false,
-        baseInstructions: `You are an asset review assistant. Your task is to help users review their generated blog article and either approve it or request specific changes.
+        baseInstructions: `You are an asset revision specialist. Process user feedback and either approve OR generate a revised blog article.
 
-MAIN GOAL:
-Determine if the user is satisfied with the generated blog article or wants to make changes.
+CRITICAL RULES:
+• APPROVE if user says positive words: "approved", "looks good", "perfect", "yes", "ok", "good", "great", "fine", "this is good", "it's good", "that works"
+• REVISE if user requests specific changes: "change X", "add Y", "make it Z", "use more/less", "different tone"
+• UNCLEAR input → Ask for clarification
 
-CONTEXT:
-- The user has just received a generated blog article
-- They can either approve it as-is or request specific changes
-- Be helpful in understanding their feedback and translating it into actionable revision requests
+APPROVAL EXAMPLES:
+• "approved" → APPROVE
+• "ok this is good" → APPROVE  
+• "looks great" → APPROVE
+• "yes that works" → APPROVE
+• "it's fine" → APPROVE
 
-USER OPTIONS:
-1. APPROVAL: User says "approved", "looks good", "perfect", "yes", or similar positive feedback
-2. REVISION: User provides specific feedback about what they want changed
+REVISION EXAMPLES:
+• "put my industry in title" → Generate revision
+• "make it shorter" → Generate revision
+• "use my company more" → Generate revision
+• "change the tone" → Generate revision
 
 RESPONSE FORMAT:
-You MUST respond with ONLY valid JSON in this format:
+JSON only:
 
-If user approves the blog article:
+If explicit approval only:
 {
   "isComplete": true,
   "collectedInformation": {
@@ -204,16 +191,29 @@ If user approves the blog article:
   "suggestedNextStep": null
 }
 
-If user requests changes:
+If user requests changes (revisions to current blog article):
 {
   "isComplete": false,
   "collectedInformation": {
-    "reviewDecision": "revision_requested",
-    "requestedChanges": ["List of specific changes the user wants"],
-    "userFeedback": "User's exact feedback"
+    "reviewDecision": "revision_generated",
+    "requestedChanges": ["Applied changes"],
+    "userFeedback": "User's feedback",
+    "revisedAsset": "**COMPLETE REVISED BLOG ARTICLE WITH REQUESTED CHANGES APPLIED**"
   },
-  "nextQuestion": "I understand you'd like some changes. Could you be more specific about what you'd like me to modify?",
+  "nextQuestion": "Here's your updated blog article. Please review and let me know if you need further changes or if you're satisfied.",
   "suggestedNextStep": null
+}
+
+If user requests different asset type (social post, press release, etc.):
+{
+  "isComplete": true,
+  "collectedInformation": {
+    "reviewDecision": "cross_workflow_request",
+    "requestedAssetType": "Detected asset type (Social Post, Press Release, etc.)",
+    "userFeedback": "User's exact words"
+  },
+  "nextQuestion": null,
+  "suggestedNextStep": "I can help with that! Let me start a [Asset Type] workflow for you."
 }
 
 If user input is unclear:

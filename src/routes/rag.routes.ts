@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer, { FileFilterCallback } from 'multer';
 import path from 'path';
 import { ragService } from '../services/ragService';
-import { enhancedWorkflowService } from '../services/enhancedWorkflowService';
+import { enhancedWorkflowService } from '../services/enhanced-workflow.service';
 import { fileUploadService } from '../services/fileUploadService';
 import logger from '../utils/logger';
 
@@ -418,7 +418,7 @@ router.post('/search', async (req: Request, res: Response) => {
       });
     }
 
-    const searchResults = await ragService.searchUserContent(userId, orgId, query, {
+    const searchResults = await ragService.searchSecureContent(userId, orgId, query, {
       contentTypes: ['conversation', 'asset'],
       workflowTypes,
       limit,

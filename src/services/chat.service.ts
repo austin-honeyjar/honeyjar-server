@@ -3,16 +3,16 @@ import { sql, eq } from 'drizzle-orm';
 import { db } from '../db';
 import { chatThreads, chatMessages } from '../db/schema';
 import { WorkflowService } from './workflow.service';
-import { upgradedWorkflowService } from './workflow-upgraded.service'; // Changed from enhancedWorkflowService
+import { enhancedWorkflowService } from './enhanced-workflow.service'; // Changed from upgradedWorkflowService
 import { WorkflowStatus, StepStatus, StepType, WorkflowStep } from '../types/workflow';
 import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow.js';
 import logger from '../utils/logger';
 
 export class ChatService {
-  private workflowService: typeof upgradedWorkflowService; // Updated type
+  private workflowService: typeof enhancedWorkflowService; // Updated type
 
   constructor() {
-    this.workflowService = upgradedWorkflowService; // Changed from enhancedWorkflowService
+    this.workflowService = enhancedWorkflowService; // Changed from enhancedWorkflowService
   }
 
   async createThread(userId: string, title: string) {
@@ -167,39 +167,26 @@ export class ChatService {
        // Get the next step information
        const nextStepInfo = workflow.steps.find(step => step.id === stepResponse.nextStep?.id);
        
-       console.log('🔍 CHAT DEBUG: Found nextStep in response:', {
-         nextStepId: stepResponse.nextStep?.id,
-         nextStepName: stepResponse.nextStep?.name,
-         nextStepFound: !!nextStepInfo,
-         stepResponseComplete: stepResponse.isComplete
-       });
        
-       // Check if this next step should auto-execute
-       if (nextStepInfo) {
-         console.log('🔍 CHAT DEBUG: Checking auto-execution for step:', nextStepInfo.name);
-         
-         const autoExecCheck = await this.workflowService.checkAndHandleAutoExecution(
-           nextStepInfo.id, 
-           workflow.id, 
-           threadId
-         );
+       
+             // Check if this next step should auto-execute
+      if (nextStepInfo) {
+        const autoExecCheck = await this.workflowService.checkAndHandleAutoExecution(
+          nextStepInfo.id, 
+          workflow.id, 
+          threadId
+        );
 
-         console.log('🔍 CHAT DEBUG: Auto-execution result:', {
-           autoExecuted: autoExecCheck.autoExecuted,
-           hasResult: !!autoExecCheck.result,
-           hasNextWorkflow: !!autoExecCheck.nextWorkflow
-         });
-
-         if (autoExecCheck.autoExecuted) {
-           if (autoExecCheck.nextWorkflow) {
-             // Step auto-executed and triggered workflow transition
-             return this.getNextPrompt(threadId, autoExecCheck.nextWorkflow.id);
-           } else if (autoExecCheck.result) {
-             // Step auto-executed, return the result
-             return autoExecCheck.result.response || `Step "${nextStepInfo.name}" executed automatically.`;
-           }
-         }
-       }
+                 if (autoExecCheck.autoExecuted) {
+          if (autoExecCheck.nextWorkflow) {
+            // Step auto-executed and triggered workflow transition
+            return this.getNextPrompt(threadId, autoExecCheck.nextWorkflow.id);
+          } else if (autoExecCheck.result) {
+            // Step auto-executed, return the result
+            return autoExecCheck.result.response || `Step "${nextStepInfo.name}" executed automatically.`;
+          }
+                }
+      }
        
        const nextPrompt = stepResponse.nextStep.prompt || "Please provide the required information.";
        
@@ -309,11 +296,37 @@ export class ChatService {
     // Get the prompt and send it if needed (for non-auto-executing steps)
     const prompt = nextStep.prompt || "Please provide the required information.";
     
-    // Avoid adding duplicate prompts
-    const lastMessage = await this.getLastMessage(threadId);
-    if (lastMessage?.content !== prompt || lastMessage?.role !== 'assistant') {
-      await this.addMessage(threadId, prompt, false);
+    // Check if this is a newly created workflow where the initial prompt was already sent
+    const recentMessages = await db.query.chatMessages.findMany({
+      where: eq(chatMessages.threadId, threadId),
+      orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+      limit: 5, // Check more messages to catch workflow creation sequence
+    });
+    
+    // Check if this exact prompt was recently sent (within last 5 messages)
+    const promptAlreadySent = recentMessages.some(msg => {
+      const content = typeof msg.content === 'string' ? msg.content : '';
+      return msg.role === "assistant" && content === prompt;
+    });
+    
+    // Also check if this is the first step of a workflow that was just created
+    const isFirstStep = nextStep.order === 0 || nextStep.name === 'Information Collection';
+    const hasRecentWorkflowCreation = recentMessages.some(msg => {
+      const content = typeof msg.content === 'string' ? msg.content : '';
+      return msg.role === "assistant" && (
+        content.includes("workflow started") ||
+        content.includes("Step \"") ||
+        content.includes("Moving to")
+      );
+    });
+    
+    if (promptAlreadySent || (isFirstStep && hasRecentWorkflowCreation)) {
+      console.log(`ChatService: Skipping prompt - already sent by workflow creation: "${prompt.substring(0, 50)}..."`);
+      return `Workflow ready: ${prompt}`; // Return indication that workflow is ready
     }
+    
+    // Send the prompt if it hasn't been sent recently
+    await this.addMessage(threadId, prompt, false);
     return prompt;
   }
 
@@ -342,83 +355,80 @@ export class ChatService {
   }
 
   // Handle user message when the message has already been created elsewhere
-  async handleUserMessageNoCreate(threadId: string, content: string) {
-    // Use the same logic as handleUserMessage but skip message creation
-    return this.handleUserMessage(threadId, content);
+  async handleUserMessageNoCreate(threadId: string, content: string, userId?: string, orgId?: string) {
+    // Use enhanced processing with user context
+    return this.processUserMessageWithContext(threadId, content, userId, orgId);
   }
 
-  /**
-   * Start a new chat with the JSON PR workflow
-   */
-  async startJsonPrWorkflow(userId: string, orgId?: string): Promise<string> {
-    try {
-      logger.info(`Starting JSON PR workflow for user ${userId}`);
+  private async processUserMessageWithContext(threadId: string, content: string, userId?: string, orgId?: string) {
+    // Get the active workflow for this thread
+    let workflow = await this.workflowService.getWorkflowByThreadId(threadId);
+    if (!workflow) {
+      // If no workflow exists at all, something went wrong during thread creation
+      // Create the base workflow as a fallback
+      console.warn(`No workflow found for thread ${threadId}. Creating base workflow as fallback.`);
+      const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
+      if (!baseTemplate) throw new Error("Base workflow template not found");
       
-      // 1. Create a new chat thread
-      const thread = await this.createThread(userId, "New Smart PR");
-      
-      // 2. Create a JSON workflow for the thread
-      const workflowService = new WorkflowService();
-      await workflowService.createJsonWorkflow(thread.id);
-      
-      logger.info(`JSON PR workflow started for thread ${thread.id}`);
-      
-      return thread.id;
-    } catch (error) {
-      logger.error('Error starting JSON PR workflow', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        userId
-      });
-      throw error;
+      workflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id);
     }
-  }
-  
-  /**
-   * Process a message in a JSON PR workflow
-   */
-  async processJsonPrMessage(threadId: string, userId: string, content: string): Promise<any> {
-    try {
-      logger.info(`Processing JSON PR message in thread ${threadId}`);
-      
-      // 1. Save the user message
-      await this.addMessage(threadId, content, true);
-      
-      // 2. Get the active workflow
-      const workflowService = new WorkflowService();
-      const workflow = await workflowService.getWorkflowByThreadId(threadId);
-      
-      if (!workflow) {
-        throw new Error(`No active workflow found for thread ${threadId}`);
-      }
-      
-      // 3. Process the message with the JSON workflow
-      const currentStepId = workflow.currentStepId;
-      
-      if (!currentStepId) {
-        throw new Error(`No current step found for workflow ${workflow.id}`);
-      }
-      
-      const result = await workflowService.handleJsonMessage(workflow.id, currentStepId, content);
-      
-      // 4. Add the assistant response as a message
-      await this.addMessage(threadId, result.response, false);
-      
-      // 5. Prepare the response with debugging information if enabled
-      const { config } = await import('../config');
-      const response = {
-        message: result.response,
-        complete: result.isComplete,
-        nextStep: result.nextStep,
-        ...(config.debug.enableDebugMode ? { debug: result.debug } : {})
-      };
-      
-      return response;
-    } catch (error) {
-      logger.error('Error processing JSON PR message', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        threadId
-      });
-      throw error;
+
+    // If we have an active workflow, process the current step
+    const currentStepId = workflow.currentStepId;
+    if (!currentStepId) {
+      console.warn(`Workflow ${workflow.id} has no currentStepId. Attempting to get next prompt.`);
+      return this.getNextPrompt(threadId, workflow.id);
     }
+
+    // Get the current step before processing
+    const currentStep = workflow.steps.find(step => step.id === currentStepId);
+    
+    // Handle the step response using enhanced context if user info is available
+    const stepResponse = userId && orgId 
+      ? await this.workflowService.handleStepResponseWithContext(currentStepId, content, userId, orgId)
+      : await this.workflowService.handleStepResponse(currentStepId, content);
+    
+    // Add AI response to thread if provided by handleStepResponse
+    if (stepResponse.response && stepResponse.response !== 'Workflow completed successfully.') { 
+      await this.addMessage(threadId, stepResponse.response, false);
+    }
+
+    // Check if the *workflow* completed as a result of this step
+    if (stepResponse.isComplete) {
+        // Delegate workflow completion and transitions to workflow service
+        const completionResult = await this.workflowService.handleWorkflowCompletion(workflow, threadId);
+        
+        if (completionResult.newWorkflow) {
+          // Add a message to show which workflow was selected
+          const selectionMsg = `Workflow selected: ${completionResult.selectedWorkflow}`;
+          await this.addMessage(threadId, selectionMsg, false);
+          
+          // If there's a next step, process it
+          if (completionResult.newWorkflow.currentStepId) {
+            return this.getNextPrompt(threadId, completionResult.newWorkflow.id);
+          }
+        }
+        
+        return 'Workflow completed successfully.';
+    }
+
+    // If the step isn't complete and handleStepResponse didn't provide a specific next step/prompt,
+    // we may need to get the next prompt (this helps for intermediate steps)
+    if (!stepResponse.nextStep && currentStep && !stepResponse.isComplete) {
+      console.warn(`Step ${currentStepId} processed, workflow not complete, but handleStepResponse provided no next step. Calling getNextPrompt.`);
+      return this.getNextPrompt(threadId, workflow.id);
+    }
+
+    // Return the response from the step processing
+    return stepResponse.response || 'Step processed successfully.';
   }
+
+  // REMOVED: Legacy JSON PR workflow methods
+  // These methods were only used by the removed legacy JSON PR endpoints.
+  // Modern workflow creation and message processing now routes through
+  // Enhanced Service via the standard /:threadId/messages endpoint.
+  //
+  // Removed methods:
+  // - startJsonPrWorkflow() - Use standard thread creation + workflow selection
+  // - processJsonPrMessage() - Use handleUserMessageNoCreate() with Enhanced Service
 }

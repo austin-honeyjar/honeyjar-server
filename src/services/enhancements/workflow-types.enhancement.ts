@@ -45,8 +45,15 @@ export interface ContextualMessage {
 export interface SmartDefaults {
   companyName?: string;
   industry?: string;
+  jobTitle?: string;
   preferredTone?: string;
   suggestedContent?: string;
+  preferredWorkflowTypes?: string[];
+  averageCompletionTime?: number;
+  commonInputPatterns?: any[];
+  averageTimeSpent?: number;
+  preferredStepTypes?: string[];
+  confidenceLevel?: number;
   relatedExamples?: Array<{
     type: string;
     content: string;

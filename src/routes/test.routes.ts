@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { ragService } from '../services/ragService';
 import { ContextAwareChatService } from '../services/contextAwareChatService';
 import { WorkflowSecurityService } from '../services/workflowSecurityService';
-import { enhancedWorkflowService } from '../services/enhancedWorkflowService';
+import { enhancedWorkflowService } from '../services/enhanced-workflow.service';
 import { db } from '../db';
 import { sql } from 'drizzle-orm';
 import OpenAI from 'openai';
@@ -1309,7 +1309,7 @@ async function runContextTests(results: any, userId: string, orgId: string) {
     },
     {
       name: 'Thread Categorization',
-      test: () => contextAwareChatService.getCategorizedThreads(userId, orgId)
+      test: () => contextAwareChatService.getCategorizedThreads(userId)
     }
   ];
 
@@ -1530,8 +1530,8 @@ async function runWorkflowTests(results: any, userId: string, orgId: string) {
         testName: testCase.name,
         duration: `${duration}ms`,
         resultType: typeof result,
-        hasSecurityConfig: !!result?.securityLevel,
-        hasSuggestions: Array.isArray(result) || !!result?.suggestions
+        hasSecurityConfig: !!(result && typeof result === 'object' && 'securityLevel' in result),
+        hasSuggestions: Array.isArray(result) || !!(result && typeof result === 'object' && 'suggestions' in result)
       });
       
       results.tests.push({

@@ -28,50 +28,53 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
           "Test Step Transitions",
           "Dummy Workflow"
         ],
-        baseInstructions: `You are a workflow selection assistant. Your task is to match the user's input to one of the available workflows.
+        baseInstructions: `You are a PR workflow assistant.
 
-TASK:
-Match user input to one of these workflows:
-- Launch Announcement: For product launches, features, or news releases
-- JSON Dialog PR Workflow: For creating press releases, media pitches, and PR assets
-- Media List Generator: Database search + dual ranking (algorithmic vs AI) with user choice
-- Media Matching: AI author suggestions validated with recent article analysis
-- Press Release: For creating professional press release announcements
-- Media Pitch: For creating personalized media outreach and pitches
-- Social Post: For creating social media content in your brand voice
-- Blog Article: For creating long-form content, POVs, and narratives
-- FAQ: For creating comprehensive FAQ documents
-- Quick Press Release: For creating a press release in just two simple steps
-- Test Step Transitions: For testing step transitions and workflow completion
-- Dummy Workflow: For testing and demonstration purposes
+AVAILABLE WORKFLOWS:
+- Launch Announcement: For product launches and announcements
+- JSON Dialog PR Workflow: For creating PR assets like press releases  
+- Media List Generator: Generate media contacts with dual ranking
+- Media Matching: AI-suggested authors with article analysis
+- Press Release: Draft PR announcement materials
+- Media Pitch: Build custom outreach with context
+- Social Post: Craft social copy in your brand voice
+- Blog Article: Create long-form POVs, news, or narratives
+- FAQ: Generate frequent questions and responses
+- Quick Press Release: Two-step press release creation
+- Test Step Transitions: For testing workflow completion
+- Dummy Workflow: For testing purposes
 
-MATCHING RULES:
-- If user mentions "PR", "press release", "announcement materials", choose "Press Release"
-- If user mentions "media pitch", "pitch", "outreach", "journalist outreach", choose "Media Pitch"
-- If user mentions "social", "social media", "social post", "brand voice", choose "Social Post"
-- If user mentions "blog", "article", "long-form", "POV", "narrative", choose "Blog Article"
-- If user mentions "FAQ", "questions", "frequently asked", choose "FAQ"
-- If user mentions "launch", "product launch", "announcement", choose "Launch Announcement" 
-- If user mentions "JSON Dialog PR", "dialog", choose "JSON Dialog PR Workflow"
-- If user mentions "quick", "fast", "simple", "easy", choose "Quick Press Release"
-- If user mentions "media list", "media contacts list", "contact list", "dual ranking", "algorithmic vs AI", choose "Media List Generator"
-- If user mentions "media matching", "author validation", "AI suggestions", "article analysis", choose "Media Matching"
-- If user mentions "test", "dummy", "sample", "demo", choose "Dummy Workflow"
-- If user mentions "step", "transition", "test steps", choose "Test Step Transitions"
-- If no clear match, ask user to clarify with choices
+USER CONTEXT: Available via enhanced context injection
+
+TASK: Determine if user intent matches one of these workflows with HIGH CONFIDENCE.
+- If YES → Select the workflow
+- If NO → Provide conversational response
 
 RESPONSE FORMAT:
-You MUST respond with ONLY valid JSON in this format:
+
+WORKFLOW MATCHED (high confidence):
 {
-  "isComplete": true/false,
-  "isMatch": true/false,
+  "mode": "workflow_selection",
+  "isComplete": true,
+  "isMatch": true,
   "collectedInformation": {
-    "selectedWorkflow": "EXACT NAME FROM OPTIONS LIST",
-    "confidence": "high/low"
+    "selectedWorkflow": "EXACT_WORKFLOW_NAME"
   },
-  "nextQuestion": "Your clarification question if needed, otherwise null",
-  "suggestedNextStep": "Auto Generate Thread Title" 
-}`
+  "suggestedNextStep": "Auto Generate Thread Title"
+}
+
+NO CLEAR MATCH (questions, general chat):
+{
+  "mode": "conversational",
+  "isComplete": true,
+  "isMatch": false,
+  "collectedInformation": {
+    "selectedWorkflow": null,
+    "conversationalResponse": "Your helpful response here"
+  },
+  "suggestedNextStep": "Auto Generate Thread Title"
+}
+`
       }
     },
     {

@@ -23,11 +23,13 @@ export class JsonDialogService {
     threadId?: string
   ): Promise<{
     isStepComplete: boolean;
+    isComplete?: boolean;
     nextQuestion?: string;
     collectedInformation: Record<string, any>;
     suggestedNextStep?: string;
     apiResponse: string;
     readyToGenerate?: boolean;
+    mode?: string;
   }> {
     try {
       logger.info('Processing JSON dialog message', {
@@ -580,11 +582,13 @@ export class JsonDialogService {
       // Build the response
       return {
         isStepComplete: responseData.isComplete,
+        isComplete: responseData.isComplete, // Include both field names for compatibility
         nextQuestion: responseData.nextQuestion,
         collectedInformation: responseData.collectedInformation || collectedInfo,
         suggestedNextStep: responseData.suggestedNextStep,
         apiResponse: openAIResult.responseText,
-        readyToGenerate: responseData.readyToGenerate || false
+        readyToGenerate: responseData.readyToGenerate || false,
+        mode: responseData.mode // Preserve mode field for conversational processing
       };
     } catch (error) {
       logger.error('Error in JSON dialog processing', {
@@ -727,38 +731,38 @@ CURRENT USER INPUT:
 "${currentUserInput}"
 
 TASK:
-1. Determine which workflow the user wants based on their message
-2. Match keywords like "PR/press" to "JSON Dialog PR Workflow", "launch/product" to "Launch Announcement", and "test/dummy" to "Dummy Workflow"
-3. If the user is asking a question or saying they don't know, address that first rather than forcing a workflow selection
-4. Return a JSON response
+1. Try to match user input to any available workflow
+2. IF WORKFLOW MATCHED → return workflow_selection mode with selectedWorkflow
+3. IF NO WORKFLOW MATCHED → return conversational mode with conversationalResponse
+4. Use simple keyword matching: "PR/press/press release" → "Press Release", "media" → "Media List Generator", etc.
+5. Return appropriate JSON response
 
 RESPONSE FORMAT:
 You MUST respond with ONLY valid JSON in this format:
 
-If the user has clearly selected a workflow:
+If a workflow is matched:
 {
+  "mode": "workflow_selection",
   "isComplete": true,
+  "isMatch": true,
   "collectedInformation": {
-    "selectedWorkflow": "EXACT WORKFLOWS NAME"
+    "selectedWorkflow": "EXACT WORKFLOW NAME"
   },
   "nextQuestion": null,
-  "suggestedNextStep": "Thread Title and Summary"
+  "suggestedNextStep": "Auto Generate Thread Title"
 }
 
-If the user has NOT clearly selected a workflow but you need to ask for clarification:
+If the user is asking a question or needs help (conversational mode):
 {
-  "isComplete": false,
-  "collectedInformation": {},
-  "nextQuestion": "Which workflow would you like to use? Please choose from: ${options.join(', ')}",
-  "suggestedNextStep": null
-}
-
-If the user is asking a question or needs help:
-{
-  "isComplete": false,
-  "collectedInformation": {},
-  "nextQuestion": "Your helpful response to their question or statement",
-  "suggestedNextStep": null
+  "mode": "conversational",
+  "isComplete": true,
+  "isMatch": false,
+  "collectedInformation": {
+    "selectedWorkflow": null,
+    "conversationalResponse": "Your helpful response using available context"
+  },
+  "nextQuestion": null,
+  "suggestedNextStep": "Auto Generate Thread Title"
 }`;
     }
     // Special case for thread title

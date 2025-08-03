@@ -11,7 +11,10 @@ export class AssetDBService {
     
     const [newAsset] = await db
       .insert(assets)
-      .values(asset)
+      .values({
+        ...asset,
+        content: typeof asset.content === 'string' ? asset.content : JSON.stringify(asset.content)
+      })
       .returning();
     
     if (!newAsset) {
