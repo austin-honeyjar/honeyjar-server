@@ -27,6 +27,7 @@ import {
   WorkflowSecurityContext,
   SecurityLevel 
 } from './enhancements';
+import { withCache } from './cache.service';
 import logger from '../utils/logger';
 import { Workflow, WorkflowStep, WorkflowTemplate, StepStatus, WorkflowStatus } from '../types/workflow';
 
@@ -220,20 +221,33 @@ export class EnhancedWorkflowService {
            userId: userId.substring(0, 8)
          });
          
-         // First: Get RAG context (potentially sensitive)
-         const rawRagContext = await this.ragService.getRelevantContext(
-           userId,
-           orgId,
-           'General', // workflow type - we'll determine this from the original service
-           'Processing', // step name placeholder
-           userInput
-         );
+                 // First: Get enhanced RAG context using dual RAG approach
+        const stepWorkflowData = await this.findWorkflowForStep(stepId);
+        const workflowType = stepWorkflowData?.workflow?.templateId || 'General';
+        const stepName = stepWorkflowData?.step?.name || 'Processing';
+        
+        const dualRAGContext = await this.ragService.getDualRAGContext(
+          userId,
+          orgId,
+          workflowType,
+          stepName,
+          userInput,
+          'internal' // Default security level
+        );
+
+        // Transform dual RAG context to maintain compatibility with existing code
+        const rawRagContext = {
+          userDefaults: dualRAGContext.userDefaults,
+          relatedConversations: dualRAGContext.organizationContext.filter(r => r.source === 'conversation'),
+          similarAssets: [...dualRAGContext.globalWorkflowKnowledge, ...dualRAGContext.organizationContext.filter(r => r.source !== 'conversation')],
+          dualRAGResults: dualRAGContext // Store full dual RAG results for enhanced processing
+        };
          
-         // CRITICAL: Security filter RAG content BEFORE injection
-         const secureRagContext = await this.securityFilterRAGContent(rawRagContext, userId, orgId);
-         
-         // STEP 2: Security Analysis (user input + RAG content security assessment)
-         const securityAnalysis = await this.analyzeContentSecurity(userInput, userId, orgId);
+         // PARALLEL SECURITY PROCESSING: Filter and analyze simultaneously
+         const [secureRagContext, securityAnalysis] = await Promise.all([
+           this.securityFilterRAGContent(rawRagContext, userId, orgId),
+           this.analyzeContentSecurity(userInput, userId, orgId)
+         ]);
         
                  logger.info('✅ Retrieved SECURE RAG context for enhanced processing', {
            requestId,
@@ -2069,8 +2083,11 @@ export class EnhancedWorkflowService {
     }
   }
 
+
+
   /**
-   * Inject RAG context into workflow step instructions - UNIVERSAL ENHANCEMENT
+   * Inject RAG context into workflow step instructions - ENHANCED DUAL RAG VERSION
+   * Note: Context templates will be cached in Redis for performance in future iteration
    */
   private injectRAGContextIntoInstructions(
     baseInstructions: string,
@@ -2079,49 +2096,74 @@ export class EnhancedWorkflowService {
     stepName?: string
   ): string {
     const userDefaults = ragContext?.userDefaults || {};
+    const dualRAGResults = ragContext?.dualRAGResults;
     
-    // Build concise context header (target: ~20% of total prompt)
-    let contextHeader = '\n\n=== 🎯 CONTEXT ===\n';
+    // Build enhanced context header with dual RAG results
+    let contextHeader = '\n\n=== 🎯 ENHANCED DUAL RAG CONTEXT ===\n';
     
-    // User Profile (essential only)
-    if (userDefaults.companyName || userDefaults.industry || userDefaults.jobTitle) {
-      contextHeader += '🏢 ';
-      if (userDefaults.jobTitle) contextHeader += `${userDefaults.jobTitle} at `;
-      if (userDefaults.companyName) contextHeader += `${userDefaults.companyName}`;
-      if (userDefaults.industry) contextHeader += ` (${userDefaults.industry})`;
-      contextHeader += '\n';
+    // SECTION 1: Global Workflow Knowledge
+    if (dualRAGResults?.globalWorkflowKnowledge?.length > 0) {
+      contextHeader += '\n📚 GLOBAL WORKFLOW KNOWLEDGE:\n';
+      dualRAGResults.globalWorkflowKnowledge.slice(0, 3).forEach((result: any) => {
+        const relevance = (result.relevanceScore * 100).toFixed(0);
+        const fileName = result.context?.fileName || 'workflow-guide';
+        const snippet = result.content.substring(0, 200).replace(/\n/g, ' ').trim();
+        contextHeader += `• [${relevance}%] ${fileName}: ${snippet}...\n`;
+      });
     }
     
-    // Essential Intent Handling (restored)
-    contextHeader += '🔄 ACTIONS: "exit/quit/cancel" → complete step | "switch to X workflow" → transition\n';
-    contextHeader += '💬 QUESTIONS: Use profile context for "where do I work?" type queries\n';
-    contextHeader += '❓ STATUS: "what workflow/step are you on?" → Answer: "Currently in [workflowType] workflow at [stepName] step"\n';
+    // SECTION 2: Organization Context
+    if (dualRAGResults?.organizationContext?.length > 0) {
+      contextHeader += '\n🏢 ORGANIZATION CONTEXT:\n';
+      dualRAGResults.organizationContext.slice(0, 3).forEach((result: any) => {
+        const category = result.context?.contentCategory || result.source;
+        const snippet = result.content.substring(0, 150).replace(/\n/g, ' ').trim();
+        contextHeader += `• [${category}] ${snippet}...\n`;
+      });
+    }
+    
+    // SECTION 3: User Profile (essential only)
+    if (userDefaults.companyName || userDefaults.industry || userDefaults.jobTitle) {
+      contextHeader += '\n🏢 USER PROFILE:\n';
+      if (userDefaults.jobTitle) contextHeader += `Role: ${userDefaults.jobTitle}\n`;
+      if (userDefaults.companyName) contextHeader += `Company: ${userDefaults.companyName}\n`;
+      if (userDefaults.industry) contextHeader += `Industry: ${userDefaults.industry}\n`;
+    }
+    
+    // SECTION 4: Context Integration Instructions  
+    contextHeader += '\n🎯 CONTEXT INTEGRATION INSTRUCTIONS:\n';
+    contextHeader += '• Apply global workflow knowledge for structure and best practices\n';
+    contextHeader += '• Integrate organization context for brand voice and company-specific details\n';
+    contextHeader += '• Maintain consistency with previous work and messaging\n';
+    contextHeader += '• Use appropriate security level and tone for target audience\n';
+    
+    // Essential Intent Handling
+    contextHeader += '\n🔄 SYSTEM BEHAVIORS:\n';
+    contextHeader += '• ACTIONS: "exit/quit/cancel" → complete step | "switch to X workflow" → transition\n';
+    contextHeader += '• QUESTIONS: Use profile context for "where do I work?" type queries\n';
+    contextHeader += `• STATUS: "what workflow/step are you on?" → Answer: "Currently in ${workflowType} workflow at ${stepName || 'current'} step"\n`;
     
     // 🚨 CROSS-WORKFLOW DETECTION: Critical for handling different asset requests
-    contextHeader += '🔀 CROSS-WORKFLOW: If user requests different asset type (e.g. "social post" in Blog workflow):\n';
+    contextHeader += '• CROSS-WORKFLOW: If user requests different asset type (e.g. "social post" in Blog workflow):\n';
     contextHeader += '   → Complete current step and suggest: "I can help with that! Let me start a [Asset Type] workflow for you."\n';
     contextHeader += '   → Don\'t try to generate wrong asset type with current workflow templates\n';
     
-    // Current Workflow Context - CRITICAL for status queries
-    contextHeader += `🎯 CURRENT LOCATION: You are in the "${workflowType}" workflow at the "${stepName || 'current'}" step\n`;
-    contextHeader += `   → When asked "what workflow/step are you on?" answer: "Currently in ${workflowType} workflow at ${stepName || 'current'} step"\n`;
-    
     // Usage Rules (content creation workflows)
     if (workflowType === 'Blog Article' || workflowType === 'Press Release' || workflowType === 'Social Post' || workflowType === 'FAQ' || workflowType === 'Media Pitch') {
-      contextHeader += '📝 AUTO-USE: Company name + industry in content (required)\n';
+      contextHeader += '• AUTO-USE: Company name + industry in content (required)\n';
       
       // Special note for Social Post workflows about carryover
       if (workflowType === 'Social Post') {
-        contextHeader += '🔗 CONTEXT CHECK: Look for carried-over context from previous workflows before asking questions\n';
+        contextHeader += '• CONTEXT CHECK: Look for carried-over context from previous workflows before asking questions\n';
       }
     }
     
     // Asset Review specific
     if (stepName === 'Asset Review') {
-      contextHeader += '🔄 For revisions: Apply context immediately, no clarification needed\n';
+      contextHeader += '• REVISIONS: Apply context immediately, no clarification needed\n';
     }
     
-    contextHeader += '=== END CONTEXT ===\n\n';
+    contextHeader += '=== END DUAL RAG CONTEXT ===\n\n';
     
     return contextHeader + baseInstructions;
   }

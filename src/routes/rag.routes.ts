@@ -533,7 +533,7 @@ router.post('/enhanced-workflow', async (req: Request, res: Response) => {
       });
     }
 
-    const workflow = await enhancedWorkflowService.initializeWorkflowWithContext(
+    const workflow = await enhancedWorkflowService.createWorkflowWithContext(
       threadId,
       templateId,
       userId,
@@ -675,6 +675,103 @@ router.post('/store-asset-history', async (req: Request, res: Response) => {
     res.status(500).json({ 
       error: 'Failed to store asset history',
       details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * DELETE /api/rag/documents/:documentId
+ * Delete a RAG document
+ */
+router.delete('/documents/:documentId', async (req: Request, res: Response) => {
+  try {
+    const { documentId } = req.params;
+    const { userId, orgId } = req.body;
+
+    if (!documentId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Missing required parameter: documentId' 
+      });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Missing required parameter: userId' 
+      });
+    }
+
+    const success = await ragService.deleteRagDocument(documentId, userId, orgId);
+
+    res.json({
+      success,
+      message: 'Document deleted successfully'
+    });
+
+  } catch (error) {
+    logger.error('Error deleting RAG document:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// DUAL RAG SEARCH ENDPOINT - For test interface and enhanced workflows
+router.post('/dual-search', async (req: Request, res: Response) => {
+  try {
+    const { userId, orgId, workflowType, stepName, query, securityLevel } = req.body;
+
+    if (!userId || !query) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Missing required parameters: userId, query' 
+      });
+    }
+
+    logger.info('🔄 DUAL RAG SEARCH REQUEST', {
+      userId: userId.substring(0, 8),
+      orgId: orgId?.substring(0, 8) || 'none',
+      workflowType: workflowType || 'General',
+      stepName: stepName || 'Processing',
+      queryLength: query.length,
+      securityLevel: securityLevel || 'internal'
+    });
+
+    const dualRAGContext = await ragService.getDualRAGContext(
+      userId,
+      orgId || '',
+      workflowType || 'General',
+      stepName || 'Processing',
+      query,
+      securityLevel || 'internal'
+    );
+
+    const response = {
+      success: true,
+      globalResults: dualRAGContext.globalWorkflowKnowledge,
+      orgResults: dualRAGContext.organizationContext,
+      combinedResults: dualRAGContext.combinedContext,
+      performance: dualRAGContext.performance,
+      contextSources: dualRAGContext.contextSources,
+      userDefaults: dualRAGContext.userDefaults
+    };
+
+    logger.info('✅ DUAL RAG SEARCH COMPLETED', {
+      userId: userId.substring(0, 8),
+      globalSources: dualRAGContext.contextSources.globalSources,
+      orgSources: dualRAGContext.contextSources.orgSources,
+      totalTime: dualRAGContext.performance.totalTime
+    });
+
+    res.json(response);
+
+  } catch (error) {
+    logger.error('❌ DUAL RAG SEARCH ERROR:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred'
     });
   }
 });

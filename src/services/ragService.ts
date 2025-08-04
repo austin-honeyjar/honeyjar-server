@@ -14,6 +14,7 @@ import { eq, and, desc, sql, gte, lte, isNull, inArray } from 'drizzle-orm';
 import logger from '../utils/logger';
 import { EmbeddingService } from './embeddingService';
 import { getEmbeddingConfig } from '../config/embedding.config';
+import { withCache } from './cache.service';
 import OpenAI from 'openai';
 
 // Initialize embedding service
@@ -964,6 +965,162 @@ Preferred Tone: ${userKb.preferredTone || 'professional'}`;
       };
     }
   }
+
+  /**
+   * DUAL RAG CONTEXT RETRIEVAL - Separate calls for global workflow knowledge and organization context
+   */
+  async getDualRAGContext(
+    userId: string,
+    orgId: string,
+    workflowType: string,
+    stepName: string,
+    userInput: string,
+    securityLevel: string = 'internal'
+  ): Promise<{
+    globalWorkflowKnowledge: SearchResult[];
+    organizationContext: SearchResult[];
+    combinedContext: SearchResult[];
+    performance: {
+      globalQueryTime: number;
+      orgQueryTime: number;
+      totalTime: number;
+    };
+    contextSources: {
+      globalSources: number;
+      orgSources: number;
+      totalRelevance: number;
+    };
+    userDefaults: SmartDefaults;
+  }> {
+    const startTime = Date.now();
+    
+    try {
+      logger.info('🔄 DUAL RAG CONTEXT RETRIEVAL STARTED', {
+        userId: userId.substring(0, 8),
+        orgId: orgId.substring(0, 8),
+        workflowType,
+        stepName,
+        securityLevel,
+        queryLength: userInput.length
+      });
+
+      // PARALLEL PROCESSING: Execute all RAG calls simultaneously
+      const globalQuery = `${workflowType} ${stepName} workflow template best practices process guide`;
+      const orgQuery = `${userInput} company brand messaging context previous work`;
+      
+      const [globalResults, orgResults, userDefaults] = await Promise.all([
+        // CALL 1: Global Workflow Knowledge (admin_global documents)
+        this.searchSecureContentPgVector(userId, orgId, globalQuery, {
+          contentTypes: ['rag_document'],
+          securityLevel: securityLevel as SecurityLevel,
+          limit: 5,
+          maxDistance: 0.4,
+          usePgVector: true
+        }).then(results => ({
+          results,
+          queryTime: Date.now() - startTime
+        })),
+        
+        // CALL 2: Organization Context (user_personal, conversations, assets)
+        this.searchSecureContentPgVector(userId, orgId, orgQuery, {
+          contentTypes: ['rag_document', 'conversation', 'asset'],
+          securityLevel: securityLevel as SecurityLevel,
+          limit: 5,
+          maxDistance: 0.5,
+          usePgVector: true
+        }).then(results => ({
+          results,
+          queryTime: Date.now() - startTime
+        })),
+        
+                 // CALL 3: User defaults (parallel with searches) - cached for performance
+         withCache(
+           `user-defaults:${userId}:${orgId}:${workflowType}`,
+           () => this.getSmartDefaults(userId, orgId, workflowType),
+           { ttl: 300 } // 5 minutes cache for user defaults
+         )
+      ]);
+      
+      // Filter results with timing info
+      const globalWorkflowKnowledge = globalResults.results.filter(
+        result => result.context?.contentSource === 'admin_global'
+      );
+      
+      const organizationContext = orgResults.results.filter(
+        result => result.context?.contentSource === 'user_personal' || 
+                 result.source === 'conversation' ||
+                 result.source === 'asset'
+      );
+      
+      const globalQueryTime = globalResults.queryTime;
+      const orgQueryTime = orgResults.queryTime;
+
+      // Combine and rank by relevance, with global context prioritized for workflow guidance
+      const combinedContext = [
+        ...globalWorkflowKnowledge.map(r => ({ ...r, priority: 'global' as const })),
+        ...organizationContext.map(r => ({ ...r, priority: 'organization' as const }))
+      ].sort((a, b) => b.relevanceScore - a.relevanceScore);
+
+      const totalTime = Date.now() - startTime;
+      const totalRelevance = combinedContext.reduce((sum, r) => sum + r.relevanceScore, 0);
+
+      const result = {
+        globalWorkflowKnowledge,
+        organizationContext,
+        combinedContext,
+        performance: {
+          globalQueryTime,
+          orgQueryTime,
+          totalTime
+        },
+        contextSources: {
+          globalSources: globalWorkflowKnowledge.length,
+          orgSources: organizationContext.length,
+          totalRelevance
+        },
+        userDefaults
+      };
+
+      logger.info('✅ DUAL RAG CONTEXT RETRIEVAL COMPLETED', {
+        userId: userId.substring(0, 8),
+        globalSources: globalWorkflowKnowledge.length,
+        orgSources: organizationContext.length,
+        globalQueryTime,
+        orgQueryTime,
+        totalTime,
+        avgRelevance: totalRelevance / Math.max(combinedContext.length, 1),
+        topGlobalRelevance: globalWorkflowKnowledge[0]?.relevanceScore || 0,
+        topOrgRelevance: organizationContext[0]?.relevanceScore || 0
+      });
+
+      return result;
+    } catch (error) {
+      logger.error('❌ DUAL RAG CONTEXT RETRIEVAL ERROR', { 
+        error: error instanceof Error ? error.message : String(error), 
+        userId: userId.substring(0, 8),
+        workflowType,
+        stepName 
+      });
+      
+      // Return empty context on error
+      return {
+        globalWorkflowKnowledge: [],
+        organizationContext: [],
+        combinedContext: [],
+        performance: {
+          globalQueryTime: 0,
+          orgQueryTime: 0,
+          totalTime: Date.now() - startTime
+        },
+        contextSources: {
+          globalSources: 0,
+          orgSources: 0,
+          totalRelevance: 0
+        },
+        userDefaults: await this.getSmartDefaults(userId, orgId, workflowType).catch(() => ({}))
+      };
+    }
+  }
   
   // MARK: - Learning & Improvement
   
@@ -1021,6 +1178,55 @@ Preferred Tone: ${userKb.preferredTone || 'professional'}`;
       logger.info(`Updated knowledge from workflow completion for user ${userId}`);
     } catch (error) {
       logger.error('Error updating knowledge from workflow:', error);
+    }
+  }
+
+  /**
+   * Delete a RAG document
+   */
+  async deleteRagDocument(
+    documentId: string, 
+    userId: string, 
+    orgId?: string
+  ): Promise<boolean> {
+    try {
+      // First check if document exists and user has permission
+      const document = await db.select()
+        .from(ragDocuments)
+        .where(eq(ragDocuments.id, documentId))
+        .limit(1);
+
+      if (document.length === 0) {
+        throw new Error('Document not found');
+      }
+
+      const doc = document[0];
+
+      // Check permissions
+      if (doc.contentSource === 'admin_global') {
+        // Only admin can delete global docs (for now, we'll allow any user for testing)
+        // TODO: Add proper admin check
+      } else if (doc.contentSource === 'user_personal') {
+        // User can only delete their own documents
+        if (doc.uploadedBy !== userId || doc.orgId !== orgId) {
+          throw new Error('Permission denied: You can only delete your own documents');
+        }
+      }
+
+      // Delete the document
+      const result = await db.delete(ragDocuments)
+        .where(eq(ragDocuments.id, documentId))
+        .returning({ id: ragDocuments.id });
+
+      if (result.length === 0) {
+        throw new Error('Failed to delete document');
+      }
+
+      logger.info(`Deleted RAG document: ${documentId} by user: ${userId}`);
+      return true;
+    } catch (error) {
+      logger.error('Error deleting RAG document:', error);
+      throw error;
     }
   }
   
