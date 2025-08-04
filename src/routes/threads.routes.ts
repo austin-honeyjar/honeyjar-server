@@ -245,6 +245,14 @@ router.get('/:id', async (req: AuthRequest, res) => {
     // Reverse to chronological order for UI
     messages = messages.reverse();
     
+    // Debug logging for message retrieval
+    console.log('🔍 Thread messages query result:', {
+      threadId,
+      messageCount: messages.length,
+      latestMessageIds: messages.slice(-3).map(m => ({ id: m.id, content: m.content?.toString().substring(0, 50) + '...', role: m.role })),
+      queryTime: new Date().toISOString()
+    });
+    
     logger.info('Returning thread:', { 
       userId: req.user.id,
       threadId,

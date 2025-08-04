@@ -6,6 +6,7 @@ import { WorkflowService } from './workflow.service';
 import { enhancedWorkflowService } from './enhanced-workflow.service'; // Changed from upgradedWorkflowService
 import { WorkflowStatus, StepStatus, StepType, WorkflowStep } from '../types/workflow';
 import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow.js';
+import { simpleCache } from '../utils/simpleCache';
 import logger from '../utils/logger';
 
 export class ChatService {
@@ -421,6 +422,274 @@ export class ChatService {
 
     // Return the response from the step processing
     return stepResponse.response || 'Step processed successfully.';
+  }
+
+  /**
+   * Handle user message with streaming response
+   * @param threadId The thread ID
+   * @param content The user's message content  
+   * @param userId Optional user ID for enhanced context
+   * @param orgId Optional organization ID for enhanced context
+   * @returns An async generator that yields streaming response chunks
+   */
+  async* handleUserMessageStream(
+    threadId: string, 
+    content: string, 
+    userId?: string, 
+    orgId?: string
+  ): AsyncGenerator<{
+    type: 'message_saved' | 'workflow_status' | 'ai_response' | 'workflow_complete' | 'error';
+    data: any;
+  }> {
+    try {
+      // First, save the user message (same logic as non-streaming)
+      const recentMessages = await db.query.chatMessages.findMany({
+        where: eq(chatMessages.threadId, threadId),
+        orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+        limit: 5,
+      });
+      
+      const duplicateMessage = recentMessages.find(msg => 
+        msg.role === "user" && msg.content === content
+      );
+      
+      let userMessage = null;
+      if (!duplicateMessage) {
+        console.log(`Adding new user message to thread ${threadId}: "${content.substring(0, 30)}..."`);
+        userMessage = await this.addMessage(threadId, content, true);
+        
+        yield {
+          type: 'message_saved',
+          data: { message: userMessage }
+        };
+      } else {
+        console.log(`Skipping duplicate user message in thread ${threadId}: "${content.substring(0, 30)}..."`);
+        userMessage = duplicateMessage;
+        
+        yield {
+          type: 'message_saved', 
+          data: { message: userMessage, wasDuplicate: true }
+        };
+      }
+
+      // Get the active workflow for this thread
+      let workflow = await this.workflowService.getWorkflowByThreadId(threadId);
+      if (!workflow) {
+        console.warn(`No workflow found for thread ${threadId}. Creating base workflow as fallback.`);
+        const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
+        if (!baseTemplate) throw new Error("Base workflow template not found");
+        
+        workflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id);
+        
+        yield {
+          type: 'workflow_status',
+          data: { status: 'workflow_created', workflowId: workflow.id }
+        };
+      }
+
+      // Process the current step
+      const currentStepId = workflow.currentStepId;
+      if (!currentStepId) {
+        console.warn(`Workflow ${workflow.id} has no currentStepId. Attempting to get next prompt.`);
+        const prompt = await this.getNextPrompt(threadId, workflow.id);
+        
+        yield {
+          type: 'ai_response',
+          data: { content: prompt, isComplete: true }
+        };
+        return;
+      }
+
+      // Get the current step before processing
+      const currentStep = workflow.steps.find(step => step.id === currentStepId);
+      
+      // Handle streaming step response using enhanced context if user info is available
+      const stepResponseGenerator = userId && orgId 
+        ? this.workflowService.handleStepResponseStreamWithContext(currentStepId, content, userId, orgId)
+        : this.workflowService.handleStepResponseStream(currentStepId, content);
+
+      let stepResponse: any = null;
+      let accumulatedResponse = '';
+
+      // Process streaming step response
+      for await (const chunk of stepResponseGenerator) {
+        if (chunk.type === 'content') {
+          accumulatedResponse += chunk.data.content || '';
+          console.log('📝 Accumulating response chunk:', {
+            chunkContent: chunk.data.content,
+            newAccumulatedLength: accumulatedResponse.length,
+            accumulatedPreview: accumulatedResponse.substring(0, 100) + '...'
+          });
+          
+          // Yield AI response chunks
+          yield {
+            type: 'ai_response',
+            data: {
+              content: chunk.data.content,
+              isComplete: chunk.data.isComplete || false,
+              accumulated: accumulatedResponse
+            }
+          };
+        } else if (chunk.type === 'done') {
+          console.log('✅ Streaming done event received:', chunk.data);
+          stepResponse = chunk.data;
+        } else if (chunk.type === 'error') {
+          console.log('❌ Streaming error event received:', chunk.data);
+          yield {
+            type: 'error',
+            data: chunk.data
+          };
+          return;
+        }
+      }
+
+      // Save the accumulated AI response to the database (extract clean text from JSON)
+      console.log('🔍 Checking if should save accumulated response:', {
+        hasAccumulatedResponse: !!accumulatedResponse,
+        accumulatedLength: accumulatedResponse.length,
+        isNotWorkflowCompleted: accumulatedResponse !== 'Workflow completed successfully.',
+        preview: accumulatedResponse.substring(0, 100) + '...'
+      });
+      
+      if (accumulatedResponse && accumulatedResponse !== 'Workflow completed successfully.') {
+        let finalResponse = accumulatedResponse;
+        
+        // If the response is JSON, extract the conversational response
+        if (accumulatedResponse.trim().startsWith('{')) {
+          try {
+            const parsed = JSON.parse(accumulatedResponse);
+            if (parsed.collectedInformation?.conversationalResponse) {
+              finalResponse = parsed.collectedInformation.conversationalResponse;
+              console.log('🎯 Extracted clean response for database:', finalResponse.substring(0, 50) + '...');
+            } else {
+              console.warn('⚠️ JSON response but no conversationalResponse found:', accumulatedResponse.substring(0, 100));
+            }
+          } catch (e: any) {
+            console.warn('⚠️ Failed to parse JSON response for database save:', e.message);
+            // Keep original response as fallback
+          }
+        }
+        
+        console.log('💾 Saving final AI response to database:', finalResponse.substring(0, 50) + '...');
+        const savedMessage = await this.addMessage(threadId, finalResponse, false);
+        console.log('✅ AI message saved successfully with ID:', savedMessage?.id, 'at', new Date().toISOString());
+        
+        // CRITICAL: Invalidate thread cache to ensure fresh data on next request
+        const threadCacheKey = `thread:${threadId}`;
+        simpleCache.del(threadCacheKey);
+        console.log('🗑️ Invalidated thread cache for:', threadId);
+      }
+
+      // Handle workflow completion and transitions
+      if (stepResponse?.isComplete) {
+        const completionResult = await this.workflowService.handleWorkflowCompletion(workflow, threadId);
+        
+        if (completionResult.newWorkflow) {
+          const selectionMsg = `Workflow selected: ${completionResult.selectedWorkflow}`;
+          await this.addMessage(threadId, selectionMsg, false);
+          
+          yield {
+            type: 'workflow_status',
+            data: { 
+              status: 'workflow_transition',
+              selectedWorkflow: completionResult.selectedWorkflow,
+              newWorkflowId: completionResult.newWorkflow.id
+            }
+          };
+          
+          // Get the first prompt of the new workflow
+          const nextPrompt = await this.getNextPrompt(threadId, completionResult.newWorkflow.id);
+          
+          yield {
+            type: 'ai_response',
+            data: { content: nextPrompt, isComplete: true }
+          };
+        } else {
+          const completionMsg = completionResult.message || `${workflow.templateId || 'Workflow'} completed successfully.`;
+          await this.addWorkflowStatusMessage(threadId, completionMsg);
+          
+          yield {
+            type: 'workflow_complete',
+            data: { message: completionMsg }
+          };
+        }
+      } else if (stepResponse?.nextStep) {
+        // Handle next step processing
+        const nextStepInfo = workflow.steps.find(step => step.id === stepResponse.nextStep?.id);
+        
+        if (nextStepInfo) {
+          const autoExecCheck = await this.workflowService.checkAndHandleAutoExecution(
+            nextStepInfo.id, 
+            workflow.id, 
+            threadId
+          );
+
+          if (autoExecCheck.autoExecuted) {
+            if (autoExecCheck.nextWorkflow) {
+              const nextPrompt = await this.getNextPrompt(threadId, autoExecCheck.nextWorkflow.id);
+              yield {
+                type: 'ai_response',
+                data: { content: nextPrompt, isComplete: true }
+              };
+            } else if (autoExecCheck.result) {
+              yield {
+                type: 'ai_response',
+                data: { 
+                  content: autoExecCheck.result.response || `Step "${nextStepInfo.name}" executed automatically.`,
+                  isComplete: true
+                }
+              };
+            }
+            return;
+          }
+        }
+        
+        const nextPrompt = stepResponse.nextStep.prompt || "Please provide the required information.";
+        const isInitialPromptAlreadySent = nextStepInfo?.metadata?.initialPromptSent === true;
+        
+        if (!isInitialPromptAlreadySent && accumulatedResponse !== nextPrompt) {
+          if (nextStepInfo) {
+            await this.workflowService.updateStep(nextStepInfo.id, {
+              metadata: { 
+                ...nextStepInfo.metadata,
+                initialPromptSent: true 
+              }
+            });
+          }
+          
+          await this.addMessage(threadId, nextPrompt, false);
+          
+          yield {
+            type: 'ai_response',
+            data: { content: nextPrompt, isComplete: true }
+          };
+        }
+      } else {
+        // Fallback to getNextPrompt
+        console.warn(`Step ${currentStepId} processed, workflow not complete, but handleStepResponse provided no next step. Calling getNextPrompt.`);
+        const nextPrompt = await this.getNextPrompt(threadId, workflow.id);
+        
+        yield {
+          type: 'ai_response',
+          data: { content: nextPrompt, isComplete: true }
+        };
+      }
+
+    } catch (error) {
+      logger.error('Error in streaming message handler:', {
+        threadId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      
+      yield {
+        type: 'error',
+        data: {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          threadId
+        }
+      };
+    }
   }
 
   // REMOVED: Legacy JSON PR workflow methods

@@ -416,6 +416,179 @@ EDITED TEXT:`;
   }
 
   /**
+   * Generate a streaming response based on the workflow step and user input
+   * @param step The current workflow step
+   * @param userInput The user's input for this step
+   * @param previousResponses Array of previous step responses for context
+   * @returns An async iterator that yields streaming response chunks
+   */
+  async* generateStepResponseStream(
+    step: WorkflowStep,
+    userInput: string,
+    previousResponses: { stepName: string; response: string }[] = []
+  ): AsyncGenerator<{
+    type: 'content' | 'metadata' | 'error' | 'done';
+    data: any;
+  }> {
+    try {
+      logger.info('Generating streaming OpenAI response', {
+        stepId: step.id,
+        stepName: step.name,
+        stepType: step.stepType,
+        userInputLength: userInput.length,
+        previousResponsesCount: previousResponses.length
+      });
+
+      // Construct the system message based on step metadata and context
+      const systemMessage = this.constructSystemMessage(step, previousResponses);
+      
+      // Create the messages array for the chat completion
+      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { role: 'system', content: systemMessage }
+      ];
+
+      // Add previous responses as context if available
+      if (previousResponses.length > 0) {
+        const contextMessages = previousResponses.map(response => ({
+          role: 'assistant' as const,
+          content: `Previous step (${response.stepName}): ${response.response}`
+        }));
+        messages.push(...contextMessages);
+      }
+
+      // Add the current step's prompt and user input
+      messages.push(
+        { role: 'assistant', content: step.prompt || 'Please provide the required information.' },
+        { role: 'user', content: userInput }
+      );
+
+      // Store the complete prompt for tracking
+      const promptData = JSON.stringify({
+        messages,
+        model: this.model,
+        settings: {
+          userInput,
+          stepId: step.id,
+          stepName: step.name,
+          stepType: step.stepType
+        }
+      }, null, 2);
+
+      // Yield metadata first
+      yield {
+        type: 'metadata',
+        data: {
+          stepId: step.id,
+          stepName: step.name,
+          stepType: step.stepType,
+          promptData
+        }
+      };
+
+      // Determine response settings
+      const isChatStep = step.stepType === 'user_input' || step.stepType === 'ai_suggestion';
+      const isAssetGenerationStep = step.name === 'Asset Generation';
+      const isJsonDialogStep = step.stepType === 'json_dialog';
+      
+      const maxTokens = isAssetGenerationStep ? 4000 : 
+                     isJsonDialogStep ? 4000 : 
+                     isChatStep ? 100 : 2000;
+      const presencePenalty = isChatStep ? 0.5 : 0;
+      const frequencyPenalty = isChatStep ? 0.5 : 0;
+
+      // Create streaming completion
+      const stream = await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        temperature: 0.7,
+        max_tokens: maxTokens,
+        presence_penalty: presencePenalty,
+        frequency_penalty: frequencyPenalty,
+        stream: true,
+      });
+
+      let fullResponse = '';
+      let sentenceBuffer = '';
+      let sentenceCount = 0;
+
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content;
+        
+        if (content) {
+          fullResponse += content;
+          sentenceBuffer += content;
+          
+          // For chat steps, limit to 2 sentences by detecting sentence endings
+          if (isChatStep) {
+            const sentenceEndings = sentenceBuffer.match(/[.!?]+/g);
+            if (sentenceEndings) {
+              sentenceCount += sentenceEndings.length;
+              
+              // If we've reached 2 sentences, send the content and stop
+              if (sentenceCount >= 2) {
+                const sentences = fullResponse.split(/[.!?]+/).filter(s => s.trim().length > 0);
+                const limitedResponse = sentences.slice(0, 2).join('. ').trim() + '.';
+                
+                yield {
+                  type: 'content',
+                  data: { content: limitedResponse, isComplete: true }
+                };
+                break;
+              }
+            }
+          }
+          
+          // Yield content chunk
+          yield {
+            type: 'content',
+            data: { content, isComplete: false }
+          };
+        }
+        
+        // Check if stream is done
+        if (chunk.choices[0]?.finish_reason) {
+          break;
+        }
+      }
+
+      // Yield completion
+      yield {
+        type: 'done',
+        data: {
+          fullResponse,
+          stepId: step.id,
+          stepName: step.name,
+          isChatStep,
+          responseLength: fullResponse.length
+        }
+      };
+
+      logger.info('Completed streaming OpenAI response', {
+        stepId: step.id,
+        stepName: step.name,
+        responseLength: fullResponse.length,
+        isChatStep
+      });
+
+    } catch (error) {
+      logger.error('Error in streaming OpenAI response:', {
+        stepId: step.id,
+        stepName: step.name,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      
+      yield {
+        type: 'error',
+        data: {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stepId: step.id
+        }
+      };
+    }
+  }
+
+  /**
    * Generate contextual prompts for workflow steps with dynamic context
    * @param step The workflow step
    * @param context Previous step context
