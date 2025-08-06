@@ -2,18 +2,22 @@ import { randomUUID } from 'crypto';
 import { sql, eq } from 'drizzle-orm';
 import { db } from '../db';
 import { chatThreads, chatMessages } from '../db/schema';
-import { WorkflowService } from './workflow.service';
-import { enhancedWorkflowService } from './enhanced-workflow.service'; // Changed from upgradedWorkflowService
+import { enhancedWorkflowService } from './enhanced-workflow.service';
 import { WorkflowStatus, StepStatus, StepType, WorkflowStep } from '../types/workflow';
 import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow.js';
 import { simpleCache } from '../utils/simpleCache';
+import { MessageContentHelper } from '../types/chat-message';
+import { IntentClassificationService, UserIntent, IntentContext } from './intent-classification.service';
+import { ragService } from './ragService';
 import logger from '../utils/logger';
 
 export class ChatService {
   private workflowService: typeof enhancedWorkflowService; // Updated type
+  private intentService: IntentClassificationService;
 
   constructor() {
     this.workflowService = enhancedWorkflowService; // Changed from enhancedWorkflowService
+    this.intentService = new IntentClassificationService();
   }
 
   async createThread(userId: string, title: string) {
@@ -33,12 +37,9 @@ export class ChatService {
         throw new Error("Base workflow template not found");
       }
 
-      // Create the workflow - this will automatically send the first message
-      await this.workflowService.createWorkflow(thread.id, baseTemplate.id);
-      console.log(`Base workflow created and initialized for thread ${thread.id}`);
-      
-      // Add a welcome message as the first message
-      await this.addSystemMessage(thread.id, "Welcome to Honeyjar! I'm here to help you create professional PR assets. Let's get started!");
+      // Create the workflow silently for initial thread creation (no initial prompt needed)
+      await this.workflowService.createWorkflow(thread.id, baseTemplate.id, true);
+      console.log(`Base workflow created silently for new thread ${thread.id}`);
       
     } catch (error) {
       console.error(`Error initializing base workflow for thread ${thread.id}:`, error);
@@ -87,6 +88,70 @@ export class ChatService {
       where: eq(chatMessages.threadId, threadId),
       orderBy: (messages, { asc }) => [asc(messages.createdAt)],
     });
+  }
+
+  /**
+   * Detect asset type from content to determine if structured messaging should be used
+   */
+  private detectAssetType(content: string): string | null {
+    // Exclude workflow prompts and step messages from being treated as assets
+    if (content.includes('Please review it and let me know') ||
+        content.includes('Please review the') ||
+        content.includes('What would you like to do with') ||
+        content.includes('Moving to the next step') ||
+        content.includes('Great! Moving to') ||
+        content.includes('Let me know if you') ||
+        content.includes('What would you like to work on next') ||
+        content.includes('**Full Workflows:**') ||
+        content.includes('**Quick Asset Creation:**') ||
+        content.includes('I can help you with:') ||
+        content.length < 200) { // Most workflow prompts are short
+      return null;
+    }
+    
+    // Check for press releases
+    if (content.includes('FOR IMMEDIATE RELEASE') || 
+        content.includes('Press Release') ||
+        content.includes('**Contact:') ||
+        (content.includes('**') && content.length > 500)) {
+      return 'Press Release';
+    }
+    
+    // Check for media pitch
+    if (content.includes('Subject:') && content.includes('Hi ') && content.length > 200) {
+      return 'Media Pitch';
+    }
+    
+    // Check for social posts (shorter content with hashtags or social language)
+    if ((content.includes('#') || content.includes('@') || 
+         content.toLowerCase().includes('social')) && content.length < 500) {
+      return 'Social Post';
+    }
+    
+    // Check for blog articles (long-form content)
+    if (content.length > 1000 && 
+        (content.includes('##') || content.includes('Introduction') || 
+         content.toLowerCase().includes('blog') || content.toLowerCase().includes('article'))) {
+      return 'Blog Article';
+    }
+    
+    // Check for FAQ format
+    if (content.includes('Q:') || content.includes('Question:') || 
+        content.toLowerCase().includes('frequently asked')) {
+      return 'FAQ';
+    }
+    
+    // Check for media lists
+    if (content.includes('Media Contacts') || content.includes('**Outlet:')) {
+      return 'Media List';
+    }
+    
+    // If it's long-form content but doesn't match specific patterns, it's likely an asset
+    if (content.length > 500) { // Increased threshold to avoid short prompts
+      return 'Content Asset';
+    }
+    
+    return null;
   }
 
   async handleUserMessage(threadId: string, content: string) {
@@ -438,6 +503,242 @@ export class ChatService {
     userId?: string, 
     orgId?: string
   ): AsyncGenerator<{
+    type: 'message_saved' | 'workflow_status' | 'ai_response' | 'workflow_complete' | 'error' | 'intent_classified';
+    data: any;
+  }> {
+    // Generate unique request ID for this streaming session
+    const requestId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    logger.info('🎯 SIMPLIFIED STREAMING: Starting unified workflow execution', {
+      requestId,
+      threadId: threadId.substring(0, 8),
+      userInput: content.substring(0, 50),
+      hasUserId: !!userId
+    });
+
+    try {
+      // Save user message first
+      const userMessage = await this.addMessage(threadId, content, true);
+      
+      yield {
+        type: 'message_saved',
+        data: { messageId: userMessage?.id, role: 'user', content }
+      };
+
+      // 🧠 UNIVERSAL INTENT CLASSIFICATION - Applied to ALL user messages
+      logger.info('🧠 Applying universal intent classification to user input');
+      
+      const currentWorkflow = await this.workflowService.getWorkflowByThreadId(threadId);
+      const ragContext = await this.gatherRagContext(threadId, userId, orgId);
+      
+      const intent = await this.classifyUserIntent(content, threadId, currentWorkflow, ragContext);
+      
+      yield {
+        type: 'intent_classified',
+        data: {
+          intent: {
+            category: intent.category,
+            action: intent.action,
+            workflowName: intent.workflowName,
+            confidence: intent.confidence,
+            reasoning: intent.reasoning
+          }
+        }
+      };
+
+      // Use enhanced service streaming with intent-aware processing
+      logger.info('🎯 Using Enhanced Service streaming with intent-aware workflow state preparation');
+
+      // Track accumulated content for streaming
+      let accumulatedContent = '';
+      
+      // Get current step or null if no active workflow
+      const currentStepId = await this.getCurrentStepForThread(threadId);
+      
+      // Determine which step ID to use
+      let effectiveStepId = currentStepId;
+      
+      // If no active workflow exists, create a new Base Workflow
+      if (!currentStepId) {
+        logger.info('🔄 No active workflow found - creating new Base Workflow', {
+          threadId: threadId.substring(0, 8),
+          userInput: content.substring(0, 50)
+        });
+        const newWorkflow = await this.workflowService.createWorkflow(threadId, '00000000-0000-0000-0000-000000000000', false);
+        effectiveStepId = newWorkflow.steps.find((step: any) => step.order === 0)?.id || null;
+        
+        logger.info('✅ Created new Base Workflow', {
+          workflowId: newWorkflow.id.substring(0, 8),
+          effectiveStepId: effectiveStepId?.substring(0, 8),
+          stepName: newWorkflow.steps.find((step: any) => step.order === 0)?.name
+        });
+      }
+      
+      // Ensure we have a valid step ID before proceeding
+      if (!effectiveStepId) {
+        logger.error('❌ No valid step ID found - cannot proceed with streaming');
+        yield {
+          type: 'error',
+          data: { message: 'No valid workflow step found' }
+        };
+        return;
+      }
+      
+      // Pass intent context to the enhanced workflow service
+      for await (const chunk of this.workflowService.handleStepResponseStreamWithContext(
+        effectiveStepId,
+        content,
+        userId || '',
+        orgId || '',
+        { intent } // Pass the classified intent to guide response generation
+      )) {
+        if (chunk.type === 'content') {
+          // Accumulate the content
+          if (chunk.data.content) {
+            accumulatedContent += chunk.data.content;
+          }
+          
+          yield {
+            type: 'ai_response',
+            data: {
+              ...chunk.data,
+              accumulated: accumulatedContent  // Send both latest chunk AND accumulated total
+            }
+          };
+        } else if (chunk.type === 'metadata') {
+          // Handle workflow transitions
+          if (chunk.data.workflowTransition) {
+            logger.info('🔄 Processing workflow transition', {
+              requestId,
+              from: 'Base Workflow',
+              to: chunk.data.workflowTransition.workflowName,
+              templateId: chunk.data.workflowTransition.newWorkflowId
+            });
+            
+            yield {
+              type: 'workflow_status',
+              data: {
+                status: 'transitioning',
+                workflowTransition: chunk.data.workflowTransition
+              }
+            };
+          }
+        } else if (chunk.type === 'error') {
+          yield {
+            type: 'error',
+            data: chunk.data
+          };
+        } else if (chunk.type === 'done') {
+          // Save the final accumulated response with proper structured messaging
+          if (chunk.data.finalResponse) {
+            // Check if this looks like an Asset Generation response that should use structured messaging
+            const assetType = this.detectAssetType(chunk.data.finalResponse);
+            
+            if (assetType) {
+              // Check if a similar asset message already exists to prevent duplicates
+              const recentMessages = await db.query.chatMessages.findMany({
+                where: eq(chatMessages.threadId, threadId),
+                orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+                limit: 10, // Check recent messages
+              });
+              
+              // Check if there's already a structured asset message with similar content
+              const existingAssetMessage = recentMessages.find(msg => {
+                if (msg.content && typeof msg.content === 'string' && msg.content.startsWith('{')) {
+                  try {
+                    const parsedContent = JSON.parse(msg.content);
+                    return parsedContent.type === 'asset' && 
+                           parsedContent.text && 
+                           parsedContent.text.length > 500; // Existing asset content
+                  } catch (e) {
+                    return false;
+                  }
+                }
+                return false;
+              });
+              
+              if (existingAssetMessage) {
+                logger.info('💾 Enhanced streaming: Skipping duplicate asset message - similar content already exists', {
+                  assetType,
+                  existingMessageId: existingAssetMessage.id
+                });
+              } else {
+                // Use structured asset messaging for Asset Generation responses
+                const currentStepId = await this.getCurrentStepForThread(threadId);
+                
+                // Only add structured asset message if we have a valid step ID
+                if (currentStepId) {
+                  // Call Enhanced Workflow Service to add asset message
+                  await this.workflowService.addAssetMessage(
+                    threadId,
+                    chunk.data.finalResponse,
+                    assetType,
+                    currentStepId,
+                    'Asset Generation'
+                  );
+                  
+                  logger.info('💾 Enhanced streaming: Asset message saved with structured content', {
+                    assetType,
+                    responseLength: chunk.data.finalResponse.length
+                  });
+                } else {
+                  // No active workflow - use regular message
+                  const aiMessage = await this.addMessage(threadId, chunk.data.finalResponse, false);
+                  logger.info('💾 Enhanced streaming: No active workflow - saved as regular message', {
+                    messageId: aiMessage?.id,
+                    responseLength: chunk.data.finalResponse.length
+                  });
+                }
+              }
+              
+            } else {
+              // Use structured message for non-asset steps (workflow selection, etc.)
+              const structuredContent = MessageContentHelper.createTextMessage(chunk.data.finalResponse);
+              
+              const [aiMessage] = await db.insert(chatMessages).values({
+                threadId,
+                content: JSON.stringify(structuredContent),
+                role: "assistant",
+                userId: "system",
+              }).returning();
+              
+              logger.info('💾 Enhanced streaming: Final AI message saved with structured content', {
+                messageId: aiMessage?.id,
+                responseLength: chunk.data.finalResponse.length,
+                messageType: 'structured_text'
+              });
+            }
+          }
+          
+          yield {
+            type: 'workflow_complete',
+            data: { success: true }
+          };
+          break;
+        }
+      }
+
+    } catch (error) {
+      logger.error('❌ Enhanced Streaming Failed', {
+        requestId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        threadId
+      });
+      
+      yield {
+        type: 'error',
+        data: { error: error instanceof Error ? error.message : 'Unknown error' }
+      };
+    }
+  }
+
+  // Keep the original complex method as backup during transition
+  async* handleUserMessageStreamOld(
+    threadId: string, 
+    content: string, 
+    userId?: string, 
+    orgId?: string
+  ): AsyncGenerator<{
     type: 'message_saved' | 'workflow_status' | 'ai_response' | 'workflow_complete' | 'error';
     data: any;
   }> {
@@ -487,26 +788,62 @@ export class ChatService {
         };
       }
 
+      // Check if user is asking for general help/workflow selection  
+      const isGeneralHelpRequest = this.isGeneralHelpRequest(content);
+      let currentStepForCheck = workflow?.steps?.find((step: any) => step.id === workflow?.currentStepId);
+      
+      // If user is asking for general help and we're not on the Workflow Selection step, restart the workflow
+      if (workflow && isGeneralHelpRequest && currentStepForCheck?.name !== "Workflow Selection") {
+        console.log(`🔄 CHAT SERVICE: Detected general help request while on step "${currentStepForCheck?.name}". Restarting workflow selection.`);
+        
+        // Complete the current workflow
+        await this.workflowService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
+        
+        // Create a new base workflow (not silent - we want the workflow selection step active)
+        const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
+        if (!baseTemplate) throw new Error("Base workflow template not found");
+        
+        workflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id, false);
+        console.log(`✅ CHAT SERVICE: Restarted base workflow for general help request. New workflow: ${workflow.id}`);
+        
+        yield {
+          type: 'workflow_status',
+          data: { status: 'workflow_restarted', workflowId: workflow.id }
+        };
+      }
+
       // Process the current step
       const currentStepId = workflow.currentStepId;
       if (!currentStepId) {
-        console.warn(`Workflow ${workflow.id} has no currentStepId. Attempting to get next prompt.`);
-        const prompt = await this.getNextPrompt(threadId, workflow.id);
+        console.warn(`Workflow ${workflow.id} has no currentStepId. Looking for first IN_PROGRESS step.`);
         
-        yield {
-          type: 'ai_response',
-          data: { content: prompt, isComplete: true }
-        };
-        return;
+        // Find the first IN_PROGRESS step (should be the first step we just created)
+        const inProgressStep = workflow.steps.find(step => step.status === StepStatus.IN_PROGRESS);
+        if (inProgressStep) {
+          console.log(`✅ Found IN_PROGRESS step: ${inProgressStep.name} (${inProgressStep.id})`);
+          // Update the workflow's currentStepId to this step
+          await this.workflowService.updateWorkflowCurrentStep(workflow.id, inProgressStep.id);
+          // Continue processing with this step
+          workflow.currentStepId = inProgressStep.id;
+        } else {
+          console.warn(`No IN_PROGRESS step found. Falling back to getNextPrompt.`);
+          const prompt = await this.getNextPrompt(threadId, workflow.id);
+          
+          yield {
+            type: 'ai_response',
+            data: { content: prompt, isComplete: true }
+          };
+          return;
+        }
       }
 
       // Get the current step before processing
-      const currentStep = workflow.steps.find(step => step.id === currentStepId);
+      const currentStep = workflow.steps.find(step => step.id === workflow.currentStepId);
       
       // Handle streaming step response using enhanced context if user info is available
       const stepResponseGenerator = userId && orgId 
-        ? this.workflowService.handleStepResponseStreamWithContext(currentStepId, content, userId, orgId)
-        : this.workflowService.handleStepResponseStream(currentStepId, content);
+        ? this.workflowService.handleStepResponseStreamWithContext(workflow.currentStepId!, content, userId, orgId)
+        : this.workflowService.handleStepResponseStream(workflow.currentStepId!, content);
 
       let stepResponse: any = null;
       let accumulatedResponse = '';
@@ -665,6 +1002,13 @@ export class ChatService {
           };
         }
       } else {
+        // Check if enhanced service indicated to skip original processing
+        if (stepResponse?.skipOriginalProcessing) {
+          console.log(`🔇 Step ${currentStepId} processed by enhanced service - skipping getNextPrompt fallback.`);
+          // Enhanced service already handled everything, no additional processing needed
+          return;
+        }
+        
         // Fallback to getNextPrompt
         console.warn(`Step ${currentStepId} processed, workflow not complete, but handleStepResponse provided no next step. Calling getNextPrompt.`);
         const nextPrompt = await this.getNextPrompt(threadId, workflow.id);
@@ -689,6 +1033,197 @@ export class ChatService {
           threadId
         }
       };
+    }
+  }
+
+  // Check if user input is a general help request that should restart workflow selection
+  private isGeneralHelpRequest(content: string): boolean {
+    const lowerContent = content.toLowerCase().trim();
+    
+    // Common patterns for general help requests
+    const helpPatterns = [
+      'what can i do',
+      'what can you do',
+      'what are my options',
+      'help',
+      'options',
+      'menu',
+      'workflows',
+      'what workflows',
+      'list workflows',
+      'available workflows'
+    ];
+    
+    // Single character or very short inputs that suggest confusion
+    const isVeryShort = content.trim().length <= 2;
+    
+    // Check if any help pattern matches
+    const matchesHelpPattern = helpPatterns.some(pattern => lowerContent.includes(pattern));
+    
+    return matchesHelpPattern || isVeryShort;
+  }
+
+  /**
+   * Get current step for thread (helper for enhanced service integration)
+   */
+  private async getCurrentStepForThread(threadId: string): Promise<string | null> {
+    try {
+      // Get workflow from enhanced service
+      const workflowFromDB = await this.workflowService.getWorkflowByThreadId(threadId);
+      
+      if (workflowFromDB?.currentStepId) {
+        return workflowFromDB.currentStepId;
+      }
+      
+      // If no current step, find the first step
+      const firstStep = workflowFromDB?.steps?.find((step: any) => step.order === 0);
+      if (firstStep) {
+        return firstStep.id;
+      }
+      
+      // If no active workflow exists, return null - enhanced service will create new Base Workflow
+      return null;
+      
+    } catch (error) {
+      logger.error('Error getting current step for thread', {
+        threadId,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      
+      // Enhanced service will handle workflow/step creation
+      return null;
+    }
+  }
+
+  /**
+   * Universal Intent Classification for all user messages
+   */
+  private async classifyUserIntent(
+    userMessage: string,
+    threadId: string,
+    currentWorkflow?: any,
+    ragContext?: any
+  ): Promise<UserIntent> {
+    try {
+      const intentContext: IntentContext = {
+        userMessage,
+        conversationHistory: this.extractConversationHistory(ragContext),
+        currentWorkflow: currentWorkflow ? {
+          name: this.getWorkflowDisplayName(currentWorkflow) || 'Unknown',
+          currentStep: this.getCurrentStepName(ragContext) || 'Unknown',
+          status: currentWorkflow.status || 'unknown'
+        } : undefined,
+        userProfile: ragContext?.userDefaults,
+        availableWorkflows: this.intentService.getAvailableWorkflows()
+      };
+
+      return await this.intentService.classifyIntent(intentContext);
+    } catch (error) {
+      logger.error('Intent classification failed, using fallback', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        threadId: threadId.substring(0, 8),
+        userMessage: userMessage.substring(0, 50)
+      });
+
+      // Fallback to conversational intent
+      return {
+        category: 'conversational',
+        action: 'general_conversation',
+        confidence: 0.3,
+        reasoning: 'Fallback due to classification error'
+      };
+    }
+  }
+
+  /**
+   * Gather RAG context for intent classification
+   */
+  private async gatherRagContext(threadId: string, userId?: string, orgId?: string): Promise<any> {
+    if (!userId || !orgId) return null;
+
+    try {
+      // Use the RAG service to get relevant context for intent classification
+      return await ragService.getRelevantContext(userId, orgId, 'intent_classification', 'classification', 'intent context');
+    } catch (error) {
+      logger.warn('Failed to gather RAG context for intent classification', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        threadId: threadId.substring(0, 8)
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Get display name for workflow from various sources
+   */
+  private getWorkflowDisplayName(workflow: any): string | null {
+    // Try template name first, then fall back to template ID mapping
+    if (workflow.templateName) return workflow.templateName;
+    
+    // Map template IDs to display names
+    const templateIdMap: Record<string, string> = {
+      '00000000-0000-0000-0000-000000000008': 'Press Release',
+      '00000000-0000-0000-0000-000000000010': 'Social Post',
+      '00000000-0000-0000-0000-000000000011': 'Blog Article',
+      '00000000-0000-0000-0000-000000000009': 'Media Pitch',
+      '00000000-0000-0000-0000-000000000012': 'FAQ',
+      '00000000-0000-0000-0000-000000000002': 'Launch Announcement',
+      '00000000-0000-0000-0000-000000000003': 'JSON Dialog PR Workflow'
+    };
+    
+    return templateIdMap[workflow.templateId] || null;
+  }
+
+  /**
+   * Get current step name from RAG context
+   */
+  private getCurrentStepName(ragContext?: any): string | null {
+    // Try to extract from workflow state in RAG context
+    const workflowState = ragContext?.sources?.find((s: any) => s.type === 'workflow_state');
+    if (workflowState?.snippet) {
+      const match = workflowState.snippet.match(/Step: ([^-]+)/);
+      if (match) return match[1].trim();
+    }
+    return null;
+  }
+
+  /**
+   * Extract conversation history from RAG context
+   */
+  private extractConversationHistory(ragContext?: any): string[] {
+    if (!ragContext?.conversationContext) return [];
+
+    try {
+      return ragContext.conversationContext
+        .slice(-10) // Increased to 10 messages for better context
+        .map((msg: any) => {
+          let content = msg.content;
+          
+          // Handle structured messages that are JSON stringified
+          if (typeof content === 'string' && content.startsWith('{"type"')) {
+            try {
+              const parsed = JSON.parse(content);
+              content = parsed.text || content;
+            } catch {
+              // If parsing fails, use original content
+            }
+          }
+          
+          // Clean up content - remove quotes and escape sequences
+          content = content
+            .replace(/^\"|\"$/g, '')
+            .replace(/\\"/g, '"')
+            .replace(/\\n/g, ' ')
+            .trim();
+          
+          return `${msg.role}: ${content}`;
+        })
+        .filter((msg: string) => msg.length > 10); // Filter out very short messages
+    } catch (error) {
+      logger.warn('Failed to extract conversation history from RAG context', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      return [];
     }
   }
 

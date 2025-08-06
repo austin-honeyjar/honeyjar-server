@@ -13,7 +13,7 @@ import { join } from 'path';
 import logger from './utils/logger';
 import csvRoutes from './routes/csv.routes';
 import chatRoutes from './routes/chat.routes';
-import contextAwareChatRoutes from './routes/contextAwareChat.routes';
+
 import ragRoutes from './routes/rag.routes';
 import threadsRoutes from './routes/threads.routes';
 import assetRoutes from './routes/asset.routes';
@@ -21,7 +21,7 @@ import userRoutes from './routes/user.routes';
 import metabaseRoutes from './routes/metabase.routes';
 import rocketreachRoutes from './routes/rocketreach.routes';
 import newsRoutes from './routes/news.routes';
-import { WorkflowService } from './services/workflow.service';
+import { enhancedWorkflowService } from './services/enhanced-workflow.service';
 import { db, ensureTables } from './db/index';
 import { sql } from 'drizzle-orm';
 import { backgroundWorker } from './workers/backgroundWorker';
@@ -46,7 +46,7 @@ app.use(rateLimiter);
 app.use(config.server.apiPrefix + '/auth', authRoutes);
 app.use(config.server.apiPrefix + '/csv', csvRoutes);
 app.use(config.server.apiPrefix + '/chat', chatRoutes);
-app.use(config.server.apiPrefix + '/chat', contextAwareChatRoutes);
+
 app.use(config.server.apiPrefix + '/rag', ragRoutes);
 app.use(config.server.apiPrefix + '/threads', threadsRoutes);
 app.use(config.server.apiPrefix + '/metabase', metabaseRoutes);
@@ -1919,16 +1919,14 @@ if (process.env.NODE_ENV !== 'test') {
         logger.warn('Workflow context initialization had errors, but continuing startup');
       }
       
-      // Initialize workflow templates
-      const workflowService = new WorkflowService();
+      // Initialize workflow templates  
+      const workflowService = enhancedWorkflowService;
       
-      // Log templates
-      return workflowService.initializeTemplates().then(() => {
-        console.log('Workflow templates initialized');
+      // Enhanced service doesn't need template initialization (templates are loaded in memory)
+      console.log('Workflow templates initialized (Enhanced Service)');
         
-        // Initialize background services
-        return initializeBackgroundServices();
-      }).then(() => {
+      // Initialize background services
+      return initializeBackgroundServices().then(() => {
         // Start the server
         app.listen(port, () => {
           logger.info(`Server listening on port ${port}`);
@@ -1942,7 +1940,7 @@ if (process.env.NODE_ENV !== 'test') {
         });
       });
     })
-    .catch((err) => {
+    .catch((err: any) => {
       logger.error('Server startup error:', err);
       process.exit(1);
     });

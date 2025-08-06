@@ -12,7 +12,7 @@ import { chatController } from '../controllers/chatController';
 import { requireOrgRole } from '../middleware/org.middleware';
 import { WorkflowDBService } from '../services/workflowDB.service';
 import { ChatService } from '../services/chat.service';
-import { WorkflowService } from '../services/workflow.service';
+import { enhancedWorkflowService } from '../services/enhanced-workflow.service';
 import { simpleCache } from '../utils/simpleCache';
 import { requirePermission } from '../middleware/permissions.middleware';
 import { ApiError } from '../utils/error';
@@ -364,7 +364,7 @@ router.post('/', async (req: AuthRequest, res) => {
       .returning();
     
     // Initialize the base workflow
-    const workflowService = new WorkflowService();
+    const workflowService = enhancedWorkflowService;
     const chatService = new ChatService();
     
     // Get the base workflow template

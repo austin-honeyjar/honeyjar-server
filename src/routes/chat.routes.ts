@@ -64,7 +64,9 @@ router.post('/threads/:threadId/messages', async (req, res) => {
     const { threadId } = req.params;
     const { content } = req.body;
     const userId = req.user?.id || 'anonymous';
-    const orgId = '';
+    const orgId = Array.isArray(req.headers['x-organization-id'])
+      ? req.headers['x-organization-id'][0] 
+      : req.headers['x-organization-id'] || '';
     
     if (!content) {
       return res.status(400).json({ error: 'Content is required' });
@@ -85,7 +87,9 @@ router.post('/threads/:threadId/messages/stream', async (req, res) => {
     const { threadId } = req.params;
     const { content } = req.body;
     const userId = req.user?.id || 'anonymous';
-    const orgId = '';
+    const orgId = Array.isArray(req.headers['x-organization-id'])
+      ? req.headers['x-organization-id'][0] 
+      : req.headers['x-organization-id'] || '';
     
     if (!content) {
       return res.status(400).json({ error: 'Content is required' });

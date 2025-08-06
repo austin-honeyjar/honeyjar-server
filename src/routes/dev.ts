@@ -76,7 +76,8 @@ devRoutes.post('/test-enhanced-workflow', async (req, res) => {
       testResult: result,
       enhancedServiceResult: enhancedResult,
       timestamp: new Date().toISOString(),
-      testScenario: scenario.id
+      testScenario: scenario.id,
+      success: true
     });
   } catch (error) {
     logger.error('Enhanced workflow test failed', { error: error instanceof Error ? error.message : 'Unknown error' });
@@ -278,6 +279,58 @@ devRoutes.post('/test-knowledge-management', async (req, res) => {
     logger.error('Knowledge management test failed', { error: error instanceof Error ? error.message : 'Unknown error' });
     res.status(500).json({ 
       error: 'Knowledge management test execution failed', 
+      details: error instanceof Error ? error.message : 'Unknown error' 
+    });
+  }
+});
+
+/**
+ * GET /api/dev/verify-enhanced-migration
+ * Verify that the migration from WorkflowService to EnhancedWorkflowService is complete
+ */
+devRoutes.get('/verify-enhanced-migration', async (req, res) => {
+  try {
+    logger.info('Running enhanced workflow migration verification');
+
+    // Test the enhanced workflow service integration
+    const integrationTest = enhancedWorkflowService.verifyServiceIntegration();
+    
+    // Get service status
+    const serviceStatus = {
+      ragService: !!enhancedWorkflowService['ragService'],
+      securityService: !!enhancedWorkflowService['securityService'],
+      contextService: !!enhancedWorkflowService['contextService'],
+      chatService: !!enhancedWorkflowService['chatService'],
+      embeddingService: !!enhancedWorkflowService['embeddingService'],
+      stepHandlers: !!enhancedWorkflowService['stepHandlers'],
+      openAIService: !!enhancedWorkflowService['openAIService'],
+      assetService: !!enhancedWorkflowService['assetService'],
+      jsonDialogService: !!enhancedWorkflowService['jsonDialogService'],
+      originalService: false // Should be false - fully migrated
+    };
+
+    const failedServices = Object.entries(serviceStatus)
+      .filter(([service, active]) => service !== 'originalService' && !active)
+      .map(([service]) => service);
+
+    const migrationComplete = failedServices.length === 0 && !serviceStatus.originalService;
+
+    res.json({
+      migrationComplete,
+      validationResults: serviceStatus,
+      failedServices,
+      integrationTest,
+      timestamp: new Date().toISOString(),
+      message: migrationComplete 
+        ? 'Migration successfully completed - EnhancedWorkflowService fully operational'
+        : `Migration incomplete - failed services: ${failedServices.join(', ')}`
+    });
+
+  } catch (error) {
+    logger.error('Migration verification failed', { error: error instanceof Error ? error.message : 'Unknown error' });
+    res.status(500).json({ 
+      migrationComplete: false,
+      error: 'Migration verification failed', 
       details: error instanceof Error ? error.message : 'Unknown error' 
     });
   }
@@ -493,6 +546,65 @@ devRoutes.post('/run-test-suite', async (req, res) => {
     logger.error('Test suite execution failed', { error: error instanceof Error ? error.message : 'Unknown error' });
     res.status(500).json({ 
       error: 'Test suite execution failed', 
+      details: error instanceof Error ? error.message : 'Unknown error' 
+    });
+  }
+});
+
+// Debug endpoint to check Asset Review system message
+devRoutes.get('/debug-asset-review-prompt/:threadId', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    logger.info('Debugging Asset Review prompt for thread', { threadId });
+
+    // Get current workflow for thread
+    const workflow = await enhancedWorkflowService.getWorkflowByThreadId(threadId);
+    if (!workflow) {
+      return res.status(404).json({ error: 'No workflow found for thread' });
+    }
+
+    // Get current step
+    const currentStep = workflow.steps.find(s => s.id === workflow.currentStepId);
+    if (!currentStep || currentStep.name !== 'Asset Review') {
+      return res.status(400).json({ error: 'Current step is not Asset Review' });
+    }
+
+    // Get RAG context (simplified for debugging)
+    const ragContext = {
+      userDefaults: {
+        companyName: 'Honeyjar',
+        industry: 'PR Tech'
+      }
+    };
+
+    // Build the actual system message that would be sent to OpenAI
+    const systemMessage = currentStep.metadata?.baseInstructions || 'No base instructions found';
+    const prompt = currentStep.prompt || 'No prompt found';
+
+    res.json({
+      threadId,
+      workflowId: workflow.id,
+      currentStep: {
+        id: currentStep.id,
+        name: currentStep.name,
+        stepType: currentStep.stepType || 'json_dialog'
+      },
+      systemMessage: systemMessage,
+      prompt: prompt,
+      ragContext: {
+        hasUserDefaults: !!ragContext?.userDefaults,
+        companyName: ragContext?.userDefaults?.companyName,
+        industry: ragContext?.userDefaults?.industry
+      },
+      templateData: {
+        templateId: workflow.templateId
+      }
+    });
+
+  } catch (error) {
+    logger.error('Debug Asset Review prompt failed', { error: error instanceof Error ? error.message : 'Unknown error' });
+    res.status(500).json({ 
+      error: 'Debug failed', 
       details: error instanceof Error ? error.message : 'Unknown error' 
     });
   }

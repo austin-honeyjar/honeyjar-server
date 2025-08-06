@@ -1,4 +1,4 @@
-import { WorkflowService } from '../src/services/workflow.service.js';
+import { enhancedWorkflowService } from '../src/services/enhanced-workflow.service.js';
 import { ChatService } from '../src/services/chat.service.js';
 import { AssetService } from '../src/services/asset.service.js';
 import { db } from '../src/db/index.js';
@@ -62,7 +62,7 @@ async function runBaseThenLaunchTest() {
     const { baseTemplate, launchTemplate } = await setupTestDatabase();
 
     // Initialize services
-    const workflowService = new WorkflowService();
+    const workflowService = enhancedWorkflowService;
     const chatService = new ChatService();
     const assetService = new AssetService();
     

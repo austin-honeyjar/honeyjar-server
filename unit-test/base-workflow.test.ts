@@ -1,4 +1,4 @@
-import { WorkflowService } from '../src/services/workflow.service.js';
+import { enhancedWorkflowService } from '../src/services/enhanced-workflow.service.js';
 import { ChatService } from '../src/services/chat.service.js';
 import { db } from '../src/db/index.js';
 import { chatThreads, workflowTemplates } from '../src/db/schema.js';
@@ -60,7 +60,7 @@ async function runCombinedWorkflowTest() {
     const { baseTemplate, dummyTemplate } = await setupTestDatabase();
 
     // Initialize services
-    const workflowService = new WorkflowService();
+    const workflowService = enhancedWorkflowService;
     const chatService = new ChatService();
     
     // === Test Start ===

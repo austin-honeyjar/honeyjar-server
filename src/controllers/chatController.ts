@@ -4,7 +4,6 @@ import { chatThreads, chatMessages } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import logger from '../utils/logger';
 import { CreateChatInput, CreateThreadInput } from '../validators/chat.validator';
-import { WorkflowService } from '../services/workflow.service';
 import { ChatService } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';
 import { simpleCache } from '../utils/simpleCache';

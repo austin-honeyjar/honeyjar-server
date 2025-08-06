@@ -710,4 +710,57 @@ Return ONLY the new prompt text. Do not include any explanations, metadata, or f
       return step.prompt || "";
     }
   }
+
+  /**
+   * Generate a simple AI response for general use cases like intent classification
+   */
+  async generateResponse(
+    systemPrompt: string,
+    userInput: string,
+    options: {
+      model?: string;
+      temperature?: number;
+      max_tokens?: number;
+    } = {}
+  ): Promise<string> {
+    try {
+      const { model = 'gpt-4o-mini', temperature = 0.7, max_tokens = 500 } = options;
+
+      logger.info('Generating OpenAI response for general use', {
+        model,
+        temperature,
+        max_tokens,
+        systemPromptLength: systemPrompt.length,
+        userInputLength: userInput.length
+      });
+
+      const response = await this.client.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userInput }
+        ],
+        temperature,
+        max_tokens,
+      });
+
+      const content = response.choices[0]?.message?.content || '';
+      
+      logger.info('✅ OpenAI response generated for general use', {
+        responseLength: content.length,
+        model,
+        usage: response.usage
+      });
+
+      return content;
+
+    } catch (error) {
+      logger.error('❌ OpenAI general response generation failed', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        systemPromptLength: systemPrompt.length,
+        userInputLength: userInput.length
+      });
+      throw error;
+    }
+  }
 } 

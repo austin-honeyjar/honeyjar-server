@@ -157,6 +157,19 @@ export class JsonDialogService {
         }
       };
 
+      // 🔍 DEBUG: Log the complete system prompt being sent to OpenAI
+      logger.info('🔍 SYSTEM PROMPT DEBUG - Asset Review', {
+        stepId: step.id,
+        stepName: step.name,
+        systemPromptLength: systemPrompt.length,
+        userInput: userInput,
+        systemPromptPreview: systemPrompt.substring(0, 500) + '...',
+        systemPromptEnd: '...' + systemPrompt.substring(systemPrompt.length - 300),
+        containsJSONInstructions: systemPrompt.includes('JSON') || systemPrompt.includes('json'),
+        containsRevisedAsset: systemPrompt.includes('revisedAsset'),
+        containsCriticalInstructions: systemPrompt.includes('CRITICAL')
+      });
+
       // Call OpenAI to process the user input
       const openAIResult = await this.openAIService.generateStepResponse(
         customStep,
@@ -229,15 +242,23 @@ export class JsonDialogService {
           completionPercentage: responseData.completionPercentage || 0
         });
       } catch (error) {
-        logger.error('Error parsing JSON dialog response', {
-          error: error instanceof Error ? error.message : 'Unknown error'
+        logger.error('🚨 JSON PARSING FAILED - AI returned non-JSON response', {
+          stepId: step.id,
+          stepName: step.name,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          aiRawResponse: openAIResult.responseText,
+          aiResponseLength: openAIResult.responseText.length,
+          cleanedResponse: cleanedResponseText,
+          userInput: userInput,
+          systemPromptPreview: systemPrompt.substring(0, 200) + '...',
+          criticalIssue: 'AI_NOT_FOLLOWING_JSON_INSTRUCTIONS'
         });
         
         // Create a default response if parsing fails
         responseData = {
           isComplete: false,
           collectedInformation: collectedInfo,
-          nextQuestion: "I'm having trouble understanding. Could you please be more specific?"
+          nextQuestion: openAIResult.responseText // Use the actual AI response instead of generic message
         };
       }
 
@@ -524,11 +545,10 @@ export class JsonDialogService {
                 }
               }
               
-              // USE UNIFIED METHOD: Import WorkflowService and use addAssetMessage
-              const { WorkflowService } = await import('./workflow.service');
-              const workflowService = new WorkflowService();
+              // USE UNIFIED METHOD: Import EnhancedWorkflowService and use addAssetMessage
+              const { enhancedWorkflowService } = await import('./enhanced-workflow.service');
               
-              await workflowService.addAssetMessage(
+              await enhancedWorkflowService.addAssetMessage(
                 actualThreadId,
                 cleanDisplayContent,
                 assetType,
@@ -762,7 +782,7 @@ If the user is asking a question or needs help (conversational mode):
     "conversationalResponse": "Your helpful response using available context"
   },
   "nextQuestion": null,
-  "suggestedNextStep": "Auto Generate Thread Title"
+  "suggestedNextStep": null
 }`;
     }
     // Special case for thread title
@@ -823,6 +843,21 @@ If the user is asking a question or needs help:
         }
       }
       
+      // Check if this step has a custom baseInstructions with its own RESPONSE FORMAT
+      const baseInstructions = step.metadata?.baseInstructions || '';
+      const hasCustomResponseFormat = baseInstructions.includes('RESPONSE FORMAT:');
+      
+      // If the step defines its own format, use it directly
+      if (hasCustomResponseFormat) {
+        return baseInstructions + `
+
+CURRENT USER INPUT:
+"${currentUserInput}"
+
+IMPORTANT: Follow the RESPONSE FORMAT specified above. You MUST respond with ONLY valid JSON in the exact format defined in the RESPONSE FORMAT section.`;
+      }
+      
+      // Otherwise, use the generic format
       // Calculate what information we already have vs what we still need
       const infoTracking = this.generateInfoTrackingStatus(collectedInfo, requiredFields);
       
