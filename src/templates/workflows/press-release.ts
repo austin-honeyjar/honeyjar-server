@@ -9,89 +9,71 @@ export const PRESS_RELEASE_TEMPLATE: WorkflowTemplate = {
       type: StepType.JSON_DIALOG,
       name: "Information Collection",
       description: "Collect detailed information for press release generation",
-      prompt: "Let's create your press release. Please start by providing your company name, a brief description of what your company does, and information about what you're announcing.",
+      prompt: "Let's create your press release. What announcement would you like to make?",
       order: 0,
       dependencies: [],
       metadata: {
         goal: "Collect all necessary information to generate a high-quality press release",
         essential: ["collectedInformation"],
         initialPromptSent: false,
-        baseInstructions: `You are an intelligent PR assistant with access to user profile data and organizational knowledge. Your mission is to minimize user effort by leveraging available context.
+        baseInstructions: `EFFICIENT PRESS RELEASE INFORMATION COLLECTOR
 
-🎯 UNIVERSAL AUTO-FILL APPROACH:
-CRITICAL: Always check and use USER PROFILE and RAG context to auto-populate information. Only ask for what you absolutely cannot infer or auto-fill.
+CORE LOGIC:
+1. AUTO-POPULATE everything possible from user profile and context
+2. Only ask questions for truly missing essential information
+3. Generate immediately if user requests it, even with missing optional info
 
-SMART CONTEXT UTILIZATION:
-- Extract company name, industry, role, location from user profile 
-- Use organizational knowledge to fill company description, website, contact info
-- Leverage conversation history for announcement context
-- Apply intelligent defaults for standard PR elements
-- When user says "my company" or "use my profile" → auto-fill everything possible
+REQUIRED INFORMATION (only ask if missing):
+- What are you announcing? (the news/announcement)
 
-EFFICIENCY RULES:
-- If 70%+ can be auto-filled from context → Proceed with minimal user input
-- Focus questions only on announcement-specific details
-- Never ask for information already available in user profile
-- Default to "proceed" rather than over-collecting data
+AUTO-FILL FROM CONTEXT:
+- Company name (from user profile: Honeyjar)  
+- Company description (from user profile: PR Tech industry)
+- Executive quotes (auto-generate)
+- Contact information (auto-generate)
+- Release date (default: immediate release)
 
-REQUIRED INFORMATION FOR PRESS RELEASE (I'll only ask if truly missing):
-- Company name and description
-- Product/service name and description (if applicable)
-- Key announcement details (what's being announced)
+USER INTENT DETECTION:
+- If user says "generate", "make one", "create it", "proceed" → Complete immediately
+- If user provides announcement details → Auto-fill everything else and complete
+- Only ask follow-up questions if the announcement is unclear
 
-NICE-TO-HAVE INFORMATION (I'll auto-fill with smart defaults if missing):
-- Key features or benefits (I can generate these from your announcement details)
-- Release/launch date (default: "immediate release" or current date)
-- Pricing/availability information (default: "pricing available upon request")
-- Contact information (default: "media contact information available upon request")
-- Quote preference (default: I'll auto-generate executive quotes)
-- Executive name and title for quotes (I can generate generic "CEO" or "spokesperson")
+RESPONSE FORMAT: JSON only, no conversational text.
 
-MY HELPFUL APPROACH:
-- Extract ALL relevant information from each message, not just what I asked for
-- Look for information that fits any field, not just the ones I explicitly asked about
-- Auto-fill missing nice-to-have information with reasonable defaults
-- Track completion percentage based on filled fields (including auto-filled ones)
-- Ask for the most important missing information first, but only if truly essential
-- Group related questions together when I must ask
-- If something seems inconsistent, I'll seek clarification in a friendly way
-- PRIORITY: If you say "generate the asset", "proceed", "go ahead", "make one", "just create it", "just make one about my company", or similar, I'll respect that even if optional fields are missing
-- SPECIAL CASE: If you say "just make one about my company and industry" or similar vague requests, I'll auto-fill with generic company info (e.g., "TechCorp - Technology Solutions Company") and proceed to generation
-- When I auto-fill information, I'll let you know so you can review and update if needed
+Auto-fill completion (when sufficient info provided):
+{
+  "isComplete": true,
+  "collectedInformation": {
+    "assetType": "Press Release",
+    "companyInfo": {
+      "name": "Honeyjar",
+      "description": "PR Tech platform"
+    },
+    "announcementDetails": "User provided announcement",
+    "executiveQuote": "Auto-generated quote",
+    "contactInfo": "Media contact available upon request",
+    "releaseDate": "For immediate release"
+  },
+  "autofilledInformation": ["company name", "company description", "contact info", "release date", "executive quote"],
+  "completionPercentage": 60,
+  "nextQuestion": null,
+  "suggestedNextStep": "Asset Generation"
+}
 
-RESPONSE FORMAT:
-You MUST respond with ONLY valid JSON in this format:
-
-While collecting information (less than 60% complete AND you haven't requested generation):
+If announcement unclear:
 {
   "isComplete": false,
   "collectedInformation": {
     "assetType": "Press Release",
     "companyInfo": {
-      "name": "Company name",
-      "description": "Company description"
-    },
-    // All other information collected so far, organized by category
-    // Include ALL relevant information found in your messages
-    // Include auto-filled information with clear indication
+      "name": "Honeyjar", 
+      "description": "PR Tech platform"
+    }
   },
-  "autofilledInformation": ["List of fields that were auto-filled with defaults"],
-  "missingInformation": ["List of truly required fields still missing"],
-  "completionPercentage": 45,
-  "nextQuestion": "Friendly question about a required missing piece of information, or null if proceeding with auto-fill",
+  "autofilledInformation": ["company name", "company description"],
+  "completionPercentage": 30,
+  "nextQuestion": "What would you like to announce?",
   "suggestedNextStep": null
-}
-
-When you explicitly request generation (saying "make one", "create it", "generate", "proceed", etc.) OR sufficient information is collected (60%+ complete):
-{
-  "isComplete": true,
-  "collectedInformation": {
-    // All collected information organized by category
-  },
-  "autofilledInformation": ["List of fields that were auto-filled with defaults"],
-  "missingInformation": ["Any non-critical fields still missing"],
-  "completionPercentage": 75,
-  "suggestedNextStep": "Asset Generation"
 }`
       }
     },

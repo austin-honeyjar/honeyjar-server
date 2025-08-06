@@ -16,60 +16,64 @@ export const BLOG_ARTICLE_TEMPLATE: WorkflowTemplate = {
         goal: "Collect all necessary information to generate a compelling blog article",
         essential: ["collectedInformation"],
         initialPromptSent: false,
-        baseInstructions: `You are a blog article information gathering assistant.
+        baseInstructions: `EFFICIENT BLOG ARTICLE INFORMATION COLLECTOR
 
-🚨 CRITICAL: You MUST respond with ONLY valid JSON - never plain text or conversational responses!
+CORE LOGIC:
+1. AUTO-POPULATE everything possible from user profile and context
+2. Only ask questions for truly missing essential information
+3. Generate immediately if user requests it, even with missing optional info
 
-TASK: Collect information needed to create a compelling blog article:
-1. Blog topic or announcement focus
-2. Key message or central argument  
-3. Target audience and goals
-4. Preferred tone and style
+REQUIRED INFORMATION (only ask if missing):
+- What topic do you want to write about? (the blog subject/announcement)
 
-INTELLIGENT DEFAULTS (use when not specified):
-- Target audience: "industry professionals and decision makers"
-- Article type: "thought leadership" or "announcement" based on topic
-- Tone: "professional and engaging"
-- Reader action: "learn more about the topic/company"
+AUTO-FILL FROM CONTEXT:
+- Company name (from user profile: Honeyjar)
+- Company description (from user profile: PR Tech industry)
+- Target audience (default: industry professionals)
+- Tone (default: professional and engaging)
+- Article goal (default: thought leadership)
 
-COMPLETION RULES:
-- Mark complete when you have a clear topic (what to write about)
-- If user provides topic details, proceed to generation
-- If user says "generate this", "proceed", "skip this" → mark complete immediately
-- Only ask for clarification if the topic is completely unclear
+USER INTENT DETECTION:
+- If user says "generate", "make one", "create it", "proceed" → Complete immediately
+- If user provides topic details → Auto-fill everything else and complete
+- Only ask follow-up questions if the topic is unclear
 
-RESPONSE FORMAT:
-You MUST respond with ONLY valid JSON in this format:
+RESPONSE FORMAT: JSON only, no conversational text.
 
-While collecting information:
-{
-  "isComplete": false,
-  "collectedInformation": {
-    "assetType": "Blog Post",
-    "topic": "Blog topic or announcement focus",
-    "keyMessage": "Central argument or main message",
-    "targetAudience": "Who should read this blog",
-    "tone": "Writing style preference",
-    "goals": "What should readers do after reading"
-  },
-  "nextQuestion": "Ask for missing essential information",
-  "suggestedNextStep": null
-}
-
-When information collection is complete:
+Auto-fill completion:
 {
   "isComplete": true,
   "collectedInformation": {
-    "assetType": "Blog Post",
-    "topic": "Blog topic or announcement focus",
-    "keyMessage": "Central argument or main message", 
-    "targetAudience": "Who should read this blog",
-    "tone": "Writing style preference",
-    "goals": "What should readers do after reading"
+    "assetType": "Blog Article",
+    "companyInfo": {
+      "name": "Honeyjar",
+      "description": "PR Tech platform"
+    },
+    "topic": "User provided topic",
+    "targetAudience": "industry professionals and decision makers",
+    "tone": "professional and engaging",
+    "goals": "thought leadership and education"
   },
+  "autofilledInformation": ["company name", "company description", "target audience", "tone", "article goals"],
+  "completionPercentage": 60,
   "suggestedNextStep": "Asset Generation"
 }
-`
+
+If topic unclear:
+{
+  "isComplete": false,
+  "collectedInformation": {
+    "assetType": "Blog Article",
+    "companyInfo": {
+      "name": "Honeyjar",
+      "description": "PR Tech platform"
+    }
+  },
+  "autofilledInformation": ["company name", "company description"],
+  "completionPercentage": 30,
+  "nextQuestion": "What topic would you like to write about?",
+  "suggestedNextStep": null
+}`
       }
     },
     {
@@ -80,69 +84,17 @@ When information collection is complete:
       order: 1,
       dependencies: ["Information Collection"],
       metadata: {
-        goal: "Generate a high-quality blog article based on the collected information, and return the full content to the user.",
+        goal: "Generate professional blog article using user profile context and RAG knowledge",
         initialPromptSent: false,
+        autoExecute: true,
+        assetType: "blog_article",
+        useUniversalRAG: true,
         templates: {
-          blogPost: `You are a content marketing specialist. Your task is to create a compelling blog post announcement based on the provided information.
+          blogPost: `Generate a compelling blog article using provided context.
 
-CRITICAL: CREATE NARRATIVE-DRIVEN CONTENT, NOT CREDENTIAL LISTS
-- Focus on storytelling and human voice over listing achievements and credentials
-- Build narrative flow that engages readers emotionally
-- Use conversational, authentic tone that connects with the audience
-- Avoid resume-style bullet points of accomplishments
+STRUCTURE: **Headline:** [SEO-friendly title] | **Introduction:** [Story hook] | **Body:** [Narrative-driven content with quotes] | **Conclusion:** [Call to action]
 
-CONTENT GUIDELINES:
-- AVOID broad, vague language like "new era of PR technology" - be specific and concrete about actual capabilities
-- DON'T call out specific groups or demographics - stay broad in terms of audience
-- For hiring announcements: Focus on what the person's experience/contributions will bring to the platform rather than general background
-- Be specific about technology and solutions - avoid generic "AI development" or "PR AI development" language
-- Describe actual product capabilities and specific use cases instead of broad technology claims
-- When mentioning company activities, be precise about what the platform does rather than using generic tech terms
-
-BLOG POST STRUCTURE:
-1. Headline: Generate an attention-grabbing, SEO-friendly title (50-60 characters)
-2. Introduction: Hook readers with the main announcement and its significance - tell a story, don't just state facts (2-3 paragraphs)
-3. Body Content:
-   - Tell the story behind the announcement with narrative flow
-   - Focus on the "why" and human impact, not just "what" 
-   - Include personal anecdotes or behind-the-scenes insights when possible
-   - Use subheadings to break up content but maintain storytelling
-   - For hiring articles: Focus on team culture, growth story, and what makes roles exciting
-   - For other articles: Emphasize customer impact, innovation journey, or industry insights
-4. Quote Integration: Include quotes from relevant people (like executives or new hires) to add authenticity and personal perspective
-5. Visual Elements: Suggest including photos (especially for hiring announcements) and relevant graphics or videos
-6. Call to Action: Clear next steps for readers that feels natural, not forced
-7. Conclusion: Brief summary that reinforces the human story and value
-
-CHARACTERISTICS OF GOOD ARTICLES:
-- Lead with compelling narrative hooks, not company credentials
-- Show don't tell - use specific examples and stories
-- Connect emotionally with readers through relatable content
-- Balance informational content with engaging storytelling
-- For hiring articles: Highlight team dynamics, growth opportunities, and company culture stories
-- For product articles: Focus on customer success stories and real-world impact
-- For thought leadership: Share genuine insights and lessons learned
-
-TITLE GENERATION:
-- Always generate the headline automatically based on the announcement details
-- Make it engaging, SEO-friendly, and click-worthy
-- Include relevant keywords naturally
-- Keep it between 50-60 characters for optimal SEO
-
-WRITING STYLE:
-- Narrative-driven with conversational tone
-- Scannable format with subheadings, but maintain story flow
-- 600-800 words total length
-- SEO-conscious with relevant keywords naturally integrated
-- Benefits-focused through storytelling, not feature lists
-- Include suggested meta description (150-160 characters)
-- Avoid broad generalizations and vague technology claims
-- Use specific, concrete language about actual capabilities and outcomes
-
-RESPONSE FORMAT:
-Return ONLY the full blog post text with proper formatting. DO NOT include any explanations, preambles, or metadata before or after the blog post content.
-
-Use the provided company and announcement information to create a compelling blog post that tells a story, engages readers emotionally, and drives action through narrative connection.`
+CRITICAL: Use actual company/industry from RAG context, not placeholders. Focus on storytelling over credentials.`
         }
       }
     },
@@ -157,66 +109,56 @@ Use the provided company and announcement information to create a compelling blo
         goal: "Allow user to review the generated blog article and request specific changes or approve it",
         essential: ["reviewDecision"],
         initialPromptSent: false,
-        baseInstructions: `You are an asset revision specialist. Process user feedback and either approve OR generate a revised blog article.
+        baseInstructions: `ASSET REVIEW SPECIALIST
 
-CRITICAL RULES:
-• APPROVE if user says positive words: "approved", "looks good", "perfect", "yes", "ok", "good", "great", "fine", "this is good", "it's good", "that works"
-• REVISE if user requests specific changes: "change X", "add Y", "make it Z", "use more/less", "different tone"
-• UNCLEAR input → Ask for clarification
+CRITICAL: YOU MUST RESPOND WITH VALID JSON ONLY. NO CONVERSATIONAL TEXT OUTSIDE JSON.
 
-APPROVAL EXAMPLES:
-• "approved" → APPROVE
-• "ok this is good" → APPROVE  
-• "looks great" → APPROVE
-• "yes that works" → APPROVE
-• "it's fine" → APPROVE
+SIMPLE RULES:
+1. If user says "approved", "looks good", "perfect" → APPROVE
+2. If user wants changes (like "make it shorter", "add more details", etc.) → GENERATE COMPLETE REVISION
+3. If unclear → ASK FOR CLARIFICATION
 
-REVISION EXAMPLES:
-• "put my industry in title" → Generate revision
-• "make it shorter" → Generate revision
-• "use my company more" → Generate revision
-• "change the tone" → Generate revision
-
-RESPONSE FORMAT:
-JSON only:
-
-If explicit approval only:
+APPROVAL RESPONSE:
 {
   "isComplete": true,
   "collectedInformation": {
-    "reviewDecision": "approved",
-    "userFeedback": "User's exact words of approval"
-  },
-  "nextQuestion": null,
-  "suggestedNextStep": null
+    "reviewDecision": "approved"
+  }
 }
 
-If user requests changes (revisions to current blog article):
+REVISION RESPONSE (WHEN USER ASKS FOR CHANGES):
 {
   "isComplete": false,
   "collectedInformation": {
     "reviewDecision": "revision_generated",
-    "requestedChanges": ["Applied changes"],
-    "userFeedback": "User's feedback",
-    "revisedAsset": "**COMPLETE REVISED BLOG ARTICLE WITH REQUESTED CHANGES APPLIED**"
+    "userFeedback": "USER'S EXACT REQUEST",
+    "revisedAsset": "PUT THE COMPLETE REVISED BLOG ARTICLE HERE - NOT a description, but the actual full blog article text with all the user's requested changes applied. If user says 'make it shorter', generate the ACTUAL shortened blog article. If user says 'add more technical details', generate the blog article WITH those technical details added."
   },
-  "nextQuestion": "Here's your updated blog article. Please review and let me know if you need further changes or if you're satisfied.",
-  "suggestedNextStep": null
+  "nextQuestion": "Here's your updated blog article. Please review and let me know if you need further modifications or if you're satisfied."
 }
 
-If user requests different asset type (social post, press release, etc.):
+CLARIFICATION RESPONSE:
+{
+  "isComplete": false,
+  "collectedInformation": {
+    "reviewDecision": "unclear"
+  },
+  "nextQuestion": "Would you like me to make changes to the blog article, or are you satisfied with it as-is?"
+}
+
+If user requests different asset type (press release, social post, etc.):
 {
   "isComplete": true,
   "collectedInformation": {
     "reviewDecision": "cross_workflow_request",
-    "requestedAssetType": "Detected asset type (Social Post, Press Release, etc.)",
+    "requestedAssetType": "Detected asset type (Press Release, Social Post, etc.)",
     "userFeedback": "User's exact words"
   },
   "nextQuestion": null,
   "suggestedNextStep": "I can help with that! Let me start a [Asset Type] workflow for you."
 }
 
-If user input is unclear:
+If user input is unclear or just "?" or "??":
 {
   "isComplete": false,
   "collectedInformation": {

@@ -112,16 +112,32 @@ router.post('/threads/:threadId/messages/stream', async (req, res) => {
     });
 
     try {
-      // Stream the response
+      let chunkCount = 0;
+      let lastChunkTime = Date.now();
+      
+      // Stream the response with improved error handling
       for await (const chunk of chatService.handleUserMessageStream(threadId, content, userId, orgId)) {
-        // Format as Server-Sent Events
+        chunkCount++;
+        const now = Date.now();
+        
+        // Format as Server-Sent Events with enhanced metadata
         const eventData = JSON.stringify({
           type: chunk.type,
           data: chunk.data,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          streamingMeta: {
+            chunkIndex: chunkCount,
+            timeSinceLastChunk: now - lastChunkTime
+          }
         });
         
         res.write(`data: ${eventData}\n\n`);
+        lastChunkTime = now;
+        
+        // Force flush for better streaming performance
+        if ('flush' in res && typeof res.flush === 'function') {
+          (res as any).flush();
+        }
         
         // If there's an error, close the stream
         if (chunk.type === 'error') {
@@ -138,6 +154,22 @@ router.post('/threads/:threadId/messages/stream', async (req, res) => {
           return;
         }
       }
+      
+      logger.info('📊 Streaming metrics', {
+        threadId: threadId.substring(0, 8),
+        totalChunks: chunkCount,
+        success: true
+      });
+      
+      // Send final completion message
+      res.write(`data: ${JSON.stringify({
+        type: 'ai_response',
+        data: {
+          content: '_✅ Request completed successfully._',
+          isComplete: true
+        },
+        timestamp: new Date().toISOString()
+      })}\n\n`);
       
       // Send completion event
       res.write('data: {"type": "done", "data": {"success": true}}\n\n');

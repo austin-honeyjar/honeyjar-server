@@ -24,7 +24,7 @@ export const BASE_WORKFLOW_TEMPLATE: WorkflowTemplate = {
           "Social Post",
           "Blog Article",
           "FAQ",
-          "Quick Press Release",
+    
           "Test Step Transitions",
           "Dummy Workflow"
         ],
@@ -40,7 +40,7 @@ AVAILABLE WORKFLOWS:
 - Social Post: Craft social copy in your brand voice
 - Blog Article: Create long-form POVs, news, or narratives
 - FAQ: Generate frequent questions and responses
-- Quick Press Release: Two-step press release creation
+
 - Test Step Transitions: For testing workflow completion
 - Dummy Workflow: For testing purposes
 
@@ -76,7 +76,7 @@ NO CLEAR MATCH (questions, general chat):
   "isMatch": false,
   "collectedInformation": {
     "selectedWorkflow": null,
-    "conversationalResponse": "Great! What would you like to work on next? I can help you with:\n\n**Full Workflows:**\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Media List Generator - Generate media contacts with dual ranking (algorithmic vs AI) and user choice\n• Media Matching - AI-suggested authors validated with recent article analysis\n\n**Quick Asset Creation:**\n• Press Release - Draft PR announcement materials\n• Media Pitch - Build custom outreach with context\n• Social Post - Craft social copy in your brand voice\n• Blog Article - Create long-form POVs, news, or narratives\n• FAQ - Generate frequent questions and suggested responses\n• Quick Press Release - For creating a press release in just two steps\n\n**Testing & Development:**\n• Test Step Transitions - For testing step transitions and workflow completion\n• Dummy Workflow - For testing purposes\n\nOr feel free to ask me any questions about PR and communications!"
+    "conversationalResponse": "Great! What would you like to work on next? I can help you with:\n\n**Full Workflows:**\n• Launch Announcement - For product launches and announcements\n• JSON Dialog PR Workflow - For creating PR assets like press releases\n• Media List Generator - Generate media contacts with dual ranking (algorithmic vs AI) and user choice\n• Media Matching - AI-suggested authors validated with recent article analysis\n\n**Quick Asset Creation:**\n• Press Release - Draft PR announcement materials\n• Media Pitch - Build custom outreach with context\n• Social Post - Craft social copy in your brand voice\n• Blog Article - Create long-form POVs, news, or narratives\n• FAQ - Generate frequent questions and suggested responses\n\n\n**Testing & Development:**\n• Test Step Transitions - For testing step transitions and workflow completion\n• Dummy Workflow - For testing purposes\n\nOr feel free to ask me any questions about PR and communications!"
   },
   "suggestedNextStep": null
 }

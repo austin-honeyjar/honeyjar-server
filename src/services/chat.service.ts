@@ -30,21 +30,9 @@ export class ChatService {
       })
       .returning();
 
-    // Immediately create and start the base workflow
-    try {
-      const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
-      if (!baseTemplate) {
-        throw new Error("Base workflow template not found");
-      }
-
-      // Create the workflow silently for initial thread creation (no initial prompt needed)
-      await this.workflowService.createWorkflow(thread.id, baseTemplate.id, true);
-      console.log(`Base workflow created silently for new thread ${thread.id}`);
-      
-    } catch (error) {
-      console.error(`Error initializing base workflow for thread ${thread.id}:`, error);
-      // Don't throw the error as we still want to return the thread
-    }
+    // Start with conversational mode - no workflow created until user expresses specific intent
+    console.log(`New thread ${thread.id} ready for conversational interaction`);
+    // Thread titles will be generated contextually when first meaningful content is created
 
     return thread;
   }
@@ -449,10 +437,13 @@ export class ChatService {
     // Get the current step before processing
     const currentStep = workflow.steps.find(step => step.id === currentStepId);
     
-    // Handle the step response using enhanced context if user info is available
-    const stepResponse = userId && orgId 
-      ? await this.workflowService.handleStepResponseWithContext(currentStepId, content, userId, orgId)
-      : await this.workflowService.handleStepResponse(currentStepId, content);
+    // Always use enhanced context for consistent security analysis (provide defaults if missing)
+    const stepResponse = await this.workflowService.handleStepResponseWithContext(
+      currentStepId, 
+      content, 
+      userId || 'anonymous', 
+      orgId || 'default'
+    );
     
     // Add AI response to thread if provided by handleStepResponse
     if (stepResponse.response && stepResponse.response !== 'Workflow completed successfully.') { 
@@ -528,10 +519,29 @@ export class ChatService {
       // 🧠 UNIVERSAL INTENT CLASSIFICATION - Applied to ALL user messages
       logger.info('🧠 Applying universal intent classification to user input');
       
+      // Show thinking message to user
+      yield {
+        type: 'ai_response',
+        data: {
+          content: '_🧠 Understanding your request..._',
+          isComplete: true
+        }
+      };
+      
       const currentWorkflow = await this.workflowService.getWorkflowByThreadId(threadId);
       const ragContext = await this.gatherRagContext(threadId, userId, orgId);
       
       const intent = await this.classifyUserIntent(content, threadId, currentWorkflow, ragContext);
+      
+      // Show intent result to user
+      const intentMessage = this.formatIntentMessage(intent);
+      yield {
+        type: 'ai_response',
+        data: {
+          content: intentMessage,
+          isComplete: true
+        }
+      };
       
       yield {
         type: 'intent_classified',
@@ -840,10 +850,13 @@ export class ChatService {
       // Get the current step before processing
       const currentStep = workflow.steps.find(step => step.id === workflow.currentStepId);
       
-      // Handle streaming step response using enhanced context if user info is available
-      const stepResponseGenerator = userId && orgId 
-        ? this.workflowService.handleStepResponseStreamWithContext(workflow.currentStepId!, content, userId, orgId)
-        : this.workflowService.handleStepResponseStream(workflow.currentStepId!, content);
+      // Always use enhanced streaming context for consistent security analysis (provide defaults if missing)
+      const stepResponseGenerator = this.workflowService.handleStepResponseStreamWithContext(
+        workflow.currentStepId!, 
+        content, 
+        userId || 'anonymous', 
+        orgId || 'default'
+      );
 
       let stepResponse: any = null;
       let accumulatedResponse = '';
@@ -1142,14 +1155,52 @@ export class ChatService {
     if (!userId || !orgId) return null;
 
     try {
-      // Use the RAG service to get relevant context for intent classification
-      return await ragService.getRelevantContext(userId, orgId, 'intent_classification', 'classification', 'intent context');
+      // Use simpler context for intent classification - don't need full RAG
+      const startTime = Date.now();
+      const result = await ragService.getRelevantContext(userId, orgId, 'intent_classification', 'classification', 'intent context');
+      const duration = Date.now() - startTime;
+      
+      if (duration > 1000) {
+        logger.warn('⚠️ Slow RAG context gathering', {
+          duration: `${duration}ms`,
+          threadId: threadId.substring(0, 8)
+        });
+      }
+      
+      return result;
     } catch (error) {
       logger.warn('Failed to gather RAG context for intent classification', {
         error: error instanceof Error ? error.message : 'Unknown error',
         threadId: threadId.substring(0, 8)
       });
       return null;
+    }
+  }
+
+  /**
+   * Format intent classification result for user feedback
+   */
+  private formatIntentMessage(intent: UserIntent): string {
+    const confidenceLevel = intent.confidence >= 0.8 ? 'High' : intent.confidence >= 0.6 ? 'Medium' : 'Low';
+    const confidenceEmoji = intent.confidence >= 0.8 ? '🎯' : intent.confidence >= 0.6 ? '🤔' : '🔍';
+    
+    switch (intent.category) {
+      case 'workflow_action':
+        return `_${confidenceEmoji} I see you want to ${intent.workflowName ? `create a ${intent.workflowName}` : 'start a workflow'}. Let me set that up..._`;
+      
+      case 'workflow_management':
+        if (intent.action === 'cancel_workflow') {
+          return `_${confidenceEmoji} I understand you want to ${intent.workflowName ? `switch to ${intent.workflowName}` : 'exit the current workflow'}. Processing..._`;
+        } else if (intent.action === 'continue_workflow') {
+          return `_${confidenceEmoji} I'll help you continue with your current workflow..._`;
+        }
+        return `_${confidenceEmoji} Managing your workflow..._`;
+      
+      case 'conversational':
+        return `_${confidenceEmoji} I'll provide information to help answer your question..._`;
+      
+      default:
+        return `_${confidenceEmoji} Processing your request..._`;
     }
   }
 
@@ -1162,6 +1213,7 @@ export class ChatService {
     
     // Map template IDs to display names
     const templateIdMap: Record<string, string> = {
+      '00000000-0000-0000-0000-000000000000': 'Base Workflow',
       '00000000-0000-0000-0000-000000000008': 'Press Release',
       '00000000-0000-0000-0000-000000000010': 'Social Post',
       '00000000-0000-0000-0000-000000000011': 'Blog Article',

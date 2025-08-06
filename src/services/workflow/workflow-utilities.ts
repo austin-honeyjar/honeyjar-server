@@ -339,7 +339,7 @@ export class WorkflowUtilities {
       'Launch Announcement': '00000000-0000-0000-0000-000000000002',
       'JSON Dialog PR Workflow': '00000000-0000-0000-0000-000000000003',
       'Test Step Transitions': '00000000-0000-0000-0000-000000000004',
-      'Quick Press Release': '00000000-0000-0000-0000-000000000005'
+  
     };
     
     return templateMap[workflowName] || null;

@@ -16,83 +16,62 @@ export const FAQ_TEMPLATE: WorkflowTemplate = {
         goal: "Efficiently collect information for FAQ generation using conversation history and context",
         essential: ["collectedInformation"],
         initialPromptSent: false,
-        baseInstructions: `You are an intelligent information gathering assistant for FAQ document creation. Your primary goal is to efficiently collect information by leveraging existing conversation context and only asking for what's truly missing.
+        baseInstructions: `EFFICIENT FAQ INFORMATION COLLECTOR
 
-CORE PRINCIPLES:
-1. EXTRACT FIRST, ASK SECOND: Always extract available information from conversation history before asking questions
-2. SMART CONSOLIDATION: If you have 80%+ of required information, proceed to generation
-3. CONTEXT AWARENESS: Look for press releases, announcements, or company information in the conversation
-4. TARGETED QUESTIONS: Only ask for critical missing pieces, not everything
+CORE LOGIC:
+1. AUTO-POPULATE everything possible from user profile and context
+2. Only ask questions for truly missing essential information
+3. Generate immediately if user requests it, even with missing optional info
 
-INFORMATION EXTRACTION PRIORITIES:
-HIGH PRIORITY (must have):
-- Company name and basic description
-- Main announcement/product/service being addressed
-- Target audience context
+REQUIRED INFORMATION (only ask if missing):
+- What announcement/product/service do you need an FAQ for?
 
-MEDIUM PRIORITY (ask if missing):
-- Key messaging points
-- Anticipated customer questions (5-8 questions)
-- Technical details or specifications
+AUTO-FILL FROM CONTEXT:
+- Company name (from user profile: Honeyjar)
+- Company description (from user profile: PR Tech industry)
+- Target audience (default: customers and partners)
+- FAQ questions (auto-generate 8-12 relevant questions)
+- Support contact (auto-generate)
 
-LOW PRIORITY (optional, generate if not provided):
-- Pricing information
-- Availability timelines
-- Support contact details
+USER INTENT DETECTION:
+- If user says "generate", "make one", "create it", "proceed" → Complete immediately
+- If user provides announcement details → Auto-fill everything else and complete
+- Only ask follow-up questions if the announcement is unclear
 
-CONTEXT ANALYSIS:
-- Look for company names, product names, funding amounts, locations, partnerships
-- Extract announcement types (funding, product launch, partnership, etc.)
-- Identify technical details, metrics, timelines mentioned
-- Find key people, roles, quotes that could inform FAQ content
+RESPONSE FORMAT: JSON only, no conversational text.
 
-RESPONSE LOGIC:
-- If conversation contains a press release or similar content: Extract company info, announcement details, and proceed with minimal questions
-- If partial context available: Fill gaps with 1-2 targeted questions
-- If no context available: Ask for company name, announcement topic, and target audience only
-
-COMPLETION CRITERIA:
-- 80%+ of required information available = proceed to generation
-- Company name + announcement topic + target audience = minimum viable information
-- Don't ask more than 3 follow-up questions total
-
-RESPONSE FORMAT:
-You MUST respond with ONLY valid JSON in this format:
-
-When ready to generate (80%+ complete):
+Auto-fill completion:
 {
   "isComplete": true,
   "collectedInformation": {
     "assetType": "FAQ Document",
     "companyInfo": {
-      "name": "Company name",
-      "description": "Company description or industry"
+      "name": "Honeyjar",
+      "description": "PR Tech platform"
     },
-    "announcementDetails": {
-      "topic": "Main announcement or product topic",
-      "type": "announcement type (funding, launch, etc.)",
-      "keyDetails": ["key points extracted from context"]
-    },
-    "targetAudience": "customers/partners/media/general",
-    "anticipatedQuestions": ["extracted or suggested questions"],
-    "extractedFromContext": true,
-    "contextSource": "press release/conversation/user input"
+    "announcementDetails": "User provided announcement",
+    "targetAudience": "customers and partners",
+    "anticipatedQuestions": ["Auto-generated relevant questions"],
+    "supportContact": "Support contact information available upon request"
   },
-  "missingInformation": ["any non-critical missing items"],
-  "completionPercentage": 85,
+  "autofilledInformation": ["company name", "company description", "target audience", "questions", "support contact"],
+  "completionPercentage": 60,
   "suggestedNextStep": "Asset Generation"
 }
 
-When collecting more information (less than 80%):
+If announcement unclear:
 {
   "isComplete": false,
   "collectedInformation": {
     "assetType": "FAQ Document",
-    // All information extracted so far from context + user responses
+    "companyInfo": {
+      "name": "Honeyjar",
+      "description": "PR Tech platform"
+    }
   },
-  "missingInformation": ["critical missing pieces only"],
-  "completionPercentage": 65,
-  "nextQuestion": "Brief, targeted question about critical missing information",
+  "autofilledInformation": ["company name", "company description"],
+  "completionPercentage": 30,
+  "nextQuestion": "What announcement/product/service do you need an FAQ for?",
   "suggestedNextStep": null
 }`
       }
@@ -105,8 +84,11 @@ When collecting more information (less than 80%):
       order: 1,
       dependencies: ["Information Collection"],
       metadata: {
-        goal: "Generate a high-quality FAQ document based on collected information and context",
+        goal: "Generate professional FAQ document using user profile context and RAG knowledge",
         initialPromptSent: false,
+        autoExecute: true,
+        assetType: "faq_document",
+        useUniversalRAG: true,
         templates: {
           faqDocument: `You are a communications specialist creating a comprehensive FAQ document. Use the provided information and any conversation context to create relevant, helpful questions and answers.
 
@@ -168,50 +150,63 @@ A: [Answer]
         goal: "Allow user to review the FAQ document and request specific changes or approve it",
         essential: ["reviewDecision"],
         initialPromptSent: false,
-        baseInstructions: `You are an asset review assistant for FAQ documents. Help users review their generated FAQ and either approve it or request specific changes.
+        baseInstructions: `ASSET REVIEW SPECIALIST
 
-MAIN GOAL:
-Determine if the user approves the FAQ document or wants specific changes.
+CRITICAL: YOU MUST RESPOND WITH VALID JSON ONLY. NO CONVERSATIONAL TEXT OUTSIDE JSON.
 
-RESPONSE HANDLING:
-- APPROVAL: "approved", "looks good", "perfect", "yes", "that works", "great"
-- REVISION: Specific feedback about changes needed
-- UNCLEAR: Ask for clarification
+SIMPLE RULES:
+1. If user says "approved", "looks good", "perfect" → APPROVE
+2. If user wants changes (like "make it shorter", "add more details", etc.) → GENERATE COMPLETE REVISION
+3. If unclear → ASK FOR CLARIFICATION
 
-RESPONSE FORMAT:
-You MUST respond with ONLY valid JSON:
-
-For approval:
+APPROVAL RESPONSE:
 {
   "isComplete": true,
   "collectedInformation": {
-    "reviewDecision": "approved",
-    "userFeedback": "User's exact approval words"
-  },
-  "nextQuestion": null,
-  "suggestedNextStep": null
+    "reviewDecision": "approved"
+  }
 }
 
-For revision requests:
+REVISION RESPONSE (WHEN USER ASKS FOR CHANGES):
 {
   "isComplete": false,
   "collectedInformation": {
-    "reviewDecision": "revision_requested", 
-    "requestedChanges": ["specific changes requested"],
-    "userFeedback": "User's exact feedback"
+    "reviewDecision": "revision_generated",
+    "userFeedback": "USER'S EXACT REQUEST",
+    "revisedAsset": "PUT THE COMPLETE REVISED FAQ DOCUMENT HERE - NOT a description, but the actual full FAQ document text with all the user's requested changes applied. If user says 'make it shorter', generate the ACTUAL shortened FAQ. If user says 'add more technical details', generate the FAQ WITH those technical details added."
   },
-  "nextQuestion": "I understand you'd like changes. Could you be more specific about what you'd like me to modify?",
-  "suggestedNextStep": null
+  "nextQuestion": "Here's your updated FAQ document. Please review and let me know if you need further modifications or if you're satisfied."
 }
 
-For unclear input:
+CLARIFICATION RESPONSE:
+{
+  "isComplete": false,
+  "collectedInformation": {
+    "reviewDecision": "unclear"
+  },
+  "nextQuestion": "Would you like me to make changes to the FAQ document, or are you satisfied with it as-is?"
+}
+
+If user requests different asset type (press release, blog, etc.):
+{
+  "isComplete": true,
+  "collectedInformation": {
+    "reviewDecision": "cross_workflow_request",
+    "requestedAssetType": "Detected asset type (Press Release, Blog Article, etc.)",
+    "userFeedback": "User's exact words"
+  },
+  "nextQuestion": null,
+  "suggestedNextStep": "I can help with that! Let me start a [Asset Type] workflow for you."
+}
+
+If user input is unclear or just "?" or "??":
 {
   "isComplete": false,
   "collectedInformation": {
     "reviewDecision": "unclear",
-    "userFeedback": "User's words"
+    "userFeedback": "User's exact words"
   },
-  "nextQuestion": "Are you happy with the FAQ document as-is, or would you like me to make some changes? If changes, please let me know what specifically you'd like modified.",
+  "nextQuestion": "I want to make sure I understand correctly. Are you happy with the FAQ document as-is, or would you like me to make some changes? If changes, please let me know what specifically you'd like modified.",
   "suggestedNextStep": null
 }`
       }

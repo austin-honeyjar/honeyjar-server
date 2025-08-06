@@ -9,85 +9,71 @@ export const SOCIAL_POST_TEMPLATE: WorkflowTemplate = {
       type: StepType.JSON_DIALOG,
       name: "Information Collection",
       description: "Collect detailed information for social post generation",
-      prompt: "Let's create your social post. Please start by providing your company name, what you're announcing, and which social media platforms you want to target (LinkedIn, Twitter, Facebook, Instagram).",
+      prompt: "Let's create your social post. What announcement would you like to make?",
       order: 0,
       dependencies: [],
       metadata: {
         goal: "Collect all necessary information to generate engaging social media content",
         essential: ["collectedInformation"],
         initialPromptSent: false,
-        baseInstructions: `You are an information gathering assistant for social media content creation. Your task is to collect specific information needed for creating engaging social media posts.
+        baseInstructions: `EFFICIENT SOCIAL POST INFORMATION COLLECTOR
 
-MAIN GOAL:
-Collect all the necessary information to create high-quality social media content. Ask questions to gather the required information, starting with the most important details.
+CORE LOGIC:
+1. AUTO-POPULATE everything possible from user profile and context
+2. Only ask questions for truly missing essential information
+3. Generate immediately if user requests it, even with missing optional info
 
-CONTEXT:
-- This is specifically for creating social media posts only
-- Check for carried-over context from previous workflows first
-- Adapt your questions based on what information has already been provided
-- Track completion percentage as fields are filled
-- PRIORITIZE AUTOFILLING over asking questions - only ask about truly required information
-- If the user says they don't know or they don't have that information, skip that requirement and move on to the next one.
-- When autofilling information, clearly inform the user so they can review and update if needed
-- If context was carried over from another workflow, use that information and inform the user
+REQUIRED INFORMATION (only ask if missing):
+- What are you announcing? (the news/message for social media)
 
-REQUIRED INFORMATION FOR SOCIAL POST (ask questions only if missing):
-- Company name and description
-- Core announcement or message (1-2 sentences)
-- Target platforms (LinkedIn, Twitter, Facebook, Instagram)
+AUTO-FILL FROM CONTEXT:
+- Company name (from user profile: Honeyjar)
+- Company description (from user profile: PR Tech industry)
+- Target platforms (default: LinkedIn and Twitter)
+- Hashtags (auto-generate from industry)
+- Call to action (auto-generate)
 
-NICE-TO-HAVE INFORMATION (autofill with reasonable defaults if missing):
-- Brand voice and tone preferences (default: "professional and engaging")
-- Key benefit to highlight to audience (can be generated from announcement)
-- Target audience (default: "industry professionals and business community")
-- Call to action (default: "learn more" or "visit our website")
-- Relevant hashtags or preferred hashtag style (can be generated from industry/announcement)
-- Link to include (default: "company website link to be added")
-- Visual assets available (default: "visual assets to be determined")
+USER INTENT DETECTION:
+- If user says "generate", "make one", "create it", "proceed" → Complete immediately
+- If user provides announcement details → Auto-fill everything else and complete
+- Only ask follow-up questions if the announcement is unclear
 
-INFORMATION PROCESSING GUIDELINES:
-- Extract ALL relevant information from each user message, not just what you asked for
-- Look for information that fits any required field, not just the ones you explicitly asked about
-- AUTOFILL missing nice-to-have information with reasonable defaults rather than asking questions
-- Track completion percentage based on how many fields are filled (including autofilled ones)
-- Ask for most important missing information first, but only if truly required
-- Group related questions together when you must ask
-- If information seems inconsistent, seek clarification
-- When you autofill information, include it in your response and note it was autofilled
+RESPONSE FORMAT: JSON only, no conversational text.
 
-RESPONSE FORMAT:
-You MUST respond with ONLY valid JSON in this format:
+Auto-fill completion (when sufficient info provided):
+{
+  "isComplete": true,
+  "collectedInformation": {
+    "assetType": "Social Post",
+    "companyInfo": {
+      "name": "Honeyjar",
+      "description": "PR Tech platform"
+    },
+    "announcementDetails": "User provided announcement",
+    "targetPlatforms": ["LinkedIn", "Twitter"],
+    "hashtags": "#PRTech #Honeyjar",
+    "callToAction": "Learn more"
+  },
+  "autofilledInformation": ["company name", "company description", "target platforms", "hashtags", "call to action"],
+  "completionPercentage": 60,
+  "nextQuestion": null,
+  "suggestedNextStep": "Asset Generation"
+}
 
-While collecting information (less than 60% complete):
+If announcement unclear:
 {
   "isComplete": false,
   "collectedInformation": {
     "assetType": "Social Post",
     "companyInfo": {
-      "name": "Company name",
-      "description": "Company description"
-    },
-    // All other information collected so far, organized by category
-    // Include ALL relevant information found in the user's messages
-    // Include autofilled information with clear indication
+      "name": "Honeyjar",
+      "description": "PR Tech platform"
+    }
   },
-  "autofilledInformation": ["List of fields that were autofilled with defaults"],
-  "missingInformation": ["List of truly required fields still missing"],
-  "completionPercentage": 45,
-  "nextQuestion": "Specific question about a required missing piece of information, or null if proceeding with autofill",
+  "autofilledInformation": ["company name", "company description"],
+  "completionPercentage": 30,
+  "nextQuestion": "What would you like to announce?",
   "suggestedNextStep": null
-}
-
-When sufficient information is collected (60%+ complete):
-{
-  "isComplete": true,
-  "collectedInformation": {
-    // All collected information organized by category
-  },
-  "autofilledInformation": ["List of fields that were autofilled with defaults"],
-  "missingInformation": ["Any non-critical fields still missing"],
-  "completionPercentage": 75,
-  "suggestedNextStep": "Asset Generation"
 }`
       }
     },
@@ -99,8 +85,11 @@ When sufficient information is collected (60%+ complete):
       order: 1,
       dependencies: ["Information Collection"],
       metadata: {
-        goal: "Generate high-quality social media content based on the collected information, and return the full content to the user.",
+        goal: "Generate professional social media content using user profile context and RAG knowledge",
         initialPromptSent: false,
+        autoExecute: true,
+        assetType: "social_post",
+        useUniversalRAG: true,
         templates: {
           socialPost: `You are a social media content creator specializing in announcement posts. Your task is to create engaging social media content based on the provided information.
 
@@ -175,45 +164,41 @@ IMPORTANT: Return ONLY the social media posts themselves, with no additional com
         goal: "Allow user to review the generated social media content and request specific changes or approve it",
         essential: ["reviewDecision"],
         initialPromptSent: false,
-        baseInstructions: `You are an asset review assistant. Your task is to help users review their generated social media content and either approve it or request specific changes.
+        baseInstructions: `ASSET REVIEW SPECIALIST
 
-MAIN GOAL:
-Determine if the user is satisfied with the generated social media content or wants to make changes.
+CRITICAL: YOU MUST RESPOND WITH VALID JSON ONLY. NO CONVERSATIONAL TEXT OUTSIDE JSON.
 
-CONTEXT:
-- The user has just received generated social media posts
-- They can either approve them as-is or request specific changes
-- Be helpful in understanding their feedback and translating it into actionable revision requests
+SIMPLE RULES:
+1. If user says "approved", "looks good", "perfect" → APPROVE
+2. If user wants changes (like "make it shorter", "add more details", etc.) → GENERATE COMPLETE REVISION
+3. If unclear → ASK FOR CLARIFICATION
 
-USER OPTIONS:
-1. APPROVAL: User says positive words like "approved", "looks good", "perfect", "yes", "ok", "good", "great", "fine", "this is good", "it's good", "that works"
-2. REVISION: User requests specific changes like "change X", "add Y", "make it Z", "use more/less", "different tone"
-3. UNCLEAR: User input is ambiguous - ask for clarification
-
-RESPONSE FORMAT:
-You MUST respond with ONLY valid JSON in this format:
-
-If user approves the social posts:
+APPROVAL RESPONSE:
 {
   "isComplete": true,
   "collectedInformation": {
-    "reviewDecision": "approved",
-    "userFeedback": "User's exact words of approval"
-  },
-  "nextQuestion": null,
-  "suggestedNextStep": null
+    "reviewDecision": "approved"
+  }
 }
 
-If user requests changes (revisions to current social post):
+REVISION RESPONSE (WHEN USER ASKS FOR CHANGES):
 {
   "isComplete": false,
   "collectedInformation": {
-    "reviewDecision": "revision_requested",
-    "requestedChanges": ["List of specific changes the user wants"],
-    "userFeedback": "User's exact feedback"
+    "reviewDecision": "revision_generated",
+    "userFeedback": "USER'S EXACT REQUEST",
+    "revisedAsset": "PUT THE COMPLETE REVISED SOCIAL MEDIA CONTENT HERE - NOT a description, but the actual full social media posts with all the user's requested changes applied. If user says 'make it shorter', generate the ACTUAL shortened posts. If user says 'add more technical details', generate the posts WITH those technical details added."
   },
-  "nextQuestion": "I understand you'd like some changes. Could you be more specific about what you'd like me to modify?",
-  "suggestedNextStep": null
+  "nextQuestion": "Here's your updated social media content. Please review and let me know if you need further modifications or if you're satisfied."
+}
+
+CLARIFICATION RESPONSE:
+{
+  "isComplete": false,
+  "collectedInformation": {
+    "reviewDecision": "unclear"
+  },
+  "nextQuestion": "Would you like me to make changes to the social media content, or are you satisfied with it as-is?"
 }
 
 If user requests different asset type (press release, blog, etc.):
@@ -228,7 +213,7 @@ If user requests different asset type (press release, blog, etc.):
   "suggestedNextStep": "I can help with that! Let me start a [Asset Type] workflow for you."
 }
 
-If user input is unclear:
+If user input is unclear or just "?" or "??":
 {
   "isComplete": false,
   "collectedInformation": {

@@ -248,7 +248,7 @@ export class JsonDialogService {
           error: error instanceof Error ? error.message : 'Unknown error',
           aiRawResponse: openAIResult.responseText,
           aiResponseLength: openAIResult.responseText.length,
-          cleanedResponse: cleanedResponseText,
+          cleanedResponse: openAIResult.responseText,
           userInput: userInput,
           systemPromptPreview: systemPrompt.substring(0, 200) + '...',
           criticalIssue: 'AI_NOT_FOLLOWING_JSON_INSTRUCTIONS'
@@ -277,7 +277,8 @@ export class JsonDialogService {
       !step.name.includes("Information Collection") && !step.name.includes("Collection");
       
       // Enhanced content detection - check if response actually contains asset content
-      const hasAssetContent = !!(
+      // CRITICAL: Only look for asset content in Asset Generation steps, never in Information Collection
+      const hasAssetContent = isAssetGenerationStep && !!(
         responseData.collectedInformation?.asset || 
         responseData.asset ||
         responseData.collectedInformation?.generatedAsset ||
@@ -291,9 +292,8 @@ export class JsonDialogService {
           responseData.nextQuestion.includes('# '))) // Common asset formatting
       );
       
-      // Final asset detection: Either explicit asset generation step OR has asset content
-      const shouldProcessAsset = (isAssetGenerationStep && (responseData.isComplete || responseData.isStepComplete)) || 
-                                (hasAssetContent && (responseData.isComplete || responseData.isStepComplete));
+      // Final asset detection: ONLY process assets from Asset Generation steps
+      const shouldProcessAsset = isAssetGenerationStep && hasAssetContent && (responseData.isComplete || responseData.isStepComplete);
       
       // Log potential issues with Information Collection steps generating assets
       if ((step.name.includes("Information Collection") || step.name.includes("Collection")) && 
@@ -554,10 +554,7 @@ export class JsonDialogService {
                 assetType,
                 step.id,
                 step.name,
-                {
-                  isRevision: false,
-                  showCreateButton: true
-                }
+                false // isRevision
               );
               
               logger.info('Successfully added asset via unified method', {

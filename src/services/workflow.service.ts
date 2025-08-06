@@ -15,7 +15,7 @@ import { DUMMY_WORKFLOW_TEMPLATE } from "../templates/workflows/dummy-workflow";
 import { LAUNCH_ANNOUNCEMENT_TEMPLATE } from "../templates/workflows/launch-announcement";
 import { JSON_DIALOG_PR_WORKFLOW_TEMPLATE } from "../templates/workflows/json-dialog-pr-workflow";
 import { TEST_STEP_TRANSITIONS_TEMPLATE } from "../templates/workflows/test-step-transitions";
-import { QUICK_PRESS_RELEASE_TEMPLATE } from "../templates/workflows/quick-press-release";
+
 import { MEDIA_LIST_TEMPLATE } from "../templates/workflows/media-list";
 import { PRESS_RELEASE_TEMPLATE } from "../templates/workflows/press-release";
 import { MEDIA_PITCH_TEMPLATE } from "../templates/workflows/media-pitch";
@@ -141,7 +141,7 @@ const WORKFLOW_TYPES = {
   PR_WORKFLOW: 'JSON Dialog PR Workflow',
   LAUNCH_ANNOUNCEMENT: 'Launch Announcement',
   TEST_STEP_TRANSITIONS: 'Test Step Transitions',
-  QUICK_PRESS_RELEASE: 'Quick Press Release',
+
   MEDIA_MATCHING: 'Media Matching',
   PRESS_RELEASE: 'Press Release',
   MEDIA_PITCH: 'Media Pitch',
@@ -156,7 +156,7 @@ const WORKFLOW_PATTERNS = {
   [WORKFLOW_TYPES.PR_WORKFLOW]: [/\b(pr|press|release|dialog)\b/i],
   [WORKFLOW_TYPES.LAUNCH_ANNOUNCEMENT]: [/\b(launch|product|announcement|feature)\b/i],
   [WORKFLOW_TYPES.TEST_STEP_TRANSITIONS]: [/\b(step|transition|test step|steps|test transitions)\b/i],
-  [WORKFLOW_TYPES.QUICK_PRESS_RELEASE]: [/\b(quick|press release|fast|simple)\b/i],
+
   [WORKFLOW_TYPES.MEDIA_MATCHING]: [/\b(media|matching|media matching|media list|journalists|reporters|contacts)\b/i],
   [WORKFLOW_TYPES.PRESS_RELEASE]: [/\b(press release|pr announcement|announcement materials)\b/i],
   [WORKFLOW_TYPES.MEDIA_PITCH]: [/\b(media pitch|pitch|outreach|media outreach|journalist outreach)\b/i],
@@ -172,7 +172,7 @@ const TEMPLATE_UUIDS = {
   LAUNCH_ANNOUNCEMENT: '00000000-0000-0000-0000-000000000002',
   JSON_DIALOG_PR_WORKFLOW: '00000000-0000-0000-0000-000000000003',
   TEST_STEP_TRANSITIONS: '00000000-0000-0000-0000-000000000004',
-  QUICK_PRESS_RELEASE: '00000000-0000-0000-0000-000000000005',
+
   MEDIA_MATCHING: '00000000-0000-0000-0000-000000000006',
   MEDIA_LIST: '00000000-0000-0000-0000-000000000007',
   PRESS_RELEASE: '00000000-0000-0000-0000-000000000008',
@@ -227,10 +227,10 @@ export class WorkflowService {
           ...TEST_STEP_TRANSITIONS_TEMPLATE,
           id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS
         };
-      case QUICK_PRESS_RELEASE_TEMPLATE.name:
+              case "Press Release":
         return { 
-          ...QUICK_PRESS_RELEASE_TEMPLATE,
-          id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE
+          ...PRESS_RELEASE_TEMPLATE,
+          id: TEMPLATE_UUIDS.PRESS_RELEASE
         };
       case MEDIA_LIST_TEMPLATE.name:
       case 'Media Matching':
@@ -289,7 +289,7 @@ export class WorkflowService {
       { id: TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT, name: 'Launch Announcement' },
       { id: TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW, name: 'JSON Dialog PR Workflow' },
       { id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS, name: 'Test Step Transitions' },
-      { id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE, name: 'Quick Press Release' },
+  
         { id: TEMPLATE_UUIDS.MEDIA_LIST, name: 'Media List Generator' },
       { id: TEMPLATE_UUIDS.MEDIA_MATCHING, name: 'Media Matching' },
       { id: TEMPLATE_UUIDS.PRESS_RELEASE, name: 'Press Release' },
@@ -364,11 +364,7 @@ export class WorkflowService {
         ...TEST_STEP_TRANSITIONS_TEMPLATE, 
         id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS 
       };
-    } else if (templateId === TEMPLATE_UUIDS.QUICK_PRESS_RELEASE) {
-      return { 
-        ...QUICK_PRESS_RELEASE_TEMPLATE, 
-        id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
-      };
+    
     } else if (templateId === TEMPLATE_UUIDS.MEDIA_MATCHING) {
       return { 
         ...MEDIA_MATCHING_TEMPLATE, 
@@ -432,10 +428,10 @@ export class WorkflowService {
         ...TEST_STEP_TRANSITIONS_TEMPLATE, 
         id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS 
       };
-    } else if (templateId === QUICK_PRESS_RELEASE_TEMPLATE.name) {
+    } else if (templateId === PRESS_RELEASE_TEMPLATE.name) {
       return { 
-        ...QUICK_PRESS_RELEASE_TEMPLATE, 
-        id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
+        ...PRESS_RELEASE_TEMPLATE, 
+                  id: TEMPLATE_UUIDS.PRESS_RELEASE 
       };
     } else if (templateId === MEDIA_LIST_TEMPLATE.name || templateId === 'Media Matching') {
       return { 
@@ -495,10 +491,10 @@ export class WorkflowService {
         ...TEST_STEP_TRANSITIONS_TEMPLATE, 
         id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS 
       };
-    } else if (templateId.includes("Quick Press Release")) {
+            } else if (templateId.includes("Press Release")) {
       return { 
-        ...QUICK_PRESS_RELEASE_TEMPLATE, 
-        id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
+        ...PRESS_RELEASE_TEMPLATE, 
+                  id: TEMPLATE_UUIDS.PRESS_RELEASE 
       };
     } else if (templateId.includes("Media List") || templateId.includes("Media Matching")) {
       return { 
@@ -529,7 +525,7 @@ export class WorkflowService {
       console.log(`- Launch Announcement: ${TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT}`);
       console.log(`- JSON Dialog PR: ${TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW}`);
       console.log(`- Test Step Transitions: ${TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS}`);
-      console.log(`- Quick Press Release: ${TEMPLATE_UUIDS.QUICK_PRESS_RELEASE}`);
+  
       
       throw new Error(`Template not found: ${templateId}`);
     }
@@ -1041,8 +1037,8 @@ export class WorkflowService {
             }
           });
         
-          // Add a direct message with the selection
-          await this.addDirectMessage(workflow.threadId, `Selected workflow: ${selectedWorkflow}`);
+          // Log the workflow selection but don't add a direct message (dev-only info)
+          logger.info('Workflow selected', { selectedWorkflow, threadId: workflow.threadId });
           
           // 🚀 CRITICAL FIX: After completing workflow selection, check for next step auto-execution
           logger.info('Workflow Selection completed, checking for next step auto-execution', {
@@ -1323,7 +1319,7 @@ export class WorkflowService {
         return await this.handleJsonDialogStep(step, userInput);
       }
       
-      // Handle API_CALL step type for Quick Press Release Asset Generation
+              // Handle API_CALL step type for Press Release Asset Generation
       if (step.stepType === StepType.API_CALL && step.name === "Asset Generation") {
         // Get the workflow to get the threadId
         const workflow = await this.dbService.getWorkflow(workflowId);
@@ -1491,8 +1487,8 @@ export class WorkflowService {
         );
         
         // Continue to next step or complete workflow
-        if (workflow.templateId.includes("quick-press-release")) {
-          // Complete workflow for Quick Press Release
+        if (false) { // Removed quick-press-release template
+          // Complete workflow for Press Release
           await this.dbService.updateWorkflowStatus(workflowId, WorkflowStatus.COMPLETED);
           await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
           
@@ -2002,10 +1998,7 @@ Respond with only "search_more" or "proceed" based on their input.`;
             // Create a Dummy workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.DUMMY_WORKFLOW);
           }
-          else if (selectedWorkflow.includes(WORKFLOW_TYPES.QUICK_PRESS_RELEASE)) {
-            // Create a Quick Press Release workflow using hardcoded UUID
-            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.QUICK_PRESS_RELEASE);
-          }
+
           else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
             // Create a Media Matching workflow using template ID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
@@ -2260,10 +2253,7 @@ Respond with only "search_more" or "proceed" based on their input.`;
             // Create a Dummy workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.DUMMY_WORKFLOW);
           }
-          else if (selectedWorkflow.includes(WORKFLOW_TYPES.QUICK_PRESS_RELEASE)) {
-            // Create a Quick Press Release workflow using hardcoded UUID
-            newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.QUICK_PRESS_RELEASE);
-          }
+
           else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
             // Create a Media Matching workflow using template ID
             newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
@@ -2476,10 +2466,7 @@ Respond with only "search_more" or "proceed" based on their input.`;
             // Create a Dummy workflow using hardcoded UUID
             newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.DUMMY_WORKFLOW);
           }
-          else if (selectedWorkflow.includes(WORKFLOW_TYPES.QUICK_PRESS_RELEASE)) {
-            // Create a Quick Press Release workflow using hardcoded UUID
-            newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.QUICK_PRESS_RELEASE);
-          }
+          
           else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
             // Create a Media Matching workflow using template ID
             newWorkflow = await this.createWorkflow(updatedWorkflow.threadId, TEMPLATE_UUIDS.MEDIA_MATCHING);
@@ -3739,7 +3726,7 @@ Respond with only "search_more" or "proceed" based on their input.`;
         return await this.handleAssetReviewStep(step, userInput, workflow);
       }
 
-      // Special handling for "Generate an Asset" step in Quick Press Release workflow
+              // Special handling for "Generate an Asset" step in Press Release workflow
       if (step.name === "Generate an Asset") {
         // Remove custom logic - use the standard JSON dialog processing instead
         logger.info('Using standard JSON dialog processing for Generate an Asset step');
@@ -4834,7 +4821,7 @@ Respond with only "search_more" or "proceed" based on their input.`;
             const availableTemplates = [
               "Launch Announcement", 
               "JSON Dialog PR Workflow", 
-              "Quick Press Release", 
+       
               "Test Step Transitions", 
               "Dummy Workflow", 
               "Media Matching",
@@ -5628,9 +5615,7 @@ What would you like to do?`;
           // Create a Dummy workflow using hardcoded UUID
           newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.DUMMY_WORKFLOW);
         }
-        else if (selectedWorkflow.includes(WORKFLOW_TYPES.QUICK_PRESS_RELEASE)) {
-          // Create a Quick Press Release workflow using hardcoded UUID
-          newWorkflow = await this.createWorkflow(workflow.threadId, TEMPLATE_UUIDS.QUICK_PRESS_RELEASE);
+
         }
         else if (selectedWorkflow.includes(WORKFLOW_TYPES.MEDIA_MATCHING)) {
           // Create a Media Matching workflow using template ID

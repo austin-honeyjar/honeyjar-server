@@ -301,36 +301,84 @@ export class StepHandlers {
     // Intent classification is already done in ChatService - use the intent from ragContext if available
     const intent = ragContext?.intent;
     
-    // Handle workflow action intents (start new workflow)
-    if (intent.category === 'workflow_action' && intent.action === 'start_workflow' && intent.workflowName) {
+    logger.info('🎯 Workflow Selection Stream Handler', {
+      stepName: step.name,
+      userInput: userInput.substring(0, 50),
+      hasIntent: !!intent,
+      intentCategory: intent?.category,
+      intentAction: intent?.action,
+      intentWorkflow: intent?.workflowName,
+      ragContextKeys: Object.keys(ragContext || {})
+    });
+    
+    // Handle workflow action intents (start new workflow) OR continue_workflow in workflow selection
+    if (intent && intent.workflowName && 
+        ((intent.category === 'workflow_action' && intent.action === 'start_workflow') ||
+         (intent.category === 'workflow_management' && intent.action === 'continue_workflow'))) {
+      
+      let targetWorkflow = intent.workflowName;
+      
+      // SPECIAL CASE: If Base Workflow + continue_workflow, look for specific workflow in conversation history
+      if (intent.workflowName === 'Base Workflow' && intent.action === 'continue_workflow') {
+        const conversationHistory = ragContext?.relatedConversations || [];
+        const recentMessages = conversationHistory.slice(-5); // Check last 5 messages
+        
+        // Look for specific workflow mentions in recent conversation
+        for (const message of recentMessages) {
+          if (typeof message === 'string') {
+            if (message.includes('Press Release')) {
+              targetWorkflow = 'Press Release';
+              break;
+            } else if (message.includes('Blog Article')) {
+              targetWorkflow = 'Blog Article';
+              break;
+            } else if (message.includes('Social Post')) {
+              targetWorkflow = 'Social Post';
+              break;
+            } else if (message.includes('Media Pitch')) {
+              targetWorkflow = 'Media Pitch';
+              break;
+            } else if (message.includes('FAQ')) {
+              targetWorkflow = 'FAQ';
+              break;
+            }
+          }
+        }
+        
+        logger.info('🔍 Base Workflow context analysis', {
+          originalWorkflow: intent.workflowName,
+          detectedWorkflow: targetWorkflow,
+          conversationHints: recentMessages.slice(0, 3)
+        });
+      }
+      
       logger.info('🎯 Workflow creation intent detected (STREAMING)', {
-        selectedWorkflow: intent.workflowName,
+        selectedWorkflow: targetWorkflow,
+        originalIntent: intent.workflowName,
         userInput,
-        confidence: intent.confidence
+        confidence: intent.confidence,
+        stepName: step.name
       });
 
-      // Get template ID for the selected workflow
-      const templateId = WorkflowUtilities.getTemplateIdForWorkflow(intent.workflowName);
+      // Get template ID for the target workflow
+      const templateId = WorkflowUtilities.getTemplateIdForWorkflow(targetWorkflow);
       
       if (templateId) {
-        const response = `Perfect! Let's start your ${intent.workflowName}. I'll begin gathering the information we need.`;
+        // ALWAYS create workflow when workflow_action intent is detected
+        logger.info('🚀 Creating new workflow from intent', {
+          workflowName: targetWorkflow,
+          templateId,
+          userInput: userInput.substring(0, 50)
+        });
         
-        yield {
-          type: 'content',
-          data: {
-            content: response,
-            fullResponse: response,
-            finalResponse: response
-          }
-        };
-        
+        // Create workflow immediately for all workflow_action intents
+        // NOTE: No finalResponse needed - the workflow creation process will send the appropriate first step message
         yield {
           type: 'done',
           data: {
-            finalResponse: response,
             workflowTransition: {
               newWorkflowId: templateId,
-              workflowName: intent.workflowName
+              workflowName: targetWorkflow
             }
           }
         };
@@ -340,27 +388,58 @@ export class StepHandlers {
 
     // Handle conversational intents (questions, help, etc.)
     if (intent.category === 'conversational') {
-      logger.info('💬 Conversational intent detected - using regular AI streaming', {
+      logger.info('💬 Conversational intent detected - using workflow-aware AI streaming', {
         action: intent.action,
-        confidence: intent.confidence
+        confidence: intent.confidence,
+        hasCompletedWorkflows: true // We know they just completed a workflow
       });
-      // Fall through to regular AI streaming with enhanced context awareness
+      
+      // Enhance RAG context with workflow completion information
+      ragContext.workflowCompletion = {
+        lastWorkflowType: workflow.templateId,
+        completedSuccessfully: true,
+        suggestNextSteps: true
+      };
+      
+      // Fall through to enhanced AI streaming with workflow completion context
     }
 
-    // Handle workflow management intents (cancel, switch, etc.)
+    // Handle workflow management intents (continue, next steps, etc.)
     if (intent.category === 'workflow_management') {
+      logger.info('🔄 Workflow management intent detected - using completion-aware streaming', {
+        action: intent.action,
+        workflowName: intent.workflowName,
+        justCompletedWorkflow: true
+      });
+      
+      // Add context about just completing a workflow
+      ragContext.workflowCompletion = {
+        lastWorkflowType: workflow.templateId,
+        completedSuccessfully: true,
+        userAskingForNextSteps: true,
+        intent: intent.action
+      };
+      
       if (intent.shouldExit) {
         logger.info('🚪 Workflow exit requested', {
           action: intent.action,
           newWorkflow: intent.workflowName
         });
-        
         // TODO: Implement workflow cancellation and potential new workflow start
-        // For now, fall through to AI streaming which can handle this contextually
       }
+      
+      // Fall through to AI streaming with rich completion context
     }
 
     // For all other cases, use AI streaming to process the request with intent context
+    logger.info('⚠️ No intent match - falling back to AI streaming', {
+      intentCategory: intent?.category,
+      intentAction: intent?.action,
+      intentWorkflow: intent?.workflowName,
+      userInput: userInput.substring(0, 50),
+      explanation: 'Intent did not match any workflow creation conditions'
+    });
+    
     const enhancedPrompt = this.buildWorkflowSelectionPrompt(userInput, ragContext);
     
     // Create a temporary step for workflow selection
@@ -624,6 +703,21 @@ If they're asking a general question, respond with JSON: {"conversationalRespons
   }
 
   /**
+   * Get asset type from workflow template based on template ID
+   */
+  private getAssetTypeFromWorkflow(workflow: Workflow): string | null {
+    const templateMappings: Record<string, string> = {
+      '00000000-0000-0000-0000-000000000008': 'press_release',
+      '00000000-0000-0000-0000-000000000009': 'media_pitch', 
+      '00000000-0000-0000-0000-000000000010': 'social_post',
+      '00000000-0000-0000-0000-000000000011': 'blog_article',
+      '00000000-0000-0000-0000-000000000012': 'faq_document'
+    };
+    
+    return templateMappings[workflow.templateId] || null;
+  }
+
+  /**
    * Process AI response and determine next steps
    */
   private async processAIResponse(
@@ -676,10 +770,11 @@ If they're asking a general question, respond with JSON: {"conversationalRespons
         
         // Handle revisions with revised asset content
         if (reviewDecision === "revision_generated" && parsed.collectedInformation.revisedAsset) {
+          const assetType = this.getAssetTypeFromWorkflow(workflow) || 'press_release';
           logger.info('📝 STREAMING: Asset Review revision detected', {
             stepId: step.id.substring(0, 8),
             hasRevisedAsset: !!parsed.collectedInformation.revisedAsset,
-            assetType: step.metadata?.assetType || 'press_release',
+            assetType: assetType,
             userInput: userInput.substring(0, 50)
           });
           
@@ -691,7 +786,7 @@ If they're asking a general question, respond with JSON: {"conversationalRespons
             await enhancedService.addAssetMessage(
               workflow.threadId,
               parsed.collectedInformation.revisedAsset,
-              step.metadata?.assetType || 'press_release',
+              assetType,
               step.id,
               step.name,
               true // isRevision = true
@@ -700,7 +795,7 @@ If they're asking a general question, respond with JSON: {"conversationalRespons
             logger.info('✅ STREAMING: Asset Review revision saved successfully', {
               stepId: step.id.substring(0, 8),
               contentLength: parsed.collectedInformation.revisedAsset.length,
-              assetType: step.metadata?.assetType || 'press_release'
+              assetType: assetType
             });
           } catch (error) {
             logger.error('❌ STREAMING: Failed to save Asset Review revision', {
@@ -736,24 +831,13 @@ If they're asking a general question, respond with JSON: {"conversationalRespons
               workflowId: workflow.id.substring(0, 8)
             });
             
-            // Create new Base Workflow for continued conversation
-            try {
-                      // Use the enhanced workflow service to create Base Workflow
-        const enhancedService = new EnhancedWorkflowService();
-              
-              await enhancedService.createWorkflow(workflow.threadId, '00000000-0000-0000-0000-000000000000', false);
-              
-              logger.info('✅ STREAMING: Auto-created new Base Workflow for continued conversation', {
-                completedWorkflowId: workflow.id.substring(0, 8),
-                threadId: workflow.threadId.substring(0, 8)
-              });
-            } catch (autoCreateError) {
-              logger.error('❌ STREAMING: Failed to auto-create Base Workflow after completion', {
-                error: autoCreateError instanceof Error ? autoCreateError.message : 'Unknown error',
-                completedWorkflowId: workflow.id.substring(0, 8)
-              });
-              // Don't fail the approval if auto-creation fails
-            }
+            // Let conversation continue naturally without auto-creating Base Workflow
+            // Users can explicitly request workflows when needed
+            logger.info('✅ STREAMING: Workflow completed, ready for natural conversation', {
+              completedWorkflowId: workflow.id.substring(0, 8),
+              threadId: workflow.threadId.substring(0, 8),
+              approach: 'conversational_mode'
+            });
           } catch (error) {
             logger.error('❌ STREAMING: Failed to complete workflow', {
               stepId: step.id.substring(0, 8),
@@ -778,6 +862,99 @@ If they're asking a general question, respond with JSON: {"conversationalRespons
         }
       }
       
+      // Handle Information Collection step completion
+      if (step.name === "Information Collection" && parsed.isComplete === true && parsed.suggestedNextStep === "Asset Generation") {
+        logger.info('🎯 STREAMING: Information Collection completed, advancing to Asset Generation', {
+          stepId: step.id.substring(0, 8),
+          completionPercentage: parsed.completionPercentage,
+          autofilledInfo: parsed.autofilledInformation?.length || 0
+        });
+
+        // Auto-advance to Asset Generation step
+        try {
+          const dbService = new WorkflowDBService();
+          
+          // Mark current step as complete
+          await dbService.updateStep(step.id, {
+            status: 'complete' as any
+          });
+
+          // Find and activate the Asset Generation step
+          const nextStep = workflow.steps?.find(s => s.name === "Asset Generation");
+          if (nextStep) {
+            await dbService.updateStep(nextStep.id, {
+              status: 'in_progress' as any
+            });
+            await dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+
+            logger.info('✅ STREAMING: Advanced to Asset Generation step', {
+              stepId: nextStep.id.substring(0, 8),
+              fromStepId: step.id.substring(0, 8)
+            });
+
+            // Directly trigger asset generation execution using streaming
+            try {
+              const enhancedService = new EnhancedWorkflowService();
+              
+              // Use the streaming method which is public
+              const assetGenerator = enhancedService.handleStepResponseStreamWithContext(
+                nextStep.id,
+                JSON.stringify(parsed.collectedInformation),
+                'system',
+                'default'
+              );
+              
+              let assetResponse = '';
+              for await (const chunk of assetGenerator) {
+                if (chunk.type === 'content' && chunk.data?.content) {
+                  assetResponse += chunk.data.content;
+                }
+              }
+              
+              const assetResult = { response: assetResponse };
+
+              logger.info('✅ STREAMING: Asset generation completed automatically', {
+                stepId: nextStep.id.substring(0, 8),
+                assetGenerated: !!assetResult.response
+              });
+
+              // Return combined transition + asset generation response
+              return {
+                response: `Information collected successfully. Generating your asset now...\n\n${assetResult.response}`,
+                isComplete: true,
+                nextStep: {
+                  id: nextStep.id,
+                  name: nextStep.name,
+                  autoExecuted: true
+                }
+              };
+
+            } catch (assetError) {
+              logger.error('❌ STREAMING: Asset generation failed during auto-execution', {
+                error: assetError instanceof Error ? assetError.message : 'Unknown error',
+                stepId: nextStep.id.substring(0, 8)
+              });
+
+              // Fallback to just the transition message
+              return {
+                response: "Information collected successfully. Generating your asset now...",
+                isComplete: true,
+                nextStep: {
+                  id: nextStep.id,
+                  name: nextStep.name,
+                  autoExecute: true
+                }
+              };
+            }
+          }
+        } catch (error) {
+          logger.error('❌ STREAMING: Failed to auto-advance to Asset Generation', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            stepId: step.id.substring(0, 8)
+          });
+        }
+      }
+
       // Handle other JSON dialog responses
       if (parsed.isComplete !== undefined) {
         // Try different response fields in order of preference

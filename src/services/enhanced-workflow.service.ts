@@ -33,7 +33,7 @@ import { DUMMY_WORKFLOW_TEMPLATE } from "../templates/workflows/dummy-workflow";
 import { LAUNCH_ANNOUNCEMENT_TEMPLATE } from "../templates/workflows/launch-announcement";
 import { JSON_DIALOG_PR_WORKFLOW_TEMPLATE } from "../templates/workflows/json-dialog-pr-workflow";
 import { TEST_STEP_TRANSITIONS_TEMPLATE } from "../templates/workflows/test-step-transitions";
-import { QUICK_PRESS_RELEASE_TEMPLATE } from "../templates/workflows/quick-press-release";
+
 import { MEDIA_LIST_TEMPLATE } from "../templates/workflows/media-list";
 import { PRESS_RELEASE_TEMPLATE } from "../templates/workflows/press-release";
 import { MEDIA_PITCH_TEMPLATE } from "../templates/workflows/media-pitch";
@@ -114,7 +114,7 @@ const TEMPLATE_UUIDS = {
   LAUNCH_ANNOUNCEMENT: '00000000-0000-0000-0000-000000000002',
   JSON_DIALOG_PR_WORKFLOW: '00000000-0000-0000-0000-000000000003',
   TEST_STEP_TRANSITIONS: '00000000-0000-0000-0000-000000000004',
-  QUICK_PRESS_RELEASE: '00000000-0000-0000-0000-000000000005',
+
   MEDIA_MATCHING: '00000000-0000-0000-0000-000000000006',
   MEDIA_LIST: '00000000-0000-0000-0000-000000000007',
   PRESS_RELEASE: '00000000-0000-0000-0000-000000000008',
@@ -449,7 +449,7 @@ export class EnhancedWorkflowService {
           // Use the Universal RAG result
           const assetContent = universalResult.response;
           
-          logger.info('📝 OPENAI RESPONSE received', {
+          logger.info('📝 UNIVERSAL RAG COMPLETED - Asset and review prompt already handled', {
             stepId: stepId.substring(0, 8),
             responseLength: assetContent.length,
             responsePreview: assetContent.substring(0, 200) + '...',
@@ -457,62 +457,22 @@ export class EnhancedWorkflowService {
             containsABC: assetContent.includes('ABC Technology')
           });
           
-          // Mark step as complete and find next step
-          await this.dbService.updateStep(stepId, {
-            status: StepStatus.COMPLETE,
-            metadata: {
-              ...workflowData.step.metadata,
-              generatedAsset: assetContent,
-              assetType,
-              contextInjected: true
-            }
-          });
+          // 🚨 IMPORTANT: handleApiCallStep already:
+          // 1. Added the asset message to the thread
+          // 2. Created the review step 
+          // 3. Added the review prompt
+          // 4. Marked steps as complete/in_progress
+          // So we don't need to duplicate that work here!
           
-          // Find Asset Review step
+          // Find Asset Review step for the response (handleApiCallStep already set it up)
           const reviewStep = workflowData.workflow.steps.find(s => s.name === "Asset Review" || s.name === "Asset Refinement");
           if (reviewStep) {
-            // Set review step as current and in progress
-            await this.dbService.updateWorkflowCurrentStep(workflowData.workflow.id, reviewStep.id);
-            await this.dbService.updateStep(reviewStep.id, {
-              status: StepStatus.IN_PROGRESS,
-              metadata: {
-                ...reviewStep.metadata,
-                initialPromptSent: false,
-                generatedAsset: assetContent,
-                assetType
-              }
-            });
-            
-            // Add structured asset message
-            await this.addAssetMessage(
-              workflowData.workflow.threadId,
-              assetContent,
-              assetType,
-              stepId,
-              'Asset Generation'
-            );
-            
-            // Customize prompt for the specific asset
-            const customPrompt = `Here's your generated ${assetType}. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply let me know.`;
-            
-            // Send the review prompt via original service
-            await this.addDirectMessage(workflowData.workflow.threadId, customPrompt);
-            
-            // Mark that the prompt has been sent
-            await this.dbService.updateStep(reviewStep.id, {
-              prompt: customPrompt,
-              metadata: {
-                ...reviewStep.metadata,
-                initialPromptSent: true
-              }
-            });
-            
             originalResult = {
               response: `${assetType} generated successfully with your company context. Moving to review step.`,
               nextStep: {
                 id: reviewStep.id,
                 name: reviewStep.name,
-                prompt: customPrompt,
+                prompt: `Here's your generated ${assetType}. Please review it and let me know what specific changes you'd like to make, if any. If you're satisfied, simply let me know.`,
                 type: reviewStep.stepType
               },
               isComplete: false
@@ -591,7 +551,7 @@ export class EnhancedWorkflowService {
           });
         }
          
-         // Then apply security enhancements
+         // Apply security enhancements to all responses for consistency
          if (securityAnalysis.securityLevel !== 'public') {
            enhancedResponse = this.addSecurityGuidanceToResponse(enhancedResponse, securityAnalysis);
            
@@ -857,6 +817,78 @@ export class EnhancedWorkflowService {
       });
 
       // 🎯 INTENT-BASED WORKFLOW MANAGEMENT
+      
+      // 🔍 SAME-WORKFLOW DETECTION: Check if user is requesting a workflow that's already active
+      if (additionalContext?.intent?.category === 'workflow_action' && additionalContext?.intent?.workflowName) {
+        const step = await this.dbService.getStep(stepId);
+        const currentWorkflow = step ? await this.getWorkflow(step.workflowId) : null;
+        
+        if (currentWorkflow && currentWorkflow.status === 'active') {
+          const currentWorkflowName = this.getWorkflowDisplayName(currentWorkflow.templateId);
+          const requestedWorkflowName = additionalContext.intent.workflowName;
+          
+          logger.info('🔍 Workflow switch analysis', {
+            currentWorkflow: currentWorkflowName,
+            requestedWorkflow: requestedWorkflowName,
+            stepName: step?.name,
+            isBaseWorkflow: currentWorkflowName === 'Base Workflow'
+          });
+          
+          // If we're in Base Workflow (selection step), allow direct transition to any real workflow
+          if (currentWorkflowName === 'Base Workflow') {
+            logger.info('🚀 Base Workflow detected - allowing direct transition to real workflow', {
+              from: currentWorkflowName,
+              to: requestedWorkflowName,
+              stepName: step?.name
+            });
+            // Don't show confirmation for Base Workflow -> Real Workflow transitions
+            // Let it fall through to normal workflow creation
+          } else if (currentWorkflowName === requestedWorkflowName) {
+            logger.info('🔄 Same workflow detected - user requesting workflow that is already active', {
+              currentWorkflow: currentWorkflowName,
+              requestedWorkflow: requestedWorkflowName,
+              stepName: step?.name,
+              currentStepId: stepId.substring(0, 8)
+            });
+            
+            // Instead of creating a new workflow, continue with current one
+            yield {
+              type: 'content',
+              data: `You're already working on a ${currentWorkflowName} workflow! Let's continue where we left off.`
+            };
+            
+            // Continue with the current step processing
+            // Don't return here - let it fall through to normal step processing
+          } else if (currentWorkflowName !== requestedWorkflowName && currentWorkflowName !== 'Base Workflow') {
+            logger.info('🔄 Different workflow detected - user wants to switch workflows', {
+              currentWorkflow: currentWorkflowName,
+              requestedWorkflow: requestedWorkflowName,
+              stepName: step?.name,
+              currentStepId: stepId.substring(0, 8)
+            });
+            
+            // Ask user if they want to switch workflows (only for real workflow -> real workflow)
+            yield {
+              type: 'content',
+              data: `You're currently working on a ${currentWorkflowName} workflow. Would you like to switch to ${requestedWorkflowName} instead? If yes, type "yes" or "switch". If you want to continue with ${currentWorkflowName}, type "continue".`
+            };
+            
+            yield {
+              type: 'done',
+              data: {
+                finalResponse: `Workflow switch confirmation requested`,
+                pendingWorkflowSwitch: {
+                  from: currentWorkflowName,
+                  to: requestedWorkflowName,
+                  templateId: this.getTemplateIdForWorkflow(requestedWorkflowName)
+                }
+              }
+            };
+            return;
+          }
+        }
+      }
+      
       if (additionalContext?.intent?.category === 'workflow_management') {
         const intent = additionalContext.intent;
         logger.info('🔄 Processing workflow management intent', {
@@ -998,28 +1030,72 @@ Just let me know what you'd like to create!`
      
      const workflowData = { step, workflow };
 
-         // 🚨 CRITICAL: Check if this is an Asset Generation step that should use Universal RAG
-    // Only skip if this is the INITIAL Asset Generation, not revision requests
+         // 🚨 CRITICAL: Check if this is an Asset Generation step that should execute immediately
+    // Execute Asset Generation steps directly instead of skipping
     if (step.stepType === 'api_call' && step.name === 'Asset Generation' && !step.metadata?.enhancedProcessed) {
-      logger.info('⏭️ STREAMING SKIP: Initial Asset Generation step - delegating to Universal RAG auto-execution', {
+      logger.info('🚀 STREAMING EXECUTE: Asset Generation step with immediate execution', {
         stepId: stepId.substring(0, 8),
         stepName: step.name,
         stepType: step.stepType,
-        reason: 'Initial Asset Generation uses Universal RAG auto-execution'
+        reason: 'Asset Generation executing directly in streaming'
       });
       
-      // Skip streaming - auto-execution will handle asset generation and transition
+      // Execute asset generation directly in streaming
+      const assetType = this.getUserFriendlyAssetType(workflow);
       yield {
-        type: 'metadata',
+        type: 'content',
         data: {
-          skipReason: 'Initial Asset Generation delegated to Universal RAG auto-execution',
-          stepName: step.name,
-          stepType: step.stepType,
-          userMessage: 'Generating your press release...',
-          isProcessing: true
+          content: `Generating your ${assetType}...`,
         }
       };
-      return;
+
+      try {
+        // Execute the asset generation
+        const result = await this.handleApiCallStep(step, workflow, userInput, userId, orgId);
+        
+        // Yield the generated asset
+        yield {
+          type: 'content',
+          data: {
+            content: result.response || "Asset generated successfully.",
+          }
+        };
+
+        yield {
+          type: 'done',
+          data: {
+            finalResponse: result.response || "Asset generated successfully.",
+            isComplete: result.isComplete || false,
+            nextStep: result.nextStep
+          }
+        };
+
+        // Mark as processed
+        await this.dbService.updateStep(stepId, {
+          metadata: { 
+            ...step.metadata, 
+            enhancedProcessed: true,
+            streamingExecuted: true,
+            executionCompleted: new Date().toISOString()
+          }
+        });
+
+        return;
+      } catch (error) {
+        logger.error('❌ STREAMING: Asset Generation execution failed', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stepId: stepId.substring(0, 8)
+        });
+        
+        yield {
+          type: 'error',
+          data: {
+            error: 'Failed to generate asset. Please try again.',
+            stepId
+          }
+        };
+        return;
+      }
     }
 
      // Secondary check: Refresh step data to check if already processed
@@ -1185,6 +1261,16 @@ Just let me know what you'd like to create!`
 
               // Complete current workflow and create new one
               await this.updateWorkflowStatus(workflowData.workflow.id, WorkflowStatus.COMPLETED);
+              
+              // Check if workflow already exists for this thread to prevent duplicates
+              const existingActiveWorkflow = await this.getWorkflowByThreadId(workflowData.workflow.threadId);
+              if (existingActiveWorkflow && existingActiveWorkflow.templateId === chunk.data.workflowTransition.newWorkflowId) {
+                logger.info('🔄 Workflow already exists in streaming, skipping duplicate creation', {
+                  existingWorkflowId: existingActiveWorkflow.id.substring(0, 8),
+                  templateId: chunk.data.workflowTransition.newWorkflowId
+                });
+                return;
+              }
               
               const newWorkflow = await this.createWorkflow(
                 workflowData.workflow.threadId,
@@ -1928,10 +2014,10 @@ Just let me know what you'd like to create!`
           ...TEST_STEP_TRANSITIONS_TEMPLATE,
           id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS
         };
-      case QUICK_PRESS_RELEASE_TEMPLATE.name:
-        return { 
-          ...QUICK_PRESS_RELEASE_TEMPLATE,
-          id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE
+              case "Press Release":
+          return {
+            ...PRESS_RELEASE_TEMPLATE,
+          id: TEMPLATE_UUIDS.PRESS_RELEASE
         };
       case MEDIA_LIST_TEMPLATE.name:
       case 'Media Matching':
@@ -1978,6 +2064,16 @@ Just let me know what you'd like to create!`
     console.log(`[ENHANCED] === WORKFLOW CREATION DEBUG ===`);
     console.log(`[ENHANCED] Proceeding to create workflow with templateId: ${templateId} for threadId: ${threadId}`);
 
+    // CRITICAL: Check for existing active workflows BEFORE creating a new one
+    const existingActiveWorkflow = await this.getWorkflowByThreadId(threadId);
+    if (existingActiveWorkflow && existingActiveWorkflow.templateId === templateId && existingActiveWorkflow.status === 'active') {
+      console.log(`[ENHANCED] ⚠️ DUPLICATE PREVENTION: Active workflow already exists for template ${templateId}`, {
+        existingWorkflowId: existingActiveWorkflow.id.substring(0, 8),
+        templateId: templateId.substring(0, 8)
+      });
+      return existingActiveWorkflow;
+    }
+
     // Add debug logging for template resolution
     console.log(`[ENHANCED] Attempting to get template with ID: ${templateId}`);
 
@@ -1991,7 +2087,7 @@ Just let me know what you'd like to create!`
       console.log(`[ENHANCED] - Launch Announcement: ${TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT}`);
       console.log(`[ENHANCED] - JSON Dialog PR: ${TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW}`);
       console.log(`[ENHANCED] - Test Step Transitions: ${TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS}`);
-      console.log(`[ENHANCED] - Quick Press Release: ${TEMPLATE_UUIDS.QUICK_PRESS_RELEASE}`);
+  
       
       throw new Error(`Template not found: ${templateId}`);
     }
@@ -2054,9 +2150,9 @@ Just let me know what you'd like to create!`
             firstStepId = createdStep.id;
             
             if (!silent && stepDefinition.prompt) {
-              // Send the first step's prompt as a message from the AI
-              await this.addDirectMessage(threadId, stepDefinition.prompt);
-              console.log(`[ENHANCED] ✅ Sent first step prompt to thread ${threadId}`);
+              // Generate contextual initial prompt using AI with RAG context
+              await this.sendContextualInitialPrompt(threadId, createdStep, template.name);
+              console.log(`[ENHANCED] ✅ Sent contextual initial prompt to thread ${threadId}`);
             } else {
               console.log(`[ENHANCED] 🔇 Silent mode: Skipped sending initial prompt to thread ${threadId}`);
             }
@@ -2303,7 +2399,7 @@ Just let me know what you'd like to create!`
     try {
       logger.info('🎯 Enhanced Workflow Execution', {
         requestId,
-        threadId: threadId.substring(0, 8),
+      threadId: threadId.substring(0, 8),
         userInput: userInput.substring(0, 50),
         hasUserContext: !!(userId && orgId)
       });
@@ -2391,7 +2487,7 @@ Just let me know what you'd like to create!`
         if (workflow?.currentStepId) {
           const currentStep = await this.dbService.getStep(workflow.currentStepId);
           if (currentStep) {
-            return await this.stepHandlers.handleEnhancedJsonDialogStep(
+            const fallbackResult = await this.stepHandlers.handleEnhancedJsonDialogStep(
               currentStep, 
               workflow,
               userInput, 
@@ -2399,6 +2495,42 @@ Just let me know what you'd like to create!`
               userId || '',
               orgId || ''
             );
+            
+            // Handle workflow transitions from the fallback result
+            if (fallbackResult.workflowTransition) {
+              logger.info('🔄 Processing workflow transition from fallback', {
+                from: workflow.templateId?.substring(0, 8),
+                to: fallbackResult.workflowTransition.workflowName,
+                templateId: fallbackResult.workflowTransition.newWorkflowId
+              });
+              
+              // Complete current workflow and create new one
+              await this.dbService.updateWorkflowStatus(workflow.id, 'completed' as any);
+              await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
+              
+              // Check if workflow already exists for this thread to prevent duplicates
+              const existingActiveWorkflow = await this.getWorkflowByThreadId(workflow.threadId);
+              if (existingActiveWorkflow && existingActiveWorkflow.templateId === fallbackResult.workflowTransition.newWorkflowId) {
+                logger.info('🔄 Workflow already exists, skipping duplicate creation', {
+                  existingWorkflowId: existingActiveWorkflow.id.substring(0, 8),
+                  templateId: fallbackResult.workflowTransition.newWorkflowId
+                });
+                return fallbackResult;
+              }
+              
+              // Create the new workflow
+              const newWorkflow = await this.createWorkflow(
+                workflow.threadId, 
+                fallbackResult.workflowTransition.newWorkflowId
+              );
+              
+              logger.info('✅ Workflow transition completed from fallback', {
+                newWorkflowId: newWorkflow.id.substring(0, 8),
+                workflowName: fallbackResult.workflowTransition.workflowName
+              });
+            }
+            
+            return fallbackResult;
           }
         }
       } catch (fallbackError) {
@@ -3013,6 +3145,117 @@ Generate the ${assetType}:`;
   }
 
   /**
+   * Send contextual initial prompt using AI with RAG context
+   */
+  private async sendContextualInitialPrompt(threadId: string, step: WorkflowStep, workflowName: string): Promise<void> {
+    try {
+      // Check if this is one of our updated efficient workflows
+      const efficientWorkflows = ['Press Release', 'Social Post', 'Blog Article', 'Media Pitch', 'FAQ'];
+      
+      if (efficientWorkflows.includes(workflowName)) {
+        // For efficient workflows, use the simple prompt directly (no AI generation)
+        await this.addDirectMessage(threadId, step.prompt || 'Please provide the requested information.');
+        
+        logger.info('✅ Sent simple initial prompt for efficient workflow', {
+          threadId: threadId.substring(0, 8),
+          workflowName,
+          stepName: step.name,
+          promptLength: (step.prompt || '').length
+        });
+        return;
+      }
+
+      // Get conversation history for context
+      const recentMessages = await db.query.chatMessages.findMany({
+        where: eq(chatMessages.threadId, threadId),
+        orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+        limit: 5
+      });
+
+      // Get user info for the thread to enable RAG context
+      const threadInfo = await db.query.chatThreads.findFirst({
+        where: eq(chatThreads.id, threadId)
+      });
+
+      if (!threadInfo?.userId) {
+        // Fallback to baked prompt if we can't get user context
+        await this.addDirectMessage(threadId, step.prompt || 'Please provide the requested information.');
+        return;
+      }
+
+      // Gather RAG context for personalization  
+      const ragContext = await this.ragService.getDualRAGContext(
+        threadInfo.userId,
+        threadInfo.orgId || '',
+        workflowName, // workflow type
+        step.name, // step name  
+        `${workflowName} workflow context`, // user input
+        'internal' // security level
+      );
+
+      // Create conversation history context
+      const conversationContext = recentMessages
+        .reverse() // oldest first
+        .map(msg => `${msg.role}: "${msg.content}"`)
+        .join('\n');
+
+      // Generate contextual prompt using AI
+      const systemPrompt = `You are starting a ${workflowName} workflow. Create a personalized, engaging initial message that:
+
+1. References the user's company and role context from their profile
+2. Acknowledges any recent conversation context 
+3. Clearly explains what information you need for this ${workflowName}
+4. Uses a professional but friendly tone
+5. Makes the user feel like you understand their specific needs
+
+WORKFLOW STEP DETAILS:
+- Step Name: ${step.name}
+- Step Status: ${step.status}
+- Original Prompt: ${step.prompt}
+
+USER CONTEXT:
+${ragContext.userDefaults?.companyName ? `Company: ${ragContext.userDefaults.companyName}, Industry: ${ragContext.userDefaults.industry || 'Unknown'}` : 'No specific user profile available'}
+
+RECENT CONVERSATION:
+${conversationContext || 'No recent conversation'}
+
+WORKFLOW CONTEXT:
+${ragContext.combinedContext?.map(c => c.content).join('\n') || 'No specific workflow context'}
+
+Generate a contextual initial message that feels personal and relevant to this specific user and their recent conversation. Make it conversational and show that you understand their business context.`;
+
+      const contextualPrompt = await this.openAIService.generateResponse(
+        systemPrompt,
+        `Create initial ${workflowName} message`,
+        {
+          max_tokens: 200,
+          temperature: 0.7
+        }
+      );
+
+      // Send the AI-generated contextual prompt
+      await this.addDirectMessage(threadId, contextualPrompt.trim());
+      
+      logger.info('✅ Sent AI-generated contextual initial prompt', {
+        threadId: threadId.substring(0, 8),
+        workflowName,
+        stepName: step.name,
+        promptLength: contextualPrompt.length
+      });
+
+    } catch (error) {
+      logger.error('❌ Failed to generate contextual initial prompt, using fallback', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        threadId: threadId.substring(0, 8),
+        workflowName
+      });
+      
+      // Fallback to original prompt
+      await this.addDirectMessage(threadId, step.prompt || 'Please provide the requested information.');
+    }
+  }
+
+  /**
    * Add direct message - CONSOLIDATED from WorkflowService
    * Full message processing logic without delegation
    */
@@ -3154,64 +3397,17 @@ Generate the ${assetType}:`;
         threadId: threadId.substring(0, 8)
       });
 
-      // Check if this is the base workflow
+      // DISABLED: Legacy workflow completion system (replaced by intent-based workflow creation)
+      // This was causing duplicate workflow creation when pressing buttons
       const baseTemplateFromDB = await this.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
       
       if (workflow.templateId === baseTemplateFromDB?.id) {
-        logger.info('🎯 Base workflow completed - checking for workflow selection');
+        logger.info('🎯 Base workflow completed - SKIPPING legacy workflow creation (now handled by intent system)');
         
-        // Get the workflow selection
-        const completedBaseWorkflow = await this.getWorkflow(workflow.id);
-        const selectionStep = completedBaseWorkflow?.steps.find((s: any) => s.name === "Workflow Selection");
-        const selectedWorkflowName = selectionStep?.aiSuggestion || selectionStep?.userInput;
-        
-        if (selectedWorkflowName) {
-          logger.info('✅ Workflow selection found', { 
-            selectedWorkflow: selectedWorkflowName 
-          });
-
-          // Use WorkflowUtilities to get template ID
-          const templateId = WorkflowUtilities.getTemplateIdForWorkflow(selectedWorkflowName);
-          
-          if (templateId) {
-            logger.info('🚀 Creating selected workflow', {
-              workflowName: selectedWorkflowName,
-              templateId: templateId.substring(0, 8)
-            });
-
-            const nextWorkflow = await this.createWorkflow(threadId, templateId, false);
-            
-            return { 
-              newWorkflow: nextWorkflow, 
-              selectedWorkflow: selectedWorkflowName 
-            };
-          } else {
-            // Try fallback to original template lookup
-            const nextTemplate = await this.getTemplateByName(selectedWorkflowName);
-            
-            if (nextTemplate) {
-              logger.info('🔄 Using fallback template lookup', {
-                workflowName: selectedWorkflowName,
-                templateId: nextTemplate.id.substring(0, 8)
-              });
-
-              const nextWorkflow = await this.createWorkflow(threadId, nextTemplate.id, false);
-              
-              return { 
-                newWorkflow: nextWorkflow, 
-                selectedWorkflow: selectedWorkflowName 
-              };
-            } else {
-              logger.warn('❌ Template not found for workflow selection', {
-                selectedWorkflow: selectedWorkflowName
-              });
-
-              return { 
-                message: `Sorry, I couldn't find a workflow template named "${selectedWorkflowName}". Please try selecting from the available options.` 
-              };
-            }
-          }
-        }
+        // Skip the legacy workflow creation entirely - intent system handles this now
+        return { 
+          message: 'Base workflow completed - workflow creation handled by intent system'
+        };
       }
       
       // Standard workflow completion
@@ -3473,7 +3669,7 @@ ${enhancedPrompt}`;
       '00000000-0000-0000-0000-000000000002': 'JSON Dialog PR Workflow',
       '00000000-0000-0000-0000-000000000003': 'Test Step Transitions',
       '00000000-0000-0000-0000-000000000004': 'Dummy Workflow',
-      '00000000-0000-0000-0000-000000000005': 'Quick Press Release',
+  
       '00000000-0000-0000-0000-000000000006': 'Media Matching',
       '00000000-0000-0000-0000-000000000007': 'Media List Generator',
       '00000000-0000-0000-0000-000000000008': 'Press Release',
@@ -3533,6 +3729,35 @@ ${enhancedPrompt}`;
 
 
 
+  /**
+   * Get asset type from workflow template based on template ID
+   */
+  private getAssetTypeFromWorkflow(workflow: Workflow): string | null {
+    const templateMappings: Record<string, string> = {
+      '00000000-0000-0000-0000-000000000008': 'press_release',
+      '00000000-0000-0000-0000-000000000009': 'media_pitch', 
+      '00000000-0000-0000-0000-000000000010': 'social_post',
+      '00000000-0000-0000-0000-000000000011': 'blog_article',
+      '00000000-0000-0000-0000-000000000012': 'faq_document'
+    };
+    
+    return templateMappings[workflow.templateId] || null;
+  }
+
+  /**
+   * Get user-friendly asset type name for display messages
+   */
+  private getUserFriendlyAssetType(workflow: Workflow): string {
+    const friendlyMappings: Record<string, string> = {
+      '00000000-0000-0000-0000-000000000008': 'press release',
+      '00000000-0000-0000-0000-000000000009': 'media pitch', 
+      '00000000-0000-0000-0000-000000000010': 'social post',
+      '00000000-0000-0000-0000-000000000011': 'blog article',
+      '00000000-0000-0000-0000-000000000012': 'FAQ document'
+    };
+    
+    return friendlyMappings[workflow.templateId] || 'asset';
+  }
 
   /**
    * Process JSON dialog step with full context injection
@@ -3583,9 +3808,8 @@ ${enhancedPrompt}`;
       // Get conversation history
       const conversationHistory = await this.getConversationHistory(workflow.threadId);
       
-      // Create JSON dialog service instance
-              const { JsonDialogService } = require('./jsonDialog.service');
-        const jsonDialogService = new JsonDialogService();
+      // Create JSON dialog service instance (already imported at top)
+      const jsonDialogService = new JsonDialogService();
       
       // Process with the ENHANCED step (context already injected into prompt)
       const result = await jsonDialogService.processMessage(
@@ -3676,9 +3900,9 @@ ${enhancedPrompt}`;
             });
           }
           
-          // Return a simple completion response
+          // Return a simple completion response (no user-facing message for workflow selection)
           return {
-            response: `Selected workflow: ${selectedWorkflow}`,
+            response: "", // Empty response - workflow selection doesn't need user confirmation
             isComplete: true, // Mark as complete since we handled the transition
             nextStep: undefined
           };
@@ -3790,7 +4014,8 @@ ${enhancedPrompt}`;
 
       // 📝 ASSET REVIEW HANDLING: Check if this is an Asset Review step with revisions
       if (step.name === 'Asset Review' && result.collectedInformation?.reviewDecision === 'revision_generated') {
-        const assetType = step.metadata?.assetType || 'press_release';
+        // Get asset type from workflow template since Asset Review steps don't have assetType metadata
+        const assetType = this.getAssetTypeFromWorkflow(workflow) || 'press_release';
         
         // 🎯 UNIVERSAL ASSET EXTRACTION: Clean, standardized approach
         let revisedContent = null;
@@ -5175,6 +5400,7 @@ ${enhancedPrompt}`;
    */
   private getWorkflowDisplayName(templateId: string): string | null {
     const templateMap: Record<string, string> = {
+      [TEMPLATE_UUIDS.BASE_WORKFLOW]: 'Base Workflow',
       [TEMPLATE_UUIDS.PRESS_RELEASE]: 'Press Release',
       [TEMPLATE_UUIDS.SOCIAL_POST]: 'Social Post',
       [TEMPLATE_UUIDS.BLOG_ARTICLE]: 'Blog Article',
@@ -5198,7 +5424,7 @@ ${enhancedPrompt}`;
       'Media Pitch': TEMPLATE_UUIDS.MEDIA_PITCH,
       'FAQ': TEMPLATE_UUIDS.FAQ,
       'Launch Announcement': TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT,
-      'Quick Press Release': TEMPLATE_UUIDS.QUICK_PRESS_RELEASE,
+  
       'Media List Generator': TEMPLATE_UUIDS.MEDIA_LIST,
       'Media Matching': TEMPLATE_UUIDS.MEDIA_MATCHING,
       'JSON Dialog PR Workflow': TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW
@@ -6152,7 +6378,7 @@ ${enhancedPrompt}`;
       'JSON Dialog PR Workflow': '00000000-0000-0000-0000-000000000002', 
       'Test Step Transitions': '00000000-0000-0000-0000-000000000003',
       'Dummy Workflow': '00000000-0000-0000-0000-000000000004',
-      'Quick Press Release': '00000000-0000-0000-0000-000000000005',
+  
       'Media Matching': '00000000-0000-0000-0000-000000000006',
       'Media List Generator': '00000000-0000-0000-0000-000000000007',
       'Press Release': '00000000-0000-0000-0000-000000000008',
@@ -7575,6 +7801,13 @@ ${enhancedPrompt}`;
         analysis.securityLevel = 'confidential';
       }
 
+      // For consistent security notice display, ensure all workflow content is treated as 'internal' minimum
+      if (analysis.securityLevel === 'public') {
+        analysis.securityLevel = 'internal';
+        analysis.securityTags.push('upgraded_to_internal');
+        analysis.recommendations.push('Security level upgraded to internal for consistent workflow security notices.');
+      }
+
       logger.info('✅ SECURITY ANALYSIS COMPLETED', {
         securityLevel: analysis.securityLevel,
         piiDetected: analysis.piiDetected,
@@ -8329,11 +8562,7 @@ Response Guidelines:
         ...TEST_STEP_TRANSITIONS_TEMPLATE, 
         id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS 
       };
-    } else if (templateId === TEMPLATE_UUIDS.QUICK_PRESS_RELEASE) {
-      return { 
-        ...QUICK_PRESS_RELEASE_TEMPLATE, 
-        id: TEMPLATE_UUIDS.QUICK_PRESS_RELEASE 
-      };
+    
     } else if (templateId === TEMPLATE_UUIDS.MEDIA_MATCHING) {
       return { 
         ...MEDIA_MATCHING_TEMPLATE, 

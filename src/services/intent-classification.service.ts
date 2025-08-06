@@ -28,6 +28,26 @@ export interface IntentContext {
 
 export class IntentClassificationService {
   private openAIService: OpenAIService;
+  private cache: Map<string, { intent: UserIntent; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 60000; // 60 seconds cache for better performance
+  private readonly SIMPLE_PATTERNS = new Map([
+    // Exact workflow names (common for button clicks)
+    ['press release', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Press Release', confidence: 0.95 }],
+    ['social post', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Social Post', confidence: 0.95 }],
+    ['blog article', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Blog Article', confidence: 0.95 }],
+    ['media pitch', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Media Pitch', confidence: 0.95 }],
+    ['launch announcement', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Launch Announcement', confidence: 0.95 }],
+    ['faq', { category: 'workflow_action', action: 'start_workflow', workflowName: 'FAQ', confidence: 0.95 }],
+    // Action phrases
+    ['make a press release', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Press Release', confidence: 0.95 }],
+    ['create a press release', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Press Release', confidence: 0.95 }],
+    ['do a press release', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Press Release', confidence: 0.95 }],
+    ['make a social post', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Social Post', confidence: 0.95 }],
+    // Workflow management
+    ['cancel', { category: 'workflow_management', action: 'cancel_workflow', workflowName: null, confidence: 0.9 }],
+    ['exit', { category: 'workflow_management', action: 'cancel_workflow', workflowName: null, confidence: 0.9 }],
+    ['stop', { category: 'workflow_management', action: 'cancel_workflow', workflowName: null, confidence: 0.9 }],
+  ]);
 
   constructor() {
     this.openAIService = new OpenAIService();
@@ -37,7 +57,82 @@ export class IntentClassificationService {
    * Classify user intent using AI instead of hardcoded rules
    */
   async classifyIntent(context: IntentContext): Promise<UserIntent> {
+    // Create a more robust cache key to prevent collisions
+    const sanitizedMessage = context.userMessage.replace(/[^a-zA-Z0-9\s]/g, ''); // Remove special chars that might cause issues
+    const workflowContext = context.currentWorkflow ? `${context.currentWorkflow.name}_${context.currentWorkflow.currentStep}` : 'none';
+    const historyDigest = context.conversationHistory.slice(-3).map(h => h.substring(0, 10)).join('|'); // Last 3 messages digest
+    const cacheKey = `${sanitizedMessage}_${workflowContext}_${context.conversationHistory.length}_${historyDigest}`;
+    
+    // Debug logging for cache investigation
+    logger.info('🔍 Intent classification cache check', {
+      userMessage: `"${context.userMessage}"`,
+      cacheKey: cacheKey.substring(0, 100),
+      currentWorkflow: context.currentWorkflow?.name,
+      historyLength: context.conversationHistory.length,
+      cacheSize: this.cache.size
+    });
+    
+    // TEMPORARILY DISABLE CACHE TO DEBUG THE ISSUE
+    // Check cache first
+    const cached = this.cache.get(cacheKey);
+    if (false && cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      logger.info('💾 Using cached intent classification', {
+        userMessage: context.userMessage.substring(0, 50),
+        cachedCategory: cached.intent.category,
+        cachedReasoning: cached.intent.reasoning,
+        cacheAge: `${Date.now() - cached.timestamp}ms`
+      });
+      return cached.intent;
+    }
+
+    // Check simple patterns first for instant response
+    const lowerMessage = context.userMessage.toLowerCase().trim();
+    
+    // First check exact matches (even faster)
+    if (this.SIMPLE_PATTERNS.has(lowerMessage)) {
+      const intentTemplate = this.SIMPLE_PATTERNS.get(lowerMessage)!;
+      const intent: UserIntent = {
+        ...intentTemplate as any,
+        reasoning: `Exact pattern match for "${lowerMessage}"`
+      };
+      
+      // Cache disabled - context is too important for intent classification  
+      // this.cache.set(cacheKey, { intent, timestamp: Date.now() });
+      
+      logger.info('⚡ INSTANT exact match for intent classification', {
+        pattern: lowerMessage,
+        category: intent.category,
+        confidence: intent.confidence,
+        duration: '<5ms'
+      });
+      
+      return intent;
+    }
+    
+    // Then check partial matches
+    for (const [pattern, intentTemplate] of this.SIMPLE_PATTERNS) {
+      if (lowerMessage.includes(pattern)) {
+        const intent: UserIntent = {
+          ...intentTemplate as any,
+          reasoning: `Simple pattern match for "${pattern}"`
+        };
+        
+              // Cache disabled - context is too important for intent classification
+      // this.cache.set(cacheKey, { intent, timestamp: Date.now() });
+        
+        logger.info('⚡ Fast pattern match for intent classification', {
+          pattern,
+          category: intent.category,
+          confidence: intent.confidence,
+          duration: '<10ms'
+        });
+        
+        return intent;
+      }
+    }
+    
     try {
+      const startTime = Date.now();
       logger.info('🧠 Classifying user intent with AI', {
         userMessage: context.userMessage.substring(0, 100),
         hasCurrentWorkflow: !!context.currentWorkflow,
@@ -50,19 +145,40 @@ export class IntentClassificationService {
         systemPrompt,
         context.userMessage,
         {
-          model: 'gpt-4o-mini', // Faster model for classification
+          model: 'gpt-4o-mini', // Fastest model for classification
           temperature: 0.0, // Zero temperature for deterministic JSON output
-          max_tokens: 300 // Increased for complete JSON responses
+          max_tokens: 150, // Reduced - we only need small JSON response
+          frequency_penalty: 0, // No penalties for faster response
+          presence_penalty: 0
         }
       );
 
       const intent = this.parseIntentResponse(response);
+      const duration = Date.now() - startTime;
+      
+      // Cache disabled - context is too important for intent classification
+      // this.cache.set(cacheKey, {
+      //   intent,
+      //   timestamp: Date.now()
+      // });
+      
+      // Clean old cache entries periodically
+      if (this.cache.size > 100) {
+        const cutoff = Date.now() - this.CACHE_TTL;
+        for (const [key, value] of this.cache.entries()) {
+          if (value.timestamp < cutoff) {
+            this.cache.delete(key);
+          }
+        }
+      }
       
       logger.info('✅ Intent classified', {
         category: intent.category,
         action: intent.action,
         workflowName: intent.workflowName,
-        confidence: intent.confidence
+        confidence: intent.confidence,
+        duration: `${duration}ms`,
+        cached: false
       });
 
       return intent;
@@ -97,7 +213,16 @@ export class IntentClassificationService {
 
     return `You are an intent classification system for a PR workflow platform. 
 
-CONTEXT:
+🎯 CRITICAL CONTEXT RULE:
+${context.currentWorkflow?.name ? 
+  `User is CURRENTLY IN "${context.currentWorkflow.name}" workflow. 
+  If they say "make [something]" related to the SAME workflow type, classify as continue_workflow.
+  Only classify as start_workflow if they want a DIFFERENT workflow type.` 
+  : 
+  'User is NOT in any workflow. Action requests should be start_workflow.'
+}
+
+CURRENT STATE:
 ${currentWorkflowContext}
 User: ${context.userProfile?.companyName || 'Unknown'} (${context.userProfile?.industry || 'Unknown industry'})
 
@@ -117,16 +242,21 @@ CLASSIFICATION RULES:
    - Users saying they don't know something
 
 2. WORKFLOW_ACTION INTENT:
-   - Clear requests to create/start a specific workflow
-   - Action verbs: "create", "make", "generate", "write", "do"
-   - Examples: "make a press release", "create a blog post", "generate media list"
+   **ONLY when NO active workflow or user explicitly requests a DIFFERENT workflow:**
+   - Clear requests to create/start a NEW workflow when not in any workflow
+   - Examples when NOT in a workflow: "make a press release", "create a blog post"
+   - Examples when switching: "actually, I want to do a social post instead"
 
 3. WORKFLOW_MANAGEMENT INTENT:
+   **CRITICAL: When user is ALREADY in a workflow, prioritize continue_workflow:**
+   - Continue current workflow: "make one on my company", "create it", "generate it", "do it"
+     → If user says "make a blog article" while IN Blog Article workflow = continue_workflow
+     → If user says "make a press release" while IN Blog Article workflow = start_workflow (different)
    - Cancel/exit current workflow: "cancel", "stop", "exit", "start over"
-   - Switch workflows: "actually, I want to do X instead"
-   - Navigate workflow steps: "go back", "next step"
-   - Continue current workflow: answering workflow questions, providing requested info
+   - Switch workflows: "actually, I want to do X instead" (where X ≠ current workflow)
+   - Navigate workflow steps: "go back", "next step"  
    - Workflow information requests: "what are the steps?", "how does this workflow work?"
+   - Interface/visibility questions: "i don't see it", "where is X?", "can you show me?"
 
 IMPORTANT:
 1. Consider the current step's goal when classifying user input
@@ -164,8 +294,11 @@ EXAMPLES:
 Input: "can you describe a social post"
 Output: {"category": "conversational", "action": "answer_question", "workflowName": null, "confidence": 0.9, "reasoning": "User asking for information, not requesting creation", "shouldExit": false}
 
-Input: "make a press release"
+Input: "make a press release" (when NOT in any workflow)
 Output: {"category": "workflow_action", "action": "start_workflow", "workflowName": "Press Release", "confidence": 0.95, "reasoning": "Clear creation request with action verb", "shouldExit": false}
+
+Input: "make one on my company" (when IN Blog Article workflow)
+Output: {"category": "workflow_management", "action": "continue_workflow", "workflowName": "Blog Article", "confidence": 0.95, "reasoning": "User wants to continue current Blog Article workflow with company context", "shouldExit": false}
 
 Input: "actually do a social post" (when already in a workflow)
 Output: {"category": "workflow_management", "action": "cancel_workflow", "workflowName": "Social Post", "confidence": 0.9, "reasoning": "User changing their mind, wants different workflow", "shouldExit": false}
@@ -190,6 +323,12 @@ Output: {"category": "workflow_management", "action": "continue_workflow", "work
 
 Input: "what were the steps to the press release workflow?"
 Output: {"category": "workflow_management", "action": "continue_workflow", "workflowName": null, "confidence": 0.9, "reasoning": "User asking about workflow steps information", "shouldExit": false}
+
+Input: "give a paragraph version of what i can do?" (in Workflow Selection step)
+Output: {"category": "workflow_management", "action": "continue_workflow", "workflowName": null, "confidence": 0.85, "reasoning": "User asking for clarification on available options in current step", "shouldExit": false}
+
+Input: "i dont see it" (after system showed options)
+Output: {"category": "conversational", "action": "answer_question", "workflowName": null, "confidence": 0.8, "reasoning": "User needs clarification on interface or visibility", "shouldExit": false}
 
 Input: "no the steps to a social post?" (after being asked about social posts)
 Output: {"category": "workflow_management", "action": "continue_workflow", "workflowName": null, "confidence": 0.95, "reasoning": "User clarifying they want workflow steps, referencing conversation history", "shouldExit": false}

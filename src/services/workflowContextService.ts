@@ -48,7 +48,7 @@ export class WorkflowContextService {
     contextDoc += `- **Social Post**: Brand voice social media content\n`;
     contextDoc += `- **Blog Article**: Long-form thought leadership\n`;
     contextDoc += `- **FAQ**: Comprehensive Q&A documents\n`;
-    contextDoc += `- **Quick Press Release**: Streamlined 2-step process\n\n`;
+
     
     contextDoc += `### Development & Testing\n`;
     contextDoc += `- **Test Step Transitions**: Workflow testing utility\n`;
@@ -68,7 +68,7 @@ export class WorkflowContextService {
     contextDoc += `- **Media Outreach**: Use "Media Pitch" or "Media Matching"\n`;
     contextDoc += `- **Social Content**: Use "Social Post"\n`;
     contextDoc += `- **Long-form Content**: Use "Blog Article"\n`;
-    contextDoc += `- **Quick Turnaround**: Use "Quick Press Release"\n`;
+
     contextDoc += `- **Complex Campaigns**: Use "Launch Announcement" or "JSON Dialog PR Workflow"\n\n`;
     
     contextDoc += `### Step Types Available\n`;
