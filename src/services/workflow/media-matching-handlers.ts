@@ -442,25 +442,91 @@ export class MediaMatchingHandlers {
             authorOrganization: author.organization
           });
 
+          // Generate realistic mock data based on organization
+          const organizationSlug = author.organization.toLowerCase().replace(/\s+/g, '');
+          const nameSlug = author.name.toLowerCase().replace(/\s+/g, '.');
+          const nameParts = author.name.split(' ');
+          const firstName = nameParts[0]?.toLowerCase() || 'reporter';
+          const lastName = nameParts[nameParts.length - 1]?.toLowerCase() || 'journalist';
+          
+          // Generate mock profile image URL (placeholder service)
+          const profileImageUrl = `https://i.pravatar.cc/150?u=${encodeURIComponent(author.name)}`;
+          
+          // Generate realistic location based on major news organizations
+          const newsLocationMap: Record<string, {city: string, region: string, country: string}> = {
+            'newyorktimes': { city: 'New York', region: 'New York', country: 'United States' },
+            'wsj': { city: 'New York', region: 'New York', country: 'United States' },
+            'washingtonpost': { city: 'Washington', region: 'District of Columbia', country: 'United States' },
+            'techcrunch': { city: 'San Francisco', region: 'California', country: 'United States' },
+            'wired': { city: 'San Francisco', region: 'California', country: 'United States' },
+            'theverge': { city: 'New York', region: 'New York', country: 'United States' },
+            'cnn': { city: 'Atlanta', region: 'Georgia', country: 'United States' },
+            'reuters': { city: 'New York', region: 'New York', country: 'United States' },
+            'bloomberg': { city: 'New York', region: 'New York', country: 'United States' },
+            'forbes': { city: 'New York', region: 'New York', country: 'United States' }
+          };
+          
+          const locationData = newsLocationMap[organizationSlug] || { city: 'New York', region: 'New York', country: 'United States' };
+          
+          // Generate realistic company domain and website
+          const companyDomain = `${organizationSlug}.com`;
+          const companyWebsite = `https://www.${companyDomain}`;
+          const companyLinkedIn = `https://linkedin.com/company/${organizationSlug}`;
+          
           enrichedContact = {
+            // Core identification
             rank: 1,
             authorId: `media-matching-${index}`,
             name: author.name,
-            title: "Reporter",
+            
+            // 📸 Mock profile image using placeholder service
+            profilePic: profileImageUrl,
+            
+            // Professional info
+            title: "Senior Technology Reporter",
             organization: author.organization,
-            email: `${author.name.toLowerCase().replace(/\s+/g, '.')}@${author.organization.toLowerCase().replace(/\s+/g, '')}.com`,
+            
+            // 📧 Enhanced mock contact info
+            email: `${nameSlug}@${companyDomain}`,
+            recommendedEmail: `${nameSlug}@${companyDomain}`,
+            workEmail: `${nameSlug}@${companyDomain}`,
+            personalEmail: `${firstName}.${lastName}@gmail.com`,
+            
+            // 📞 Enhanced mock phone info
             phone: `+1-555-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`,
-            linkedin: `linkedin.com/in/${author.name.toLowerCase().replace(/\s+/g, '-')}`,
-            twitter: `@${author.name.toLowerCase().replace(/\s+/g, '')}`,
-            recentRelevantArticles: fullAuthorData.recentRelevantArticles || author.recentRelevantArticles || 0,
+            workPhone: `+1-555-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`,
+            personalPhone: `+1-555-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`,
+            
+            // 🔗 Enhanced mock social profiles
+            linkedin: `https://linkedin.com/in/${author.name.toLowerCase().replace(/\s+/g, '-')}-reporter`,
+            twitter: `@${firstName}${lastName}tech`,
+            facebook: `https://facebook.com/${firstName}.${lastName}`,
+            
+            // 📊 Article analysis data
             averageRelevanceScore: Math.round((fullAuthorData.algorithmicScore || author.topicRelevanceScore || 0) * 10) / 10,
-            topicRelevance: fullAuthorData.relevanceGrade || author.relevanceGrade || 'Medium',
+            recentRelevantArticles: fullAuthorData.recentRelevantArticles || author.recentRelevantArticles || 0,
             articleCount: fullAuthorData.totalRecentArticles || author.totalRecentArticles || 0,
-            recentTopics: fullAuthorData.expertiseAreas || [],
-            top3RelevantArticles: top3RelevantArticles,
+            topicRelevance: fullAuthorData.relevanceGrade || author.relevanceGrade || 'High',
+            
+            // 🎯 Contact quality & source
             contactConfidence: "high",
             enrichmentSource: "mock_fallback",
-            analysisInsight: aiAuthorInsight
+            
+            // 📍 Enhanced location data
+            location: `${locationData.city}, ${locationData.region}`,
+            city: locationData.city,
+            region: locationData.region,
+            country: locationData.country,
+            
+            // 🏢 Enhanced company info
+            currentEmployerDomain: companyDomain,
+            currentEmployerWebsite: companyWebsite,
+            currentEmployerLinkedIn: companyLinkedIn,
+            
+            // 📰 Article insights
+            top3RelevantArticles: top3RelevantArticles,
+            recentTopics: fullAuthorData.expertiseAreas || ['Technology', 'Innovation', 'Business'],
+            analysisInsight: `${aiAuthorInsight} This is a mock contact with enhanced profile data for demonstration purposes.`
           };
         } else {
           // 🚀 Real RocketReach API calls for contacts 2+
@@ -487,23 +553,58 @@ export class MediaMatchingHandlers {
               });
 
               enrichedContact = {
+                // Core identification
                 rank: index + 1,
                 authorId: rocketReachContact.id || `media-matching-${index}`,
                 name: rocketReachContact.name || author.name,
+                
+                // 📸 Profile image from RocketReach
+                profilePic: rocketReachContact.profilePic || null,
+                
+                // Professional info
                 title: rocketReachContact.title || "Reporter",
                 organization: rocketReachContact.currentEmployer || author.organization,
-                email: rocketReachContact.workEmail || rocketReachContact.email || null,
+                
+                // 📧 Enhanced contact info (RocketReach Person Lookup API)
+                email: rocketReachContact.workEmail || rocketReachContact.recommendedEmail || rocketReachContact.email || null,
+                recommendedEmail: rocketReachContact.recommendedEmail || null,
+                workEmail: rocketReachContact.workEmail || null,
+                personalEmail: rocketReachContact.personalEmail || null,
+                
+                // 📞 Enhanced phone info
                 phone: rocketReachContact.workPhone || rocketReachContact.phone || null,
+                workPhone: rocketReachContact.workPhone || null,
+                personalPhone: rocketReachContact.personalPhone || null,
+                
+                // 🔗 Social profiles
                 linkedin: rocketReachContact.linkedin || null,
                 twitter: rocketReachContact.twitter || null,
-                recentRelevantArticles: fullAuthorData.recentRelevantArticles || author.recentRelevantArticles || 0,
+                facebook: rocketReachContact.facebook || null,
+                
+                // 📊 Article analysis data
                 averageRelevanceScore: Math.round((fullAuthorData.algorithmicScore || author.topicRelevanceScore || 0) * 10) / 10,
-                topicRelevance: fullAuthorData.relevanceGrade || author.relevanceGrade || 'Medium',
+                recentRelevantArticles: fullAuthorData.recentRelevantArticles || author.recentRelevantArticles || 0,
                 articleCount: fullAuthorData.totalRecentArticles || author.totalRecentArticles || 0,
-                recentTopics: fullAuthorData.expertiseAreas || [],
-                top3RelevantArticles: top3RelevantArticles,
+                topicRelevance: fullAuthorData.relevanceGrade || author.relevanceGrade || 'Medium',
+                
+                // 🎯 Contact quality & source
                 contactConfidence: this.calculateContactConfidence(rocketReachContact, author),
                 enrichmentSource: "rocketreach",
+                
+                // 📍 Location data
+                location: rocketReachContact.location || null,
+                city: rocketReachContact.city || null,
+                region: rocketReachContact.region || null,
+                country: rocketReachContact.country || null,
+                
+                // 🏢 Company info
+                currentEmployerDomain: rocketReachContact.currentEmployerDomain || null,
+                currentEmployerWebsite: rocketReachContact.currentEmployerWebsite || null,
+                currentEmployerLinkedIn: rocketReachContact.currentEmployerLinkedIn || null,
+                
+                // 📰 Article insights
+                top3RelevantArticles: top3RelevantArticles,
+                recentTopics: fullAuthorData.expertiseAreas || [],
                 analysisInsight: aiAuthorInsight
               };
             } else {
