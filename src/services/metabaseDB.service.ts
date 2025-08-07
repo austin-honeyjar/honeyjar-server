@@ -66,11 +66,11 @@ export class MetabaseDBService {
           }
         });
 
-      logger.info('✅ Article data stored successfully', {
-        articleId: article.id,
-        title: article.title?.substring(0, 50) + '...',
-        source: article.source
-      });
+      // logger.info('✅ Article data stored successfully', {
+      //   articleId: article.id,
+      //   title: article.title?.substring(0, 50) + '...',
+      //   source: article.source
+      // });
 
     } catch (error) {
       logger.error('💥 Failed to store article data', {

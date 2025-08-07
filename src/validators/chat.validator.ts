@@ -1,8 +1,22 @@
 import { z } from 'zod';
 
+// Schema for structured message content
+const structuredContentSchema = z.object({
+  type: z.string(),
+  text: z.string(),
+  decorators: z.array(z.object({
+    type: z.string(),
+    data: z.any().optional()
+  })).optional(),
+  metadata: z.any().optional()
+});
+
 // Schema for creating a chat message
 export const createChatSchema = z.object({
-  content: z.string().min(1, 'Message content is required'),
+  content: z.union([
+    z.string().min(1, 'Message content is required'),
+    structuredContentSchema
+  ]),
   role: z.enum(['user', 'assistant']).default('user'),
 });
 

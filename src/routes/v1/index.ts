@@ -4,6 +4,7 @@ import authRoutes from '../auth.routes';
 import csvRoutes from '../csv.routes';
 import chatRoutes from '../chat.routes';
 import assetRoutes from '../asset.routes';
+import userRoutes from '../user.routes';
 
 const router = Router();
 
@@ -18,6 +19,9 @@ router.use('/csv', csvRoutes);
 
 // Chat routes
 router.use('/chat', chatRoutes);
+
+// User routes (onboarding, profile)
+router.use('/user', userRoutes);
 
 // Asset routes
 router.use('/', assetRoutes);

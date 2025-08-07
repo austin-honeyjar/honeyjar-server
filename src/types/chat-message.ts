@@ -62,6 +62,26 @@ export interface MediaContactsDecorator extends MessageDecorator {
   };
 }
 
+export interface StreamingDecorator extends MessageDecorator {
+  type: 'streaming';
+  data: {
+    streamId: string;
+    isActive: boolean;
+    chunkCount?: number;
+    totalChunks?: number;
+    streamMetadata?: Record<string, any>;
+  };
+}
+
+export interface TypingDecorator extends MessageDecorator {
+  type: 'typing';
+  data: {
+    isTyping: boolean;
+    typingSpeed?: 'slow' | 'normal' | 'fast';
+    estimatedDuration?: number;
+  };
+}
+
 // Union type of all possible decorators
 export type ChatMessageDecorator = 
   | AssetDecorator
@@ -69,14 +89,117 @@ export type ChatMessageDecorator =
   | SystemNotificationDecorator
   | ButtonDecorator
   | ProgressDecorator
-  | MediaContactsDecorator;
+  | MediaContactsDecorator
+  | StreamingDecorator
+  | TypingDecorator;
 
 // Structured content interface
 export interface StructuredMessageContent {
-  type: 'text' | 'asset' | 'system' | 'workflow_update';
+  type: 'text' | 'asset' | 'system' | 'workflow_update' | 'streaming';
   text: string;
   decorators?: ChatMessageDecorator[];
   metadata?: Record<string, any>;
+}
+
+// Streaming-specific interfaces
+export interface StreamingEvent {
+  type: 'connected' | 'message_saved' | 'workflow_status' | 'ai_response' | 'workflow_complete' | 'error' | 'done';
+  data: any;
+  timestamp: string;
+}
+
+export interface StreamingAIResponseEvent extends StreamingEvent {
+  type: 'ai_response';
+  data: {
+    content: string;
+    isComplete: boolean;
+    accumulated?: string;
+    chunkIndex?: number;
+    streamId?: string;
+  };
+}
+
+export interface StreamingErrorEvent extends StreamingEvent {
+  type: 'error';
+  data: {
+    error: string;
+    message?: string;
+    threadId?: string;
+    stepId?: string;
+  };
+}
+
+export interface StreamingWorkflowStatusEvent extends StreamingEvent {
+  type: 'workflow_status';
+  data: {
+    status: 'workflow_created' | 'workflow_transition' | 'step_complete' | 'step_started';
+    workflowId?: string;
+    stepId?: string;
+    selectedWorkflow?: string;
+    newWorkflowId?: string;
+  };
+}
+
+export interface StreamingMessageSavedEvent extends StreamingEvent {
+  type: 'message_saved';
+  data: {
+    message: ChatMessage;
+    wasDuplicate?: boolean;
+  };
+}
+
+export interface StreamingConnectedEvent extends StreamingEvent {
+  type: 'connected';
+  data: {
+    threadId: string;
+    streamId?: string;
+  };
+}
+
+export interface StreamingCompleteEvent extends StreamingEvent {
+  type: 'workflow_complete';
+  data: {
+    message: string;
+    workflowId?: string;
+  };
+}
+
+export interface StreamingDoneEvent extends StreamingEvent {
+  type: 'done';
+  data: {
+    success?: boolean;
+    error?: boolean;
+    completed?: boolean;
+  };
+}
+
+// Union type for all streaming events
+export type StreamingChatEvent = 
+  | StreamingConnectedEvent
+  | StreamingMessageSavedEvent
+  | StreamingWorkflowStatusEvent
+  | StreamingAIResponseEvent
+  | StreamingCompleteEvent
+  | StreamingErrorEvent
+  | StreamingDoneEvent;
+
+// Streaming state management
+export interface StreamingChatState {
+  isStreaming: boolean;
+  currentStreamId?: string;
+  accumulatedContent: string;
+  lastEventType?: StreamingEvent['type'];
+  error?: string;
+  isComplete: boolean;
+  metadata?: Record<string, any>;
+}
+
+// Streaming message interface
+export interface StreamingChatMessage extends ChatMessage {
+  isStreaming?: boolean;
+  streamId?: string;
+  chunkCount?: number;
+  streamingComplete?: boolean;
 }
 
 // Legacy content support - for backward compatibility during migration
@@ -343,6 +466,139 @@ export class MessageContentHelper {
   }
 
   /**
+   * Create a streaming message
+   */
+  static createStreamingMessage(
+    text: string,
+    streamId: string,
+    isActive: boolean = true,
+    options: {
+      chunkCount?: number;
+      totalChunks?: number;
+      streamMetadata?: Record<string, any>;
+    } = {}
+  ): StructuredMessageContent {
+    return {
+      type: 'streaming',
+      text,
+      decorators: [
+        {
+          type: 'streaming',
+          data: {
+            streamId,
+            isActive,
+            chunkCount: options.chunkCount,
+            totalChunks: options.totalChunks,
+            streamMetadata: options.streamMetadata
+          }
+        },
+        {
+          type: 'typing',
+          data: {
+            isTyping: isActive,
+            typingSpeed: 'normal'
+          }
+        }
+      ]
+    };
+  }
+
+  /**
+   * Update streaming message content
+   */
+  static updateStreamingMessage(
+    existingContent: StructuredMessageContent,
+    newText: string,
+    isComplete: boolean = false
+  ): StructuredMessageContent {
+    const streamingDecorator = this.getDecorator(existingContent, 'streaming') as StreamingDecorator;
+    const typingDecorator = this.getDecorator(existingContent, 'typing') as TypingDecorator;
+    
+    return {
+      ...existingContent,
+      text: newText,
+      decorators: existingContent.decorators?.map(decorator => {
+        if (decorator.type === 'streaming') {
+          return {
+            ...decorator,
+            data: {
+              ...decorator.data,
+              isActive: !isComplete,
+              chunkCount: (decorator.data.chunkCount || 0) + 1
+            }
+          };
+        }
+        if (decorator.type === 'typing') {
+          return {
+            ...decorator,
+            data: {
+              ...decorator.data,
+              isTyping: !isComplete
+            }
+          };
+        }
+        return decorator;
+      }) || []
+    };
+  }
+
+  /**
+   * Create a typing indicator message
+   */
+  static createTypingMessage(
+    text: string = 'AI is thinking...',
+    typingSpeed: 'slow' | 'normal' | 'fast' = 'normal'
+  ): StructuredMessageContent {
+    return {
+      type: 'streaming',
+      text,
+      decorators: [
+        {
+          type: 'typing',
+          data: {
+            isTyping: true,
+            typingSpeed,
+            estimatedDuration: typingSpeed === 'fast' ? 1000 : typingSpeed === 'slow' ? 3000 : 2000
+          }
+        }
+      ]
+    };
+  }
+
+  /**
+   * Check if message is currently streaming
+   */
+  static isStreaming(content: ChatMessageContent): boolean {
+    const streamingDecorator = this.getDecorator(content, 'streaming') as StreamingDecorator;
+    return streamingDecorator?.data.isActive || false;
+  }
+
+  /**
+   * Check if message has typing indicator
+   */
+  static isTyping(content: ChatMessageContent): boolean {
+    const typingDecorator = this.getDecorator(content, 'typing') as TypingDecorator;
+    return typingDecorator?.data.isTyping || false;
+  }
+
+  /**
+   * Get streaming progress information
+   */
+  static getStreamingProgress(content: ChatMessageContent): {
+    chunkCount?: number;
+    totalChunks?: number;
+    percentage?: number;
+  } {
+    const streamingDecorator = this.getDecorator(content, 'streaming') as StreamingDecorator;
+    if (!streamingDecorator) return {};
+
+    const { chunkCount, totalChunks } = streamingDecorator.data;
+    const percentage = chunkCount && totalChunks ? Math.round((chunkCount / totalChunks) * 100) : undefined;
+
+    return { chunkCount, totalChunks, percentage };
+  }
+
+  /**
    * Convert structured content to legacy string format (for backward compatibility)
    */
   static toLegacyContent(content: StructuredMessageContent): string {
@@ -361,5 +617,149 @@ export class MessageContentHelper {
     }
 
     return content.text;
+  }
+}
+
+// Streaming utilities and hooks helpers
+export class StreamingChatHelper {
+  /**
+   * Parse Server-Sent Event data
+   */
+  static parseSSEEvent(data: string): StreamingChatEvent | null {
+    try {
+      return JSON.parse(data) as StreamingChatEvent;
+    } catch (error) {
+      console.error('Failed to parse SSE event:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Create initial streaming state
+   */
+  static createInitialStreamingState(): StreamingChatState {
+    return {
+      isStreaming: false,
+      accumulatedContent: '',
+      isComplete: false
+    };
+  }
+
+  /**
+   * Update streaming state based on event
+   */
+  static updateStreamingState(
+    currentState: StreamingChatState,
+    event: StreamingChatEvent
+  ): StreamingChatState {
+    switch (event.type) {
+      case 'connected':
+        return {
+          ...currentState,
+          isStreaming: true,
+          currentStreamId: event.data.streamId,
+          accumulatedContent: '',
+          isComplete: false,
+          error: undefined
+        };
+
+      case 'ai_response':
+        return {
+          ...currentState,
+          accumulatedContent: event.data.accumulated || (currentState.accumulatedContent + (event.data.content || '')),
+          lastEventType: 'ai_response',
+          isComplete: event.data.isComplete || false
+        };
+
+      case 'error':
+        return {
+          ...currentState,
+          isStreaming: false,
+          error: event.data.error,
+          isComplete: true,
+          lastEventType: 'error'
+        };
+
+      case 'done':
+      case 'workflow_complete':
+        return {
+          ...currentState,
+          isStreaming: false,
+          isComplete: true,
+          lastEventType: event.type
+        };
+
+      default:
+        return {
+          ...currentState,
+          lastEventType: event.type
+        };
+    }
+  }
+
+  /**
+   * Create a streaming message from accumulated content
+   */
+  static createMessageFromStream(
+    streamingState: StreamingChatState,
+    threadId: string,
+    messageId: string = crypto.randomUUID()
+  ): StreamingChatMessage {
+    const content = streamingState.isStreaming && !streamingState.isComplete
+      ? MessageContentHelper.createStreamingMessage(
+          streamingState.accumulatedContent,
+          streamingState.currentStreamId || '',
+          true
+        )
+      : MessageContentHelper.createTextMessage(streamingState.accumulatedContent);
+
+    return {
+      id: messageId,
+      threadId,
+      userId: 'assistant',
+      role: 'assistant',
+      content,
+      createdAt: new Date(),
+      isStreaming: streamingState.isStreaming,
+      streamId: streamingState.currentStreamId,
+      streamingComplete: streamingState.isComplete
+    };
+  }
+
+  /**
+   * Validate streaming event structure
+   */
+  static isValidStreamingEvent(data: any): data is StreamingChatEvent {
+    return (
+      data &&
+      typeof data === 'object' &&
+      typeof data.type === 'string' &&
+      ['connected', 'message_saved', 'workflow_status', 'ai_response', 'workflow_complete', 'error', 'done'].includes(data.type) &&
+      data.data !== undefined &&
+      typeof data.timestamp === 'string'
+    );
+  }
+
+  /**
+   * Get event priority for UI handling (higher number = higher priority)
+   */
+  static getEventPriority(eventType: StreamingEvent['type']): number {
+    const priorities = {
+      'error': 100,
+      'workflow_complete': 90,
+      'done': 80,
+      'ai_response': 70,
+      'workflow_status': 60,
+      'message_saved': 50,
+      'connected': 40
+    };
+    return priorities[eventType] || 0;
+  }
+
+  /**
+   * Determine if event should interrupt current streaming
+   */
+  static shouldInterruptStream(eventType: StreamingEvent['type']): boolean {
+    return ['error', 'workflow_complete', 'done'].includes(eventType);
   }
 } 

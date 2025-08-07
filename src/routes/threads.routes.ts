@@ -12,7 +12,7 @@ import { chatController } from '../controllers/chatController';
 import { requireOrgRole } from '../middleware/org.middleware';
 import { WorkflowDBService } from '../services/workflowDB.service';
 import { ChatService } from '../services/chat.service';
-import { WorkflowService } from '../services/workflow.service';
+import { enhancedWorkflowService } from '../services/enhanced-workflow.service';
 import { simpleCache } from '../utils/simpleCache';
 import { requirePermission } from '../middleware/permissions.middleware';
 import { ApiError } from '../utils/error';
@@ -245,6 +245,14 @@ router.get('/:id', async (req: AuthRequest, res) => {
     // Reverse to chronological order for UI
     messages = messages.reverse();
     
+    // Debug logging for message retrieval
+    console.log('🔍 Thread messages query result:', {
+      threadId,
+      messageCount: messages.length,
+      latestMessageIds: messages.slice(-3).map(m => ({ id: m.id, content: m.content?.toString().substring(0, 50) + '...', role: m.role })),
+      queryTime: new Date().toISOString()
+    });
+    
     logger.info('Returning thread:', { 
       userId: req.user.id,
       threadId,
@@ -355,24 +363,12 @@ router.post('/', async (req: AuthRequest, res) => {
       })
       .returning();
     
-    // Initialize the base workflow
-    const workflowService = new WorkflowService();
-    const chatService = new ChatService();
+    // No automatic workflow creation - let the intent layer handle this on demand
+    logger.info('Created thread - workflows will be created on demand via intent layer', {
+      threadId: thread.id
+    });
     
-    // Get the base workflow template
-    const baseTemplate = await workflowService.getTemplateByName('Base Workflow');
-    if (!baseTemplate) {
-      logger.error('Base workflow template not found');
-      return res.status(500).json({ 
-        status: 'error', 
-        message: 'Failed to initialize workflow - template not found' 
-      });
-    }
-    
-    // Create the base workflow - this sends the initial AI message
-    await workflowService.createWorkflow(thread.id, baseTemplate.id);
-    
-    logger.info('Thread created with base workflow:', { 
+    logger.info('Thread created successfully:', { 
       userId: req.user.id,
       orgId,
       threadId: thread.id

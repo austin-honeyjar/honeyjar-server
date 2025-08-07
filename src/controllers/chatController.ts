@@ -1,13 +1,13 @@
 import { Request, Response } from 'express';
 import { db } from '../db';
-import { chatMessages, chatThreads } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { chatThreads, chatMessages } from '../db/schema';
+import { eq, and, desc } from 'drizzle-orm';
 import logger from '../utils/logger';
 import { CreateChatInput, CreateThreadInput } from '../validators/chat.validator';
-import { WorkflowService } from '../services/workflow.service';
 import { ChatService } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';
 import { simpleCache } from '../utils/simpleCache';
+import { enhancedWorkflowService } from '../services/enhanced-workflow.service'; // Changed from upgradedWorkflowService
 
 export const chatController = {
   // Create a new chat message
@@ -60,12 +60,11 @@ export const chatController = {
         .returning();
 
       // Handle the message in the workflow
-      const workflowService = new WorkflowService();
+      const workflowService = enhancedWorkflowService; // Changed from enhancedWorkflowService
       const chatService = new ChatService();
       
-      // Pass a flag to chatService indicating that we've already created the user message
-      // to avoid duplicate message creation
-      const response = await chatService.handleUserMessageNoCreate(threadId, content);
+      // Pass user context to enable enhanced processing with RAG context injection
+      const response = await chatService.handleUserMessageNoCreate(threadId, content, userId, orgId);
 
       // Log workflow state change
       const workflow = await workflowService.getWorkflowByThreadId(threadId);
@@ -186,7 +185,7 @@ export const chatController = {
         .orderBy(chatMessages.createdAt);
 
       // Get workflow state
-      const workflowService = new WorkflowService();
+      const workflowService = enhancedWorkflowService; // Changed from enhancedWorkflowService
       const workflow = await workflowService.getWorkflowByThreadId(threadId);
 
       // Get current step information including step type
@@ -261,51 +260,17 @@ export const chatController = {
         })
         .returning();
 
-      // Initialize workflow for the thread
-      const workflowService = new WorkflowService();
-      const chatService = new ChatService();
+      // No automatic workflow creation - let the intent layer handle this on demand
+      logger.info('Created chat thread - workflows will be created on demand via intent layer', { 
+        threadId: thread.id 
+      });
+      
+      res.status(201).json({
+        thread
+      });
 
-      try {
-        // Start a new workflow with template ID 1 (Base Workflow)
-        // Here we use the numeric ID directly since the database uses integers
-        const workflow = await workflowService.createWorkflow(thread.id, "1");
-        
-        // Get the workflow with steps
-        const workflowWithSteps = await workflowService.getWorkflow(workflow.id);
-        if (!workflowWithSteps) {
-          throw new Error("Failed to get workflow with steps");
-        }
-
-        // Instead of creating a message and then processing it, let chatService handle it directly
-        // No need to create the user message here since chatService.handleUserMessage will do it
-        const nextPrompt = await chatService.handleUserMessage(thread.id, "I want to create a launch announcement");
-
-        // Log workflow initialization
-        logger.info('Workflow initialized', {
-          threadId: thread.id,
-          workflowId: workflow.id,
-          templateId: "1", // Using numeric ID
-          initialStep: workflow.currentStepId,
-          totalSteps: workflowWithSteps.steps.length
-        });
-
-        logger.info('Created chat thread and workflow', { threadId: thread.id, workflowId: workflow.id });
-        res.status(201).json({
-          thread,
-          workflow: workflowWithSteps,
-          nextPrompt
-        });
-
-        // Invalidate thread list cache for user/org
-        simpleCache.del(`threads:${userId}:${orgId}`);
-      } catch (error) {
-        // If workflow creation fails, still return the thread
-        logger.error('Error creating workflow:', error);
-        res.status(201).json({
-          thread,
-          error: 'Failed to create workflow, but thread was created successfully'
-        });
-      }
+      // Invalidate thread list cache for user/org
+      simpleCache.del(`threads:${userId}:${orgId}`);
     } catch (error) {
       logger.error('Error creating chat thread:', error);
       res.status(500).json({
@@ -354,7 +319,7 @@ export const chatController = {
       }
 
       // Delete any associated workflow
-      const workflowService = new WorkflowService();
+      const workflowService = enhancedWorkflowService; // Changed from enhancedWorkflowService
       const workflow = await workflowService.getWorkflowByThreadId(threadId);
       if (workflow) {
         await workflowService.deleteWorkflow(workflow.id);

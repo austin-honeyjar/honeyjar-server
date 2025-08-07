@@ -2,30 +2,85 @@ import axios, { AxiosInstance } from 'axios';
 import logger from '../utils/logger';
 import { cacheService, withCache } from './cache.service';
 
-// RocketReach Person Profile Interface
+// RocketReach Person Profile Interface (Updated to match actual Person Lookup API response)
 export interface RocketReachPerson {
+  // Core identification
   id: number;
+  status: string;
   name: string;
-  first_name: string;
-  last_name: string;
+  first_name?: string;
+  last_name?: string;
   middle_name?: string;
+  
+  // 📸 Profile image
+  profile_pic?: string;
+  
+  // Professional info
   current_employer: string;
   current_title: string;
+  current_employer_id?: number;
+  current_employer_domain?: string;
+  current_employer_website?: string;
+  current_employer_linkedin_url?: string;
+  
+  // Social profiles
   linkedin_url?: string;
-  profile_pic?: string;
+  links?: any;
+  
+  // Location data
   location?: string;
   city?: string;
+  region?: string;
   state?: string;
   country?: string;
+  country_code?: string;
+  region_latitude?: number;
+  region_longitude?: number;
+  
+  // Personal data
+  birth_year?: number;
+  skills?: string[];
+  tags?: string;
+  
+  // 📧 Enhanced email structure (Person Lookup API)
+  recommended_email?: string;
+  recommended_personal_email?: string;
+  recommended_professional_email?: string;
+  current_work_email?: string;
+  current_personal_email?: string;
   emails?: Array<{
     email: string;
+    smtp_valid?: string;
     type: string;
-    status: string;
+    last_validation_check?: string;
+    grade?: string;
   }>;
+  
+  // 📞 Enhanced phone structure (Person Lookup API)
   phones?: Array<{
     number: string;
     type: string;
+    validity?: string;
+    recommended?: boolean;
+    premium?: boolean;
+    last_checked?: string;
   }>;
+  
+  // Professional data
+  npi_data?: {
+    npi_number?: string | number;
+    credentials?: string;
+    license_number?: string;
+    specialization?: string;
+  };
+  
+  // Metadata
+  profile_list?: {
+    id: number;
+    name: string;
+  };
+  
+  // Legacy fields for backward compatibility
   social_media?: {
     twitter?: string;
     facebook?: string;
@@ -44,6 +99,7 @@ export interface RocketReachPerson {
     start_date?: string;
     end_date?: string;
   }>;
+  update_time?: string;
 }
 
 // RocketReach Company Profile Interface
@@ -202,22 +258,49 @@ export const ROCKETREACH_ERROR_CODES = {
 } as const;
 
 interface RocketReachContact {
+  // Core identification
   id?: string;
   name?: string;
   firstName?: string;
   lastName?: string;
+  
+  // 📸 Profile image from RocketReach
+  profilePic?: string;
+  
+  // Professional info
   title?: string;
   currentEmployer?: string;
+  currentEmployerDomain?: string;
+  currentEmployerWebsite?: string;
+  currentEmployerLinkedIn?: string;
+  
+  // 📧 Enhanced email data (RocketReach Person Lookup API)
   email?: string;
-  personalEmail?: string;
+  recommendedEmail?: string;
   workEmail?: string;
+  personalEmail?: string;
+  
+  // 📞 Enhanced phone data
   phone?: string;
-  personalPhone?: string;
   workPhone?: string;
+  personalPhone?: string;
+  
+  // 🔗 Social profiles
   linkedin?: string;
   twitter?: string;
   facebook?: string;
   profileUrl?: string;
+  
+  // 📍 Location data
+  location?: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  
+  // 🎯 Professional data
+  skills?: string[];
+  tags?: string;
+  birthYear?: number;
 }
 
 interface RocketReachSearchResult {
@@ -959,22 +1042,51 @@ export class RocketReachService {
         
         // Transform RocketReach lookup response to our contact interface
         const transformedContact = {
+          // Core identification
           id: person.id?.toString(),
           name: person.name,
           firstName: person.first_name,
           lastName: person.last_name,
+          
+          // 📸 Profile image from API
+          profilePic: person.profile_pic,
+          
+          // Professional info
           title: person.current_title,
           currentEmployer: person.current_employer,
+          currentEmployerDomain: person.current_employer_domain,
+          currentEmployerWebsite: person.current_employer_website,
+          currentEmployerLinkedIn: person.current_employer_linkedin_url,
+          
+          // 📧 Enhanced email data (Person Lookup API structure)
           email: person.emails?.[0]?.email,
-          workEmail: person.emails?.find((e: any) => e.type === 'work')?.email,
-          personalEmail: person.emails?.find((e: any) => e.type === 'personal')?.email,
+          recommendedEmail: person.recommended_email,
+          workEmail: person.current_work_email || person.recommended_professional_email || person.emails?.find((e: any) => e.type === 'work')?.email,
+          personalEmail: person.current_personal_email || person.recommended_personal_email || person.emails?.find((e: any) => e.type === 'personal')?.email,
+          
+          // 📞 Enhanced phone data (Person Lookup API structure)
           phone: person.phones?.[0]?.number,
-          workPhone: person.phones?.find((p: any) => p.type === 'work')?.number,
+          workPhone: person.phones?.find((p: any) => p.type === 'work' || p.recommended)?.number,
           personalPhone: person.phones?.find((p: any) => p.type === 'personal')?.number,
+          
+          // 🔗 Social profiles
           linkedin: person.linkedin_url,
           twitter: person.social_media?.twitter,
           facebook: person.social_media?.facebook,
-          profileUrl: person.linkedin_url
+          
+          // 📍 Location data
+          location: person.location,
+          city: person.city,
+          region: person.region,
+          country: person.country,
+          
+          // 🎯 Professional skills & tags
+          skills: person.skills,
+          tags: person.tags,
+          
+          // 📊 Profile metadata
+          profileUrl: person.linkedin_url,
+          birthYear: person.birth_year
         };
         
         logger.info('Found contact using lookupPerson method (same as admin test)', {
@@ -1012,24 +1124,53 @@ export class RocketReachService {
           foundOrganization: person.current_employer
         });
         
-        // Transform RocketReach response to our contact interface
+        // Transform RocketReach response to our contact interface (Enhanced version - fallback path)
         const transformedContact = {
+          // Core identification
           id: person.id?.toString(),
           name: person.name,
           firstName: person.first_name,
           lastName: person.last_name,
+          
+          // 📸 Profile image from API
+          profilePic: person.profile_pic,
+          
+          // Professional info
           title: person.current_title,
           currentEmployer: person.current_employer,
+          currentEmployerDomain: person.current_employer_domain,
+          currentEmployerWebsite: person.current_employer_website,
+          currentEmployerLinkedIn: person.current_employer_linkedin_url,
+          
+          // 📧 Enhanced email data (Person Lookup API structure)
           email: person.emails?.[0]?.email,
-          workEmail: person.emails?.find((e: any) => e.type === 'professional' || e.type === 'work')?.email,
-          personalEmail: person.emails?.find((e: any) => e.type === 'personal')?.email,
+          recommendedEmail: person.recommended_email,
+          workEmail: person.current_work_email || person.recommended_professional_email || person.emails?.find((e: any) => e.type === 'professional' || e.type === 'work')?.email,
+          personalEmail: person.current_personal_email || person.recommended_personal_email || person.emails?.find((e: any) => e.type === 'personal')?.email,
+          
+          // 📞 Enhanced phone data (Person Lookup API structure)
           phone: person.phones?.[0]?.number,
-          workPhone: person.phones?.find((p: any) => p.type === 'work')?.number,
+          workPhone: person.phones?.find((p: any) => p.type === 'work' || p.recommended)?.number,
           personalPhone: person.phones?.find((p: any) => p.type === 'personal')?.number,
+          
+          // 🔗 Social profiles
           linkedin: person.linkedin_url,
           twitter: person.social_media?.twitter,
           facebook: person.social_media?.facebook,
-          profileUrl: person.linkedin_url
+          
+          // 📍 Location data
+          location: person.location,
+          city: person.city,
+          region: person.region,
+          country: person.country,
+          
+          // 🎯 Professional skills & tags
+          skills: person.skills,
+          tags: person.tags,
+          
+          // 📊 Profile metadata
+          profileUrl: person.linkedin_url,
+          birthYear: person.birth_year
         };
         
         logger.info('Found contact using RocketReach API', {

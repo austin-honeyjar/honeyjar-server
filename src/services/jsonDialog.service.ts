@@ -23,11 +23,13 @@ export class JsonDialogService {
     threadId?: string
   ): Promise<{
     isStepComplete: boolean;
+    isComplete?: boolean;
     nextQuestion?: string;
     collectedInformation: Record<string, any>;
     suggestedNextStep?: string;
     apiResponse: string;
     readyToGenerate?: boolean;
+    mode?: string;
   }> {
     try {
       logger.info('Processing JSON dialog message', {
@@ -155,6 +157,19 @@ export class JsonDialogService {
         }
       };
 
+      // 🔍 DEBUG: Log the complete system prompt being sent to OpenAI
+      logger.info('🔍 SYSTEM PROMPT DEBUG - Asset Review', {
+        stepId: step.id,
+        stepName: step.name,
+        systemPromptLength: systemPrompt.length,
+        userInput: userInput,
+        systemPromptPreview: systemPrompt.substring(0, 500) + '...',
+        systemPromptEnd: '...' + systemPrompt.substring(systemPrompt.length - 300),
+        containsJSONInstructions: systemPrompt.includes('JSON') || systemPrompt.includes('json'),
+        containsRevisedAsset: systemPrompt.includes('revisedAsset'),
+        containsCriticalInstructions: systemPrompt.includes('CRITICAL')
+      });
+
       // Call OpenAI to process the user input
       const openAIResult = await this.openAIService.generateStepResponse(
         customStep,
@@ -227,15 +242,23 @@ export class JsonDialogService {
           completionPercentage: responseData.completionPercentage || 0
         });
       } catch (error) {
-        logger.error('Error parsing JSON dialog response', {
-          error: error instanceof Error ? error.message : 'Unknown error'
+        logger.error('🚨 JSON PARSING FAILED - AI returned non-JSON response', {
+          stepId: step.id,
+          stepName: step.name,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          aiRawResponse: openAIResult.responseText,
+          aiResponseLength: openAIResult.responseText.length,
+          cleanedResponse: openAIResult.responseText,
+          userInput: userInput,
+          systemPromptPreview: systemPrompt.substring(0, 200) + '...',
+          criticalIssue: 'AI_NOT_FOLLOWING_JSON_INSTRUCTIONS'
         });
         
         // Create a default response if parsing fails
         responseData = {
           isComplete: false,
           collectedInformation: collectedInfo,
-          nextQuestion: "I'm having trouble understanding. Could you please be more specific?"
+          nextQuestion: openAIResult.responseText // Use the actual AI response instead of generic message
         };
       }
 
@@ -254,7 +277,8 @@ export class JsonDialogService {
       !step.name.includes("Information Collection") && !step.name.includes("Collection");
       
       // Enhanced content detection - check if response actually contains asset content
-      const hasAssetContent = !!(
+      // CRITICAL: Only look for asset content in Asset Generation steps, never in Information Collection
+      const hasAssetContent = isAssetGenerationStep && !!(
         responseData.collectedInformation?.asset || 
         responseData.asset ||
         responseData.collectedInformation?.generatedAsset ||
@@ -268,9 +292,8 @@ export class JsonDialogService {
           responseData.nextQuestion.includes('# '))) // Common asset formatting
       );
       
-      // Final asset detection: Either explicit asset generation step OR has asset content
-      const shouldProcessAsset = (isAssetGenerationStep && (responseData.isComplete || responseData.isStepComplete)) || 
-                                (hasAssetContent && (responseData.isComplete || responseData.isStepComplete));
+      // Final asset detection: ONLY process assets from Asset Generation steps
+      const shouldProcessAsset = isAssetGenerationStep && hasAssetContent && (responseData.isComplete || responseData.isStepComplete);
       
       // Log potential issues with Information Collection steps generating assets
       if ((step.name.includes("Information Collection") || step.name.includes("Collection")) && 
@@ -522,20 +545,16 @@ export class JsonDialogService {
                 }
               }
               
-              // USE UNIFIED METHOD: Import WorkflowService and use addAssetMessage
-              const { WorkflowService } = await import('./workflow.service');
-              const workflowService = new WorkflowService();
+              // USE UNIFIED METHOD: Import EnhancedWorkflowService and use addAssetMessage
+              const { enhancedWorkflowService } = await import('./enhanced-workflow.service');
               
-              await workflowService.addAssetMessage(
+              await enhancedWorkflowService.addAssetMessage(
                 actualThreadId,
                 cleanDisplayContent,
                 assetType,
                 step.id,
                 step.name,
-                {
-                  isRevision: false,
-                  showCreateButton: true
-                }
+                false // isRevision
               );
               
               logger.info('Successfully added asset via unified method', {
@@ -580,11 +599,13 @@ export class JsonDialogService {
       // Build the response
       return {
         isStepComplete: responseData.isComplete,
+        isComplete: responseData.isComplete, // Include both field names for compatibility
         nextQuestion: responseData.nextQuestion,
         collectedInformation: responseData.collectedInformation || collectedInfo,
         suggestedNextStep: responseData.suggestedNextStep,
         apiResponse: openAIResult.responseText,
-        readyToGenerate: responseData.readyToGenerate || false
+        readyToGenerate: responseData.readyToGenerate || false,
+        mode: responseData.mode // Preserve mode field for conversational processing
       };
     } catch (error) {
       logger.error('Error in JSON dialog processing', {
@@ -727,37 +748,37 @@ CURRENT USER INPUT:
 "${currentUserInput}"
 
 TASK:
-1. Determine which workflow the user wants based on their message
-2. Match keywords like "PR/press" to "JSON Dialog PR Workflow", "launch/product" to "Launch Announcement", and "test/dummy" to "Dummy Workflow"
-3. If the user is asking a question or saying they don't know, address that first rather than forcing a workflow selection
-4. Return a JSON response
+1. Try to match user input to any available workflow
+2. IF WORKFLOW MATCHED → return workflow_selection mode with selectedWorkflow
+3. IF NO WORKFLOW MATCHED → return conversational mode with conversationalResponse
+4. Use simple keyword matching: "PR/press/press release" → "Press Release", "media" → "Media List Generator", etc.
+5. Return appropriate JSON response
 
 RESPONSE FORMAT:
 You MUST respond with ONLY valid JSON in this format:
 
-If the user has clearly selected a workflow:
+If a workflow is matched:
 {
+  "mode": "workflow_selection",
   "isComplete": true,
+  "isMatch": true,
   "collectedInformation": {
-    "selectedWorkflow": "EXACT WORKFLOWS NAME"
+    "selectedWorkflow": "EXACT WORKFLOW NAME"
   },
   "nextQuestion": null,
-  "suggestedNextStep": "Thread Title and Summary"
+  "suggestedNextStep": "Auto Generate Thread Title"
 }
 
-If the user has NOT clearly selected a workflow but you need to ask for clarification:
+If the user is asking a question or needs help (conversational mode):
 {
-  "isComplete": false,
-  "collectedInformation": {},
-  "nextQuestion": "Which workflow would you like to use? Please choose from: ${options.join(', ')}",
-  "suggestedNextStep": null
-}
-
-If the user is asking a question or needs help:
-{
-  "isComplete": false,
-  "collectedInformation": {},
-  "nextQuestion": "Your helpful response to their question or statement",
+  "mode": "conversational",
+  "isComplete": true,
+  "isMatch": false,
+  "collectedInformation": {
+    "selectedWorkflow": null,
+    "conversationalResponse": "Your helpful response using available context"
+  },
+  "nextQuestion": null,
   "suggestedNextStep": null
 }`;
     }
@@ -819,6 +840,21 @@ If the user is asking a question or needs help:
         }
       }
       
+      // Check if this step has a custom baseInstructions with its own RESPONSE FORMAT
+      const baseInstructions = step.metadata?.baseInstructions || '';
+      const hasCustomResponseFormat = baseInstructions.includes('RESPONSE FORMAT:');
+      
+      // If the step defines its own format, use it directly
+      if (hasCustomResponseFormat) {
+        return baseInstructions + `
+
+CURRENT USER INPUT:
+"${currentUserInput}"
+
+IMPORTANT: Follow the RESPONSE FORMAT specified above. You MUST respond with ONLY valid JSON in the exact format defined in the RESPONSE FORMAT section.`;
+      }
+      
+      // Otherwise, use the generic format
       // Calculate what information we already have vs what we still need
       const infoTracking = this.generateInfoTrackingStatus(collectedInfo, requiredFields);
       

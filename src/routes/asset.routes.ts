@@ -55,7 +55,7 @@ router.use(authMiddleware);
  *       500:
  *         description: Server error
  */
-router.get('/assets', assetController.getUserAssets);
+router.get('/', assetController.getUserAssets);
 
 /**
  * @swagger
@@ -92,7 +92,7 @@ router.get('/assets', assetController.getUserAssets);
  *       500:
  *         description: Server error
  */
-router.get('/organization/assets', 
+router.get('/organization', 
   requireOrgRole(['admin']), 
   assetController.getOrganizationAssets
 );
@@ -126,7 +126,7 @@ router.get('/organization/assets',
  *       500:
  *         description: Server error
  */
-router.get('/threads/:threadId/assets', assetController.getThreadAssets);
+router.get('/threads/:threadId', assetController.getThreadAssets);
 
 /**
  * @swagger
@@ -153,7 +153,7 @@ router.get('/threads/:threadId/assets', assetController.getThreadAssets);
  *       500:
  *         description: Server error
  */
-router.get('/assets/:assetId', assetController.getAsset);
+router.get('/:assetId', assetController.getAsset);
 
 /**
  * @swagger
@@ -219,7 +219,7 @@ router.get('/assets/:assetId', assetController.getAsset);
  *       500:
  *         description: Server error
  */
-router.post('/threads/:threadId/assets', assetController.createAsset);
+router.post('/threads/:threadId', assetController.createAsset);
 
 /**
  * @swagger
@@ -277,7 +277,7 @@ router.post('/threads/:threadId/assets', assetController.createAsset);
  *       500:
  *         description: Server error
  */
-router.put('/assets/:assetId', assetController.updateAsset);
+router.put('/:assetId', assetController.updateAsset);
 
 /**
  * @swagger
@@ -310,7 +310,7 @@ router.put('/assets/:assetId', assetController.updateAsset);
  *       500:
  *         description: Server error
  */
-router.delete('/assets/:assetId', assetController.deleteAsset);
+router.delete('/:assetId', assetController.deleteAsset);
 
 /**
  * @swagger
@@ -362,7 +362,7 @@ router.delete('/assets/:assetId', assetController.deleteAsset);
  *       500:
  *         description: Server error
  */
-router.post('/assets/:assetId/edit', assetController.editAssetText);
+router.post('/:assetId/edit', assetController.editAssetText);
 
 /**
  * @swagger
@@ -398,6 +398,6 @@ router.post('/assets/:assetId/edit', assetController.editAssetText);
  *       500:
  *         description: Server error
  */
-router.post('/assets/:assetId/undo-edit', assetController.undoLastEdit);
+router.post('/:assetId/undo-edit', assetController.undoLastEdit);
 
 export default router; 
