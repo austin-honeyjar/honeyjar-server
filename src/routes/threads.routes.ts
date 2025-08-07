@@ -363,24 +363,12 @@ router.post('/', async (req: AuthRequest, res) => {
       })
       .returning();
     
-    // Initialize the base workflow
-    const workflowService = enhancedWorkflowService;
-    const chatService = new ChatService();
+    // No automatic workflow creation - let the intent layer handle this on demand
+    logger.info('Created thread - workflows will be created on demand via intent layer', {
+      threadId: thread.id
+    });
     
-    // Get the base workflow template
-    const baseTemplate = await workflowService.getTemplateByName('Base Workflow');
-    if (!baseTemplate) {
-      logger.error('Base workflow template not found');
-      return res.status(500).json({ 
-        status: 'error', 
-        message: 'Failed to initialize workflow - template not found' 
-      });
-    }
-    
-    // Create the base workflow - this sends the initial AI message
-    await workflowService.createWorkflow(thread.id, baseTemplate.id);
-    
-    logger.info('Thread created with base workflow:', { 
+    logger.info('Thread created successfully:', { 
       userId: req.user.id,
       orgId,
       threadId: thread.id

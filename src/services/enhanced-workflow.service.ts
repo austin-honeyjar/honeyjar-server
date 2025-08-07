@@ -28,7 +28,6 @@ import { WorkflowContextService } from './workflowContextService';
 import { EmbeddingService } from './embeddingService';
 
 // Template imports (moved from WorkflowService for consolidation)
-import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow';
 import { DUMMY_WORKFLOW_TEMPLATE } from "../templates/workflows/dummy-workflow";
 import { LAUNCH_ANNOUNCEMENT_TEMPLATE } from "../templates/workflows/launch-announcement";
 import { JSON_DIALOG_PR_WORKFLOW_TEMPLATE } from "../templates/workflows/json-dialog-pr-workflow";
@@ -109,7 +108,6 @@ export interface EnhancedWorkflowResult {
 
 // Template UUIDs (moved from WorkflowService for consolidation)
 const TEMPLATE_UUIDS = {
-  BASE_WORKFLOW: '00000000-0000-0000-0000-000000000000',
   DUMMY_WORKFLOW: '00000000-0000-0000-0000-000000000001',
   LAUNCH_ANNOUNCEMENT: '00000000-0000-0000-0000-000000000002',
   JSON_DIALOG_PR_WORKFLOW: '00000000-0000-0000-0000-000000000003',
@@ -831,19 +829,10 @@ export class EnhancedWorkflowService {
             currentWorkflow: currentWorkflowName,
             requestedWorkflow: requestedWorkflowName,
             stepName: step?.name,
-            isBaseWorkflow: currentWorkflowName === 'Base Workflow'
+            isBaseWorkflow: false  // No base workflow in intent-driven system
           });
           
-          // If we're in Base Workflow (selection step), allow direct transition to any real workflow
-          if (currentWorkflowName === 'Base Workflow') {
-            logger.info('🚀 Base Workflow detected - allowing direct transition to real workflow', {
-              from: currentWorkflowName,
-              to: requestedWorkflowName,
-              stepName: step?.name
-            });
-            // Don't show confirmation for Base Workflow -> Real Workflow transitions
-            // Let it fall through to normal workflow creation
-          } else if (currentWorkflowName === requestedWorkflowName) {
+          if (currentWorkflowName === requestedWorkflowName) {
             logger.info('🔄 Same workflow detected - user requesting workflow that is already active', {
               currentWorkflow: currentWorkflowName,
               requestedWorkflow: requestedWorkflowName,
@@ -859,7 +848,7 @@ export class EnhancedWorkflowService {
             
             // Continue with the current step processing
             // Don't return here - let it fall through to normal step processing
-          } else if (currentWorkflowName !== requestedWorkflowName && currentWorkflowName !== 'Base Workflow') {
+          } else if (currentWorkflowName !== requestedWorkflowName) {
             logger.info('🔄 Different workflow detected - user wants to switch workflows', {
               currentWorkflow: currentWorkflowName,
               requestedWorkflow: requestedWorkflowName,
@@ -1172,22 +1161,11 @@ Just let me know what you'd like to create!`
           // Mark workflow as complete
           await this.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
           
-          // Create new Base Workflow for continued conversation
-          try {
-            const newWorkflow = await this.createWorkflow(workflow.threadId, '00000000-0000-0000-0000-000000000000', false);
-            
-            logger.info('✅ AUTO-ADVANCE: Created new Base Workflow for continued conversation', {
-              completedWorkflowId: workflow.id.substring(0, 8),
-              newWorkflowId: newWorkflow.id.substring(0, 8),
-              threadId: workflow.threadId.substring(0, 8)
-            });
-          } catch (autoCreateError) {
-            logger.error('❌ AUTO-ADVANCE: Failed to create new Base Workflow after completion', {
-              error: autoCreateError instanceof Error ? autoCreateError.message : 'Unknown error',
-              completedWorkflowId: workflow.id.substring(0, 8)
-            });
-            // Don't fail the completion if auto-creation fails
-          }
+          // No automatic workflow creation - let intent layer handle future conversations
+          logger.info('✅ AUTO-ADVANCE: Workflow completed - intent layer will handle future conversations', {
+            completedWorkflowId: workflow.id.substring(0, 8),
+            threadId: workflow.threadId.substring(0, 8)
+          });
           
           yield {
             type: 'metadata',
@@ -1989,11 +1967,6 @@ Just let me know what you'd like to create!`
     
     // Return the template from code based on name with hardcoded UUID
     switch (name) {
-      case BASE_WORKFLOW_TEMPLATE.name:
-        return { 
-          ...BASE_WORKFLOW_TEMPLATE,
-          id: TEMPLATE_UUIDS.BASE_WORKFLOW
-        };
       case DUMMY_WORKFLOW_TEMPLATE.name:
         return { 
           ...DUMMY_WORKFLOW_TEMPLATE,
@@ -2082,7 +2055,6 @@ Just let me know what you'd like to create!`
     if (!template) {
       console.error(`[ENHANCED] ❌ TEMPLATE NOT FOUND: Template with ID "${templateId}" was not found`);
       console.log(`[ENHANCED] Available template IDs in code:`);
-      console.log(`[ENHANCED] - Base Workflow: ${TEMPLATE_UUIDS.BASE_WORKFLOW}`);
       console.log(`[ENHANCED] - Dummy Workflow: ${TEMPLATE_UUIDS.DUMMY_WORKFLOW}`);
       console.log(`[ENHANCED] - Launch Announcement: ${TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT}`);
       console.log(`[ENHANCED] - JSON Dialog PR: ${TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW}`);
@@ -2245,6 +2217,17 @@ Just let me know what you'd like to create!`
     // Handle workflow creation/reset based on intent
     if (!workflow || inputIntent.shouldResetWorkflow) {
       workflow = await this.createOrResetWorkflow(threadId, inputIntent);
+      // If no workflow was created (conversational mode), return early
+      if (!workflow) {
+        return {
+          workflow: null,
+          currentStep: null,
+          stepType: 'regular' as const,
+          shouldAutoExecute: false,
+          isConversational: true,
+          inputIntent
+        };
+      }
     }
     
     // Get current step
@@ -2286,21 +2269,28 @@ Just let me know what you'd like to create!`
       });
     }
     
-    // Create new base workflow
-    const baseTemplate = await this.getTemplateByName('Base Workflow');
-    if (!baseTemplate) {
-      throw new Error('Base workflow template not found');
+    // If we have a workflow_action intent, create the specific workflow
+    if (intent.type === 'workflow_action' && intent.workflowType) {
+      const template = await this.getTemplateByName(intent.workflowType);
+      if (template) {
+        const newWorkflow = await this.createWorkflow(threadId, template.id, false);
+        logger.info('✅ Enhanced Service: Created workflow from intent', {
+          workflowType: intent.workflowType,
+          newWorkflowId: newWorkflow.id.substring(0, 8),
+          threadId: threadId.substring(0, 8)
+        });
+        return newWorkflow;
+      }
     }
     
-    // Create workflow (not silent for workflow selection to be active)
-    const newWorkflow = await this.createWorkflow(threadId, baseTemplate.id, false);
-    
-    logger.info('✅ Enhanced Service: Created new base workflow', {
-      newWorkflowId: newWorkflow.id.substring(0, 8),
-      threadId: threadId.substring(0, 8)
+    // If no specific workflow intent, return null (no workflow created)
+    // The intent layer will handle conversation without requiring a workflow
+    logger.info('✅ Enhanced Service: No specific workflow intent - staying in conversational mode', {
+      threadId: threadId.substring(0, 8),
+      intentType: intent.type
     });
     
-    return newWorkflow;
+    return null;
   }
 
   /**
@@ -2339,6 +2329,11 @@ Just let me know what you'd like to create!`
    */
   private determineStepType(currentStep: any, inputIntent: any): 'workflow_selection' | 'content_generation' | 'auto_execute' | 'regular' {
     if (!currentStep) return 'regular';
+    
+    // Handle workflow_action intent
+    if (inputIntent.type === 'workflow_action') {
+      return 'auto_execute';
+    }
     
     // Workflow Selection step
     if (currentStep.name === 'Workflow Selection') {
@@ -2407,7 +2402,16 @@ Just let me know what you'd like to create!`
       // 1. Analyze and prepare workflow state using enhanced logic
       const workflowState = await this.analyzeAndPrepareWorkflow(threadId, userInput, userId, orgId);
       
-      // 2. Handle auto-execution if needed
+      // 2. Handle conversational mode (no workflow)
+      if (!workflowState.workflow && workflowState.isConversational) {
+        logger.info('💬 Conversational mode - no workflow needed');
+        return {
+          response: "I'm ready to help! What would you like to work on?",
+          isComplete: false
+        };
+      }
+      
+      // 3. Handle auto-execution if needed
       if (workflowState.shouldAutoExecute && userInput !== "auto-execute") {
         logger.info('🚀 Auto-execution triggered by workflow state');
         return await this.handleAutoExecuteStep(
@@ -2418,7 +2422,7 @@ Just let me know what you'd like to create!`
         );
       }
 
-      // 3. Route to appropriate handler based on step type
+      // 4. Route to appropriate handler based on step type
       let result;
       
       if (workflowState.stepType === 'workflow_selection') {
@@ -3397,19 +3401,7 @@ Generate a contextual initial message that feels personal and relevant to this s
         threadId: threadId.substring(0, 8)
       });
 
-      // DISABLED: Legacy workflow completion system (replaced by intent-based workflow creation)
-      // This was causing duplicate workflow creation when pressing buttons
-      const baseTemplateFromDB = await this.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
-      
-      if (workflow.templateId === baseTemplateFromDB?.id) {
-        logger.info('🎯 Base workflow completed - SKIPPING legacy workflow creation (now handled by intent system)');
-        
-        // Skip the legacy workflow creation entirely - intent system handles this now
-        return { 
-          message: 'Base workflow completed - workflow creation handled by intent system'
-        };
-      }
-      
+
       // Standard workflow completion
       logger.info('✅ Standard workflow completion');
       return { message: `Workflow completed successfully.` };
@@ -3664,7 +3656,7 @@ ${enhancedPrompt}`;
   private getWorkflowTypeFromTemplate(templateId: string): string {
     // Map UUID template IDs to workflow types
     const templateMap: Record<string, string> = {
-      '00000000-0000-0000-0000-000000000000': 'Base Workflow',
+
       '00000000-0000-0000-0000-000000000001': 'Launch Announcement', 
       '00000000-0000-0000-0000-000000000002': 'JSON Dialog PR Workflow',
       '00000000-0000-0000-0000-000000000003': 'Test Step Transitions',
@@ -4555,48 +4547,21 @@ ${enhancedPrompt}`;
         requestId
       });
 
-      // 🔄 AUTO-TRANSITION: Mark workflow as completed and create new Base Workflow
+      // 🔄 AUTO-TRANSITION: Mark workflow as completed
       await this.dbService.updateWorkflowStatus(workflow.id, 'completed' as any);
       await this.dbService.updateWorkflowCurrentStep(workflow.id, null);
 
-      logger.info('🔄 ENHANCED SERVICE: Creating new Base Workflow for continued conversation', {
+      logger.info('🔄 ENHANCED SERVICE: Workflow completed - intent layer will handle future conversations', {
         completedWorkflowId: workflow.id.substring(0, 8),
         threadId: workflow.threadId.substring(0, 8),
         requestId
       });
 
-      try {
-        // Create a new Base Workflow with contextual prompt
-        const newWorkflow = await this.createWorkflow(workflow.threadId, '00000000-0000-0000-0000-000000000000', false);
-        
-        logger.info('✅ ENHANCED SERVICE: Auto-transition to new Base Workflow successful', {
-          completedWorkflowId: workflow.id.substring(0, 8),
-          newWorkflowId: newWorkflow.id.substring(0, 8),
-          threadId: workflow.threadId.substring(0, 8),
-          requestId
-        });
-
-        return {
-          response: enhancedResponse, // Return the actual approval message
-          isComplete: true,
-          nextStep: undefined
-        };
-        
-      } catch (error) {
-        logger.error('❌ ENHANCED SERVICE: Failed to create new Base Workflow after completion', {
-          error: error instanceof Error ? error.message : 'Unknown error',
-          completedWorkflowId: workflow.id.substring(0, 8),
-          threadId: workflow.threadId.substring(0, 8),
-          requestId
-        });
-        
-        // Don't fail the completion if auto-transition fails
-        return {
-          response: enhancedResponse,
-          isComplete: true,
-          nextStep: undefined
-        };
-      }
+      return {
+        response: enhancedResponse, // Return the actual approval message
+        isComplete: true,
+        nextStep: undefined
+      };
 
     } catch (error) {
       logger.error('❌ ENHANCED SERVICE: Step completion failed', {
@@ -5400,7 +5365,6 @@ ${enhancedPrompt}`;
    */
   private getWorkflowDisplayName(templateId: string): string | null {
     const templateMap: Record<string, string> = {
-      [TEMPLATE_UUIDS.BASE_WORKFLOW]: 'Base Workflow',
       [TEMPLATE_UUIDS.PRESS_RELEASE]: 'Press Release',
       [TEMPLATE_UUIDS.SOCIAL_POST]: 'Social Post',
       [TEMPLATE_UUIDS.BLOG_ARTICLE]: 'Blog Article',
@@ -6373,7 +6337,6 @@ ${enhancedPrompt}`;
   private mapWorkflowNameToTemplateId(workflowName: string): string {
     // Map workflow names to actual UUID template IDs
     const nameToIdMap: Record<string, string> = {
-      'Base Workflow': '00000000-0000-0000-0000-000000000000',
       'Launch Announcement': '00000000-0000-0000-0000-000000000001',
       'JSON Dialog PR Workflow': '00000000-0000-0000-0000-000000000002', 
       'Test Step Transitions': '00000000-0000-0000-0000-000000000003',
@@ -8537,12 +8500,7 @@ Response Guidelines:
     console.log(`[ENHANCED] Getting template with id: ${templateId}`);
     
     // Check for hardcoded UUIDs first
-    if (templateId === TEMPLATE_UUIDS.BASE_WORKFLOW || templateId === "1") {
-      return { 
-        ...BASE_WORKFLOW_TEMPLATE,
-        id: TEMPLATE_UUIDS.BASE_WORKFLOW 
-      };
-    } else if (templateId === TEMPLATE_UUIDS.DUMMY_WORKFLOW) {
+    if (templateId === TEMPLATE_UUIDS.DUMMY_WORKFLOW) {
       return { 
         ...DUMMY_WORKFLOW_TEMPLATE, 
         id: TEMPLATE_UUIDS.DUMMY_WORKFLOW 

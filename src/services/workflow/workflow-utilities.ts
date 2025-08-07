@@ -154,13 +154,26 @@ export class WorkflowUtilities {
   /**
    * Enhanced Input Intent Analysis (migrated from UnifiedEngine)
    */
-  static analyzeInputIntent(userInput: string): {
-    type: 'conversational' | 'workflow_selection' | 'regular';
+  static analyzeInputIntent(userInput: string | { type: string; text: string; decorators?: any[] }): {
+    type: 'conversational' | 'workflow_selection' | 'workflow_action' | 'regular';
     isConversational: boolean;
     shouldResetWorkflow: boolean;
     workflowName?: string;
+    workflowType?: string;
   } {
-    const input = userInput.toLowerCase().trim();
+    // Handle structured content
+    if (typeof userInput === 'object' && userInput.type === 'workflow_action') {
+      const workflowType = userInput.decorators?.find(d => d.type === 'workflow_start')?.data?.workflowType;
+      return {
+        type: 'workflow_action',
+        isConversational: false,
+        shouldResetWorkflow: true,
+        workflowType,
+        workflowName: workflowType
+      };
+    }
+
+    const input = (typeof userInput === 'string' ? userInput : userInput.text).toLowerCase().trim();
     
     // Check for conversational/help/informational requests first (higher priority)
     const conversationalPatterns = [
@@ -212,10 +225,11 @@ export class WorkflowUtilities {
     for (const [pattern, workflowName] of Object.entries(workflowActionPatterns)) {
       if (input.includes(pattern) && !conversationalPatterns.some(cp => input.includes(cp))) {
         return {
-          type: 'workflow_selection',
+          type: 'workflow_action',
           isConversational: false,
-          shouldResetWorkflow: false,
-          workflowName
+          shouldResetWorkflow: true,
+          workflowName,
+          workflowType: workflowName
         };
       }
     }

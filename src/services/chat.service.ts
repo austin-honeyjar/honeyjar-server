@@ -4,7 +4,7 @@ import { db } from '../db';
 import { chatThreads, chatMessages } from '../db/schema';
 import { enhancedWorkflowService } from './enhanced-workflow.service';
 import { WorkflowStatus, StepStatus, StepType, WorkflowStep } from '../types/workflow';
-import { BASE_WORKFLOW_TEMPLATE } from '../templates/workflows/base-workflow.js';
+
 import { simpleCache } from '../utils/simpleCache';
 import { MessageContentHelper } from '../types/chat-message';
 import { IntentClassificationService, UserIntent, IntentContext } from './intent-classification.service';
@@ -167,13 +167,9 @@ export class ChatService {
     // Get the active workflow for this thread
     let workflow = await this.workflowService.getWorkflowByThreadId(threadId);
     if (!workflow) {
-      // If no workflow exists at all, something went wrong during thread creation
-      // Create the base workflow as a fallback
-      console.warn(`No workflow found for thread ${threadId}. Creating base workflow as fallback.`);
-      const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
-      if (!baseTemplate) throw new Error("Base workflow template not found");
-      
-      workflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id);
+      // No workflow - use intent layer to handle conversation
+      console.log(`No workflow found for thread ${threadId}. Using intent layer for conversation.`);
+      return "I'm ready to help! What would you like to work on?";
     }
 
     // If we have an active workflow, process the current step
@@ -409,75 +405,23 @@ export class ChatService {
   }
 
   // Handle user message when the message has already been created elsewhere
-  async handleUserMessageNoCreate(threadId: string, content: string, userId?: string, orgId?: string) {
+  async handleUserMessageNoCreate(threadId: string, content: string | object, userId?: string, orgId?: string) {
+    // Extract text content for processing
+    const textContent = typeof content === 'string' ? content : (content as any).text || JSON.stringify(content);
+    
     // Use enhanced processing with user context
-    return this.processUserMessageWithContext(threadId, content, userId, orgId);
+    return this.processUserMessageWithContext(threadId, textContent, userId, orgId);
   }
 
   private async processUserMessageWithContext(threadId: string, content: string, userId?: string, orgId?: string) {
-    // Get the active workflow for this thread
-    let workflow = await this.workflowService.getWorkflowByThreadId(threadId);
-    if (!workflow) {
-      // If no workflow exists at all, something went wrong during thread creation
-      // Create the base workflow as a fallback
-      console.warn(`No workflow found for thread ${threadId}. Creating base workflow as fallback.`);
-      const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
-      if (!baseTemplate) throw new Error("Base workflow template not found");
-      
-      workflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id);
+    // Use the enhanced workflow service's executeWorkflow method which handles intent analysis
+    try {
+      const result = await this.workflowService.executeWorkflow(threadId, content, userId, orgId);
+      return result.response || 'Message processed successfully.';
+    } catch (error) {
+      console.error('Error in enhanced workflow execution:', error);
+      return 'I encountered an error processing your message. Please try again.';
     }
-
-    // If we have an active workflow, process the current step
-    const currentStepId = workflow.currentStepId;
-    if (!currentStepId) {
-      console.warn(`Workflow ${workflow.id} has no currentStepId. Attempting to get next prompt.`);
-      return this.getNextPrompt(threadId, workflow.id);
-    }
-
-    // Get the current step before processing
-    const currentStep = workflow.steps.find(step => step.id === currentStepId);
-    
-    // Always use enhanced context for consistent security analysis (provide defaults if missing)
-    const stepResponse = await this.workflowService.handleStepResponseWithContext(
-      currentStepId, 
-      content, 
-      userId || 'anonymous', 
-      orgId || 'default'
-    );
-    
-    // Add AI response to thread if provided by handleStepResponse
-    if (stepResponse.response && stepResponse.response !== 'Workflow completed successfully.') { 
-      await this.addMessage(threadId, stepResponse.response, false);
-    }
-
-    // Check if the *workflow* completed as a result of this step
-    if (stepResponse.isComplete) {
-        // Delegate workflow completion and transitions to workflow service
-        const completionResult = await this.workflowService.handleWorkflowCompletion(workflow, threadId);
-        
-        if (completionResult.newWorkflow) {
-          // Add a message to show which workflow was selected
-          const selectionMsg = `Workflow selected: ${completionResult.selectedWorkflow}`;
-          await this.addMessage(threadId, selectionMsg, false);
-          
-          // If there's a next step, process it
-          if (completionResult.newWorkflow.currentStepId) {
-            return this.getNextPrompt(threadId, completionResult.newWorkflow.id);
-          }
-        }
-        
-        return 'Workflow completed successfully.';
-    }
-
-    // If the step isn't complete and handleStepResponse didn't provide a specific next step/prompt,
-    // we may need to get the next prompt (this helps for intermediate steps)
-    if (!stepResponse.nextStep && currentStep && !stepResponse.isComplete) {
-      console.warn(`Step ${currentStepId} processed, workflow not complete, but handleStepResponse provided no next step. Calling getNextPrompt.`);
-      return this.getNextPrompt(threadId, workflow.id);
-    }
-
-    // Return the response from the step processing
-    return stepResponse.response || 'Step processed successfully.';
   }
 
   /**
@@ -620,7 +564,7 @@ export class ChatService {
           if (chunk.data.workflowTransition) {
             logger.info('🔄 Processing workflow transition', {
               requestId,
-              from: 'Base Workflow',
+              from: 'conversational mode',
               to: chunk.data.workflowTransition.workflowName,
               templateId: chunk.data.workflowTransition.newWorkflowId
             });
@@ -742,312 +686,6 @@ export class ChatService {
     }
   }
 
-  // Keep the original complex method as backup during transition
-  async* handleUserMessageStreamOld(
-    threadId: string, 
-    content: string, 
-    userId?: string, 
-    orgId?: string
-  ): AsyncGenerator<{
-    type: 'message_saved' | 'workflow_status' | 'ai_response' | 'workflow_complete' | 'error';
-    data: any;
-  }> {
-    try {
-      // First, save the user message (same logic as non-streaming)
-      const recentMessages = await db.query.chatMessages.findMany({
-        where: eq(chatMessages.threadId, threadId),
-        orderBy: (messages, { desc }) => [desc(messages.createdAt)],
-        limit: 5,
-      });
-      
-      const duplicateMessage = recentMessages.find(msg => 
-        msg.role === "user" && msg.content === content
-      );
-      
-      let userMessage = null;
-      if (!duplicateMessage) {
-        console.log(`Adding new user message to thread ${threadId}: "${content.substring(0, 30)}..."`);
-        userMessage = await this.addMessage(threadId, content, true);
-        
-        yield {
-          type: 'message_saved',
-          data: { message: userMessage }
-        };
-      } else {
-        console.log(`Skipping duplicate user message in thread ${threadId}: "${content.substring(0, 30)}..."`);
-        userMessage = duplicateMessage;
-        
-        yield {
-          type: 'message_saved', 
-          data: { message: userMessage, wasDuplicate: true }
-        };
-      }
-
-      // Get the active workflow for this thread
-      let workflow = await this.workflowService.getWorkflowByThreadId(threadId);
-      if (!workflow) {
-        console.warn(`No workflow found for thread ${threadId}. Creating base workflow as fallback.`);
-        const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
-        if (!baseTemplate) throw new Error("Base workflow template not found");
-        
-        workflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id);
-        
-        yield {
-          type: 'workflow_status',
-          data: { status: 'workflow_created', workflowId: workflow.id }
-        };
-      }
-
-      // Check if user is asking for general help/workflow selection  
-      const isGeneralHelpRequest = this.isGeneralHelpRequest(content);
-      let currentStepForCheck = workflow?.steps?.find((step: any) => step.id === workflow?.currentStepId);
-      
-      // If user is asking for general help and we're not on the Workflow Selection step, restart the workflow
-      if (workflow && isGeneralHelpRequest && currentStepForCheck?.name !== "Workflow Selection") {
-        console.log(`🔄 CHAT SERVICE: Detected general help request while on step "${currentStepForCheck?.name}". Restarting workflow selection.`);
-        
-        // Complete the current workflow
-        await this.workflowService.updateWorkflowStatus(workflow.id, WorkflowStatus.COMPLETED);
-        
-        // Create a new base workflow (not silent - we want the workflow selection step active)
-        const baseTemplate = await this.workflowService.getTemplateByName(BASE_WORKFLOW_TEMPLATE.name);
-        if (!baseTemplate) throw new Error("Base workflow template not found");
-        
-        workflow = await this.workflowService.createWorkflow(threadId, baseTemplate.id, false);
-        console.log(`✅ CHAT SERVICE: Restarted base workflow for general help request. New workflow: ${workflow.id}`);
-        
-        yield {
-          type: 'workflow_status',
-          data: { status: 'workflow_restarted', workflowId: workflow.id }
-        };
-      }
-
-      // Process the current step
-      const currentStepId = workflow.currentStepId;
-      if (!currentStepId) {
-        console.warn(`Workflow ${workflow.id} has no currentStepId. Looking for first IN_PROGRESS step.`);
-        
-        // Find the first IN_PROGRESS step (should be the first step we just created)
-        const inProgressStep = workflow.steps.find(step => step.status === StepStatus.IN_PROGRESS);
-        if (inProgressStep) {
-          console.log(`✅ Found IN_PROGRESS step: ${inProgressStep.name} (${inProgressStep.id})`);
-          // Update the workflow's currentStepId to this step
-          await this.workflowService.updateWorkflowCurrentStep(workflow.id, inProgressStep.id);
-          // Continue processing with this step
-          workflow.currentStepId = inProgressStep.id;
-        } else {
-          console.warn(`No IN_PROGRESS step found. Falling back to getNextPrompt.`);
-          const prompt = await this.getNextPrompt(threadId, workflow.id);
-          
-          yield {
-            type: 'ai_response',
-            data: { content: prompt, isComplete: true }
-          };
-          return;
-        }
-      }
-
-      // Get the current step before processing
-      const currentStep = workflow.steps.find(step => step.id === workflow.currentStepId);
-      
-      // Always use enhanced streaming context for consistent security analysis (provide defaults if missing)
-      const stepResponseGenerator = this.workflowService.handleStepResponseStreamWithContext(
-        workflow.currentStepId!, 
-        content, 
-        userId || 'anonymous', 
-        orgId || 'default'
-      );
-
-      let stepResponse: any = null;
-      let accumulatedResponse = '';
-
-      // Process streaming step response
-      for await (const chunk of stepResponseGenerator) {
-        if (chunk.type === 'content') {
-          accumulatedResponse += chunk.data.content || '';
-          console.log('📝 Accumulating response chunk:', {
-            chunkContent: chunk.data.content,
-            newAccumulatedLength: accumulatedResponse.length,
-            accumulatedPreview: accumulatedResponse.substring(0, 100) + '...'
-          });
-          
-          // Yield AI response chunks
-          yield {
-            type: 'ai_response',
-            data: {
-              content: chunk.data.content,
-              isComplete: chunk.data.isComplete || false,
-              accumulated: accumulatedResponse
-            }
-          };
-        } else if (chunk.type === 'done') {
-          console.log('✅ Streaming done event received:', chunk.data);
-          stepResponse = chunk.data;
-        } else if (chunk.type === 'error') {
-          console.log('❌ Streaming error event received:', chunk.data);
-          yield {
-            type: 'error',
-            data: chunk.data
-          };
-          return;
-        }
-      }
-
-      // Save the accumulated AI response to the database (extract clean text from JSON)
-      console.log('🔍 Checking if should save accumulated response:', {
-        hasAccumulatedResponse: !!accumulatedResponse,
-        accumulatedLength: accumulatedResponse.length,
-        isNotWorkflowCompleted: accumulatedResponse !== 'Workflow completed successfully.',
-        preview: accumulatedResponse.substring(0, 100) + '...'
-      });
-      
-      if (accumulatedResponse && accumulatedResponse !== 'Workflow completed successfully.') {
-        let finalResponse = accumulatedResponse;
-        
-        // If the response is JSON, extract the conversational response
-        if (accumulatedResponse.trim().startsWith('{')) {
-          try {
-            const parsed = JSON.parse(accumulatedResponse);
-            if (parsed.collectedInformation?.conversationalResponse) {
-              finalResponse = parsed.collectedInformation.conversationalResponse;
-              console.log('🎯 Extracted clean response for database:', finalResponse.substring(0, 50) + '...');
-            } else {
-              console.warn('⚠️ JSON response but no conversationalResponse found:', accumulatedResponse.substring(0, 100));
-            }
-          } catch (e: any) {
-            console.warn('⚠️ Failed to parse JSON response for database save:', e.message);
-            // Keep original response as fallback
-          }
-        }
-        
-        console.log('💾 Saving final AI response to database:', finalResponse.substring(0, 50) + '...');
-        const savedMessage = await this.addMessage(threadId, finalResponse, false);
-        console.log('✅ AI message saved successfully with ID:', savedMessage?.id, 'at', new Date().toISOString());
-        
-        // CRITICAL: Invalidate thread cache to ensure fresh data on next request
-        const threadCacheKey = `thread:${threadId}`;
-        simpleCache.del(threadCacheKey);
-        console.log('🗑️ Invalidated thread cache for:', threadId);
-      }
-
-      // Handle workflow completion and transitions
-      if (stepResponse?.isComplete) {
-        const completionResult = await this.workflowService.handleWorkflowCompletion(workflow, threadId);
-        
-        if (completionResult.newWorkflow) {
-          const selectionMsg = `Workflow selected: ${completionResult.selectedWorkflow}`;
-          await this.addMessage(threadId, selectionMsg, false);
-          
-          yield {
-            type: 'workflow_status',
-            data: { 
-              status: 'workflow_transition',
-              selectedWorkflow: completionResult.selectedWorkflow,
-              newWorkflowId: completionResult.newWorkflow.id
-            }
-          };
-          
-          // Get the first prompt of the new workflow
-          const nextPrompt = await this.getNextPrompt(threadId, completionResult.newWorkflow.id);
-          
-          yield {
-            type: 'ai_response',
-            data: { content: nextPrompt, isComplete: true }
-          };
-        } else {
-          const completionMsg = completionResult.message || `${workflow.templateId || 'Workflow'} completed successfully.`;
-          await this.addWorkflowStatusMessage(threadId, completionMsg);
-          
-          yield {
-            type: 'workflow_complete',
-            data: { message: completionMsg }
-          };
-        }
-      } else if (stepResponse?.nextStep) {
-        // Handle next step processing
-        const nextStepInfo = workflow.steps.find(step => step.id === stepResponse.nextStep?.id);
-        
-        if (nextStepInfo) {
-          const autoExecCheck = await this.workflowService.checkAndHandleAutoExecution(
-            nextStepInfo.id, 
-            workflow.id, 
-            threadId
-          );
-
-          if (autoExecCheck.autoExecuted) {
-            if (autoExecCheck.nextWorkflow) {
-              const nextPrompt = await this.getNextPrompt(threadId, autoExecCheck.nextWorkflow.id);
-              yield {
-                type: 'ai_response',
-                data: { content: nextPrompt, isComplete: true }
-              };
-            } else if (autoExecCheck.result) {
-              yield {
-                type: 'ai_response',
-                data: { 
-                  content: autoExecCheck.result.response || `Step "${nextStepInfo.name}" executed automatically.`,
-                  isComplete: true
-                }
-              };
-            }
-            return;
-          }
-        }
-        
-        const nextPrompt = stepResponse.nextStep.prompt || "Please provide the required information.";
-        const isInitialPromptAlreadySent = nextStepInfo?.metadata?.initialPromptSent === true;
-        
-        if (!isInitialPromptAlreadySent && accumulatedResponse !== nextPrompt) {
-          if (nextStepInfo) {
-            await this.workflowService.updateStep(nextStepInfo.id, {
-              metadata: { 
-                ...nextStepInfo.metadata,
-                initialPromptSent: true 
-              }
-            });
-          }
-          
-          await this.addMessage(threadId, nextPrompt, false);
-          
-          yield {
-            type: 'ai_response',
-            data: { content: nextPrompt, isComplete: true }
-          };
-        }
-      } else {
-        // Check if enhanced service indicated to skip original processing
-        if (stepResponse?.skipOriginalProcessing) {
-          console.log(`🔇 Step ${currentStepId} processed by enhanced service - skipping getNextPrompt fallback.`);
-          // Enhanced service already handled everything, no additional processing needed
-          return;
-        }
-        
-        // Fallback to getNextPrompt
-        console.warn(`Step ${currentStepId} processed, workflow not complete, but handleStepResponse provided no next step. Calling getNextPrompt.`);
-        const nextPrompt = await this.getNextPrompt(threadId, workflow.id);
-        
-        yield {
-          type: 'ai_response',
-          data: { content: nextPrompt, isComplete: true }
-        };
-      }
-
-    } catch (error) {
-      logger.error('Error in streaming message handler:', {
-        threadId,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      });
-      
-      yield {
-        type: 'error',
-        data: {
-          error: error instanceof Error ? error.message : 'Unknown error',
-          threadId
-        }
-      };
-    }
-  }
 
   // Check if user input is a general help request that should restart workflow selection
   private isGeneralHelpRequest(content: string): boolean {
@@ -1094,7 +732,7 @@ export class ChatService {
         return firstStep.id;
       }
       
-      // If no active workflow exists, return null - enhanced service will create new Base Workflow
+      // If no active workflow exists, return null - enhanced service will handle conversational mode
       return null;
       
     } catch (error) {
@@ -1213,7 +851,7 @@ export class ChatService {
     
     // Map template IDs to display names
     const templateIdMap: Record<string, string> = {
-      '00000000-0000-0000-0000-000000000000': 'Base Workflow',
+
       '00000000-0000-0000-0000-000000000008': 'Press Release',
       '00000000-0000-0000-0000-000000000010': 'Social Post',
       '00000000-0000-0000-0000-000000000011': 'Blog Article',

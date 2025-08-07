@@ -817,14 +817,8 @@ export class WorkflowService {
     if (template && workflow.threadId) {
       await this.addDirectMessage(
         workflow.threadId,
-        `🎉 The "${template.name}" workflow has been completed successfully!`
+        `🎉 The "${template.name}" workflow has been completed successfully! What would you like to work on next?`
       );
-      
-      // Add a short delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Start the base workflow again
-      await this.restartBaseWorkflow(workflow.threadId);
     }
     
     return this.getWorkflow(workflowId) as Promise<Workflow>;
