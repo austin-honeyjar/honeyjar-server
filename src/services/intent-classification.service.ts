@@ -1,4 +1,8 @@
 import { OpenAIService } from './openai.service';
+import { MessageContentHelper } from '../types/chat-message';
+import { db } from '../db';
+import { chatMessages } from '../db/schema';
+import { eq } from 'drizzle-orm';
 import logger from '../utils/logger';
 
 export interface UserIntent {
@@ -213,7 +217,7 @@ export class IntentClassificationService {
 
     return `You are an intent classification system for a PR workflow platform. 
 
-🎯 CRITICAL CONTEXT RULE:
+CRITICAL CONTEXT RULE:
 ${context.currentWorkflow?.name ? 
   `User is CURRENTLY IN "${context.currentWorkflow.name}" workflow. 
   If they say "make [something]" related to the SAME workflow type, classify as continue_workflow.
@@ -428,5 +432,481 @@ Classify the user's message:`;
       'Launch Announcement',
       'FAQ'
     ];
+  }
+
+  /**
+   * Generate intelligent conversational response for conversational intents
+   */
+  async generateConversationalResponse(
+    context: IntentContext,
+    userMessage: string
+  ): Promise<string> {
+    try {
+      logger.info('INTENT SERVICE: Generating conversational response', {
+        userMessage: userMessage.substring(0, 50) + '...',
+        hasHistory: context.conversationHistory.length > 0,
+        hasCurrentWorkflow: !!context.currentWorkflow
+      });
+
+      const systemPrompt = this.buildConversationalPrompt(context);
+
+      const response = await this.openAIService.generateResponse(
+        systemPrompt,
+        userMessage,
+        {
+          temperature: 0.7,
+          max_tokens: 500,
+          model: 'gpt-4o-mini'
+        }
+      );
+
+      logger.info('INTENT SERVICE: Conversational response generated', {
+        responseLength: response.length,
+        userMessage: userMessage.substring(0, 30) + '...'
+      });
+
+      return response;
+    } catch (error) {
+      logger.error('INTENT SERVICE: Failed to generate conversational response', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        userMessage: userMessage.substring(0, 50) + '...'
+      });
+      
+      // Fallback response
+      return `I'd be happy to help! I can assist you with creating PR and communications content. Would you like me to help you create a specific type of content like a press release, media pitch, or social post?`;
+    }
+  }
+
+  /**
+   * Build conversational prompt with context
+   */
+  private buildConversationalPrompt(context: IntentContext): string {
+    const availableWorkflows = this.getAvailableWorkflows();
+    
+    let prompt = `You are a helpful AI assistant for a PR and communications platform. The user is asking a question in conversational mode (no active workflow).
+
+Your goals:
+1. Answer their specific question helpfully and accurately
+2. Provide context-aware responses based on recent conversation
+3. Suggest relevant workflows when appropriate
+4. Be friendly and professional
+
+Available workflows you can suggest:
+${availableWorkflows.map(workflow => `- **${workflow}** - ${this.getWorkflowDescription(workflow)}`).join('\n')}
+`;
+
+    // Add conversation history if available
+    if (context.conversationHistory.length > 0) {
+      prompt += `\nRecent conversation context:\n${context.conversationHistory.slice(-5).join('\n')}\n`;
+    }
+
+    // Add user profile context if available
+    if (context.userProfile) {
+      prompt += `\nUser context:\n`;
+      if (context.userProfile.companyName) prompt += `Company: ${context.userProfile.companyName}\n`;
+      if (context.userProfile.industry) prompt += `Industry: ${context.userProfile.industry}\n`;
+      if (context.userProfile.role) prompt += `Role: ${context.userProfile.role}\n`;
+    }
+
+    prompt += `\nCurrent user question: ${context.userMessage}
+
+Provide a helpful, contextual response. If the user is asking about a specific type of content, explain what it is and offer to help them create one.`;
+
+    return prompt;
+  }
+
+  /**
+   * Get description for a workflow type
+   */
+  private getWorkflowDescription(workflowName: string): string {
+    const descriptions = {
+      'Press Release': 'Professional press releases for announcements',
+      'Media Pitch': 'Compelling pitches to journalists and media outlets',
+      'Social Post': 'Engaging social media content',
+      'Blog Article': 'Thought leadership and informational articles',
+      'FAQ': 'Comprehensive frequently asked questions',
+      'Launch Announcement': 'Product or service launch communications',
+      'Media List Generator': 'Targeted media contact lists'
+    };
+    
+    return descriptions[workflowName as keyof typeof descriptions] || 'Custom workflow content';
+  }
+
+  /**
+   * Handle workflow action intent by creating and starting a workflow
+   */
+  async handleWorkflowActionIntent(
+    intent: UserIntent,
+    threadId: string,
+    userInput: string,
+    workflowService: any, // EnhancedWorkflowService
+    userId?: string,
+    orgId?: string
+  ): Promise<AsyncGenerator<{
+    type: 'ai_response' | 'done';
+    data: any;
+  }>> {
+    
+    async function* workflowActionGenerator() {
+      try {
+        logger.info('INTENT SERVICE: Handling workflow action intent', {
+          workflowName: intent.workflowName,
+          threadId: threadId.substring(0, 8),
+          userInput: userInput.substring(0, 50)
+        });
+
+        if (!intent.workflowName) {
+          yield {
+            type: 'ai_response',
+            data: {
+              content: "I'd be happy to help you create content! Could you specify what type of content you'd like to create?",
+              isComplete: true
+            }
+          };
+          yield { type: 'done', data: { completed: true } };
+          return;
+        }
+
+        // Get template ID for the workflow
+        const templateId = workflowService.getTemplateIdForWorkflow(intent.workflowName);
+        if (!templateId) {
+          yield {
+            type: 'ai_response',
+            data: {
+              content: `I'm sorry, I couldn't find the ${intent.workflowName} workflow. Please try a different workflow type.`,
+              isComplete: true
+            }
+          };
+          yield { type: 'done', data: { completed: true } };
+          return;
+        }
+
+        // Create the workflow
+        const newWorkflow = await workflowService.createWorkflow(threadId, templateId, false);
+        
+        // Get the first step
+        const firstStep = await workflowService.getCurrentStepSafely(newWorkflow);
+        
+        if (firstStep) {
+          logger.info('INTENT SERVICE: Created workflow and starting first step', {
+            workflowId: newWorkflow.id.substring(0, 8),
+            firstStepId: firstStep.id.substring(0, 8),
+            stepName: firstStep.name
+          });
+
+          // Process the first step with the user input
+          let accumulatedContent = '';
+          for await (const event of workflowService.handleStepResponseStreamWithContext(
+            firstStep.id, 
+            userInput, 
+            userId || 'system', 
+            orgId || '',
+            { intent }
+          )) {
+            if (event.type === 'content') {
+              yield {
+                type: 'ai_response',
+                data: {
+                  content: event.data.content,
+                  isComplete: event.data.isComplete || false,
+                  accumulated: accumulatedContent + (event.data.content || '')
+                }
+              };
+              if (event.data.content) {
+                accumulatedContent += event.data.content;
+              }
+            }
+          }
+        } else {
+          yield {
+            type: 'ai_response',
+            data: {
+              content: `I've created the ${intent.workflowName} workflow, but there was an issue getting started. Please try again.`,
+              isComplete: true
+            }
+          };
+        }
+
+        yield { type: 'done', data: { completed: true } };
+
+      } catch (error) {
+        logger.error('INTENT SERVICE: Failed to handle workflow action', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          workflowName: intent.workflowName,
+          threadId: threadId.substring(0, 8)
+        });
+        
+        yield {
+          type: 'ai_response',
+          data: {
+            content: `I encountered an error creating the ${intent.workflowName}. Please try again.`,
+            isComplete: true
+          }
+        };
+        yield { type: 'done', data: { completed: true } };
+      }
+    }
+
+    return workflowActionGenerator();
+  }
+
+  /**
+   * Handle workflow management intent (cancel, continue, etc.)
+   */
+  async handleWorkflowManagementIntent(
+    intent: UserIntent,
+    threadId: string,
+    userInput: string,
+    workflowService: any, // EnhancedWorkflowService
+    userId?: string,
+    orgId?: string
+  ): Promise<AsyncGenerator<{
+    type: 'ai_response' | 'done';
+    data: any;
+  }>> {
+
+    async function* workflowManagementGenerator() {
+      try {
+        logger.info('INTENT SERVICE: Handling workflow management intent', {
+          action: intent.action,
+          workflowName: intent.workflowName,
+          shouldExit: intent.shouldExit,
+          threadId: threadId.substring(0, 8)
+        });
+
+        if (intent.action === 'cancel_workflow') {
+          // Get current workflow to provide context
+          const currentWorkflow = await workflowService.getWorkflowByThreadId(threadId);
+          const currentWorkflowName = currentWorkflow ? 
+            workflowService.getWorkflowDisplayName(currentWorkflow.templateId) : 'workflow';
+
+          if (intent.shouldExit || !intent.workflowName) {
+            // Complete exit from workflow
+            if (currentWorkflow) {
+              await workflowService.updateWorkflowStatus(currentWorkflow.id, 'completed');
+            }
+
+            yield {
+              type: 'ai_response',
+              data: {
+                content: `I've exited the ${currentWorkflowName}. What would you like to do next?`,
+                isComplete: true
+              }
+            };
+          } else if (intent.workflowName) {
+            // Switch to different workflow
+            if (currentWorkflow) {
+              await workflowService.updateWorkflowStatus(currentWorkflow.id, 'completed');
+            }
+
+            yield {
+              type: 'ai_response',
+              data: {
+                content: `I've exited the ${currentWorkflowName}. Let me start the ${intent.workflowName} for you.`,
+                isComplete: true
+              }
+            };
+
+            // Create the new workflow
+            const workflowActionGenerator = await this.handleWorkflowActionIntent(
+              {
+                ...intent,
+                category: 'workflow_action',
+                action: 'start_workflow'
+              },
+              threadId,
+              userInput,
+              workflowService,
+              userId,
+              orgId
+            );
+
+            for await (const event of workflowActionGenerator) {
+              yield event;
+            }
+            return;
+          }
+        } else if (intent.action === 'continue_workflow') {
+          // This should be handled by the workflow service itself
+          yield {
+            type: 'ai_response',
+            data: {
+              content: "I'll help you continue with your current workflow...",
+              isComplete: true
+            }
+          };
+        }
+
+        yield { type: 'done', data: { completed: true } };
+
+      } catch (error) {
+        logger.error('INTENT SERVICE: Failed to handle workflow management', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          action: intent.action,
+          threadId: threadId.substring(0, 8)
+        });
+
+        yield {
+          type: 'ai_response',
+          data: {
+            content: "I encountered an issue with the workflow management. Please try again.",
+            isComplete: true
+          }
+        };
+        yield { type: 'done', data: { completed: true } };
+      }
+    }
+
+    return workflowManagementGenerator();
+  }
+
+  /**
+   * Main intent handler - routes to appropriate intent handler based on category
+   */
+  async handleIntent(
+    intent: UserIntent,
+    threadId: string,
+    userInput: string,
+    workflowService: any, // EnhancedWorkflowService
+    userId?: string,
+    orgId?: string
+  ): Promise<AsyncGenerator<{
+    type: 'ai_response' | 'done';
+    data: any;
+  }>> {
+
+    logger.info('INTENT SERVICE: Routing intent to appropriate handler', {
+      category: intent.category,
+      action: intent.action,
+      workflowName: intent.workflowName,
+      threadId: threadId.substring(0, 8)
+    });
+
+    switch (intent.category) {
+      case 'workflow_action':
+        return await this.handleWorkflowActionIntent(
+          intent, threadId, userInput, workflowService, userId, orgId
+        );
+      
+      case 'workflow_management':
+        return await this.handleWorkflowManagementIntent(
+          intent, threadId, userInput, workflowService, userId, orgId
+        );
+      
+      case 'conversational':
+        return await this.handleConversationalIntent(
+          intent, threadId, userInput, workflowService, userId, orgId
+        );
+      
+      default:
+        // Fallback to conversational
+        return await this.handleConversationalIntent(
+          intent, threadId, userInput, workflowService, userId, orgId
+        );
+    }
+  }
+
+  /**
+   * Handle conversational intent 
+   */
+  async handleConversationalIntent(
+    intent: UserIntent,
+    threadId: string,
+    userInput: string,
+    workflowService: any, // EnhancedWorkflowService
+    userId?: string,
+    orgId?: string
+  ): Promise<AsyncGenerator<{
+    type: 'ai_response' | 'done';
+    data: any;
+  }>> {
+
+    const self = this; // Capture 'this' context for inner function
+    async function* conversationalGenerator() {
+      try {
+        logger.info('INTENT SERVICE: Handling conversational intent', {
+          action: intent.action,
+          threadId: threadId.substring(0, 8),
+          userInput: userInput.substring(0, 50)
+        });
+
+        // Get recent conversation context for intelligent responses
+        const recentMessages = await db.query.chatMessages.findMany({
+          where: eq(chatMessages.threadId, threadId),
+          orderBy: (messages, { desc }) => [desc(messages.createdAt)],
+          limit: 10
+        });
+
+        // Build conversation context for intent service
+        const conversationHistory = recentMessages
+          .reverse()
+          .map(msg => {
+            let text: string;
+            if (typeof msg.content === 'string') {
+              text = msg.content;
+            } else if (msg.content && typeof msg.content === 'object') {
+              text = MessageContentHelper.getText(msg.content as any);
+            } else {
+              text = String(msg.content);
+            }
+            return `${msg.role}: ${text}`;
+          })
+          .slice(-5); // Keep only last 5 messages
+
+        // Create intent context
+        const intentContext = {
+          userMessage: userInput,
+          conversationHistory,
+          availableWorkflows: self.getAvailableWorkflows()
+        };
+
+        // Generate intelligent response using intent service
+        const response = await self.generateConversationalResponse(
+          intentContext,
+          userInput
+        );
+
+        // Stream the AI response
+        yield {
+          type: 'ai_response' as const,
+          data: {
+            content: response,
+            isComplete: true,
+            accumulated: response
+          }
+        };
+
+        // Save the response to the database using unified structured messaging
+        await workflowService.addTextMessage(threadId, response);
+
+        logger.info('INTENT SERVICE: Conversational response completed', {
+          threadId: threadId.substring(0, 8),
+          responseLength: response.length,
+          hasContext: conversationHistory.length > 0
+        });
+        
+        yield {
+          type: 'done' as const,
+          data: { completed: true }
+        };
+
+      } catch (error) {
+        logger.error('INTENT SERVICE: Failed to handle conversational intent', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          threadId: threadId.substring(0, 8)
+        });
+        
+        yield {
+          type: 'ai_response' as const,
+          data: {
+            content: "I'd be happy to help! I can assist you with creating PR and communications content. Would you like me to help you create a specific type of content like a press release, media pitch, or social post?",
+            isComplete: true
+          }
+        };
+        yield { type: 'done' as const, data: { completed: true } };
+      }
+    }
+
+    return conversationalGenerator();
   }
 }

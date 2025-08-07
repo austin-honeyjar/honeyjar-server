@@ -438,7 +438,7 @@ export class ChatService {
     userId?: string, 
     orgId?: string
   ): AsyncGenerator<{
-    type: 'message_saved' | 'workflow_status' | 'ai_response' | 'workflow_complete' | 'error' | 'intent_classified';
+    type: 'message_saved' | 'workflow_status' | 'ai_response' | 'workflow_complete' | 'error' | 'intent_classified' | 'done';
     data: any;
   }> {
     // Generate unique request ID for this streaming session
@@ -467,7 +467,7 @@ export class ChatService {
       yield {
         type: 'ai_response',
         data: {
-          content: '_🧠 Understanding your request..._',
+          content: '_Understanding your request..._',
           isComplete: true
         }
       };
@@ -512,20 +512,54 @@ export class ChatService {
       // Determine which step ID to use
       let effectiveStepId = currentStepId;
       
-      // If no active workflow exists, create a new Base Workflow
+      // If no active workflow exists, use intent service to handle
       if (!currentStepId) {
-        logger.info('🔄 No active workflow found - creating new Base Workflow', {
-          threadId: threadId.substring(0, 8),
-          userInput: content.substring(0, 50)
+        logger.info('🎯 No active workflow - delegating to intent service', {
+          intentCategory: intent.category,
+          intentAction: intent.action,
+          workflowName: intent.workflowName,
+          threadId: threadId.substring(0, 8)
         });
-        const newWorkflow = await this.workflowService.createWorkflow(threadId, '00000000-0000-0000-0000-000000000000', false);
-        effectiveStepId = newWorkflow.steps.find((step: any) => step.order === 0)?.id || null;
         
-        logger.info('✅ Created new Base Workflow', {
-          workflowId: newWorkflow.id.substring(0, 8),
-          effectiveStepId: effectiveStepId?.substring(0, 8),
-          stepName: newWorkflow.steps.find((step: any) => step.order === 0)?.name
+        // Use intent service to handle all intents when no active workflow
+        const intentGenerator = await this.intentService.handleIntent(
+          intent,
+          threadId,
+          content,
+          this.workflowService,
+          userId,
+          orgId
+        );
+        
+        for await (const event of intentGenerator) {
+          yield event;
+        }
+        return;
+      }
+
+      // Check if this is a workflow management intent that should be handled by intent service
+      if (intent.category === 'workflow_management' && intent.action === 'cancel_workflow') {
+        logger.info('🎯 Workflow management intent detected - delegating to intent service', {
+          intentAction: intent.action,
+          workflowName: intent.workflowName,
+          shouldExit: intent.shouldExit,
+          threadId: threadId.substring(0, 8)
         });
+        
+        // Use intent service to handle workflow management
+        const intentGenerator = await this.intentService.handleIntent(
+          intent,
+          threadId,
+          content,
+          this.workflowService,
+          userId,
+          orgId
+        );
+        
+        for await (const event of intentGenerator) {
+          yield event;
+        }
+        return;
       }
       
       // Ensure we have a valid step ID before proceeding
@@ -646,20 +680,12 @@ export class ChatService {
               }
               
             } else {
-              // Use structured message for non-asset steps (workflow selection, etc.)
-              const structuredContent = MessageContentHelper.createTextMessage(chunk.data.finalResponse);
+              // Use unified structured messaging for consistency
+              await this.workflowService.addTextMessage(threadId, chunk.data.finalResponse);
               
-              const [aiMessage] = await db.insert(chatMessages).values({
-                threadId,
-                content: JSON.stringify(structuredContent),
-                role: "assistant",
-                userId: "system",
-              }).returning();
-              
-              logger.info('💾 Enhanced streaming: Final AI message saved with structured content', {
-                messageId: aiMessage?.id,
+              logger.info('💾 Enhanced streaming: Final AI message saved with unified structured messaging', {
                 responseLength: chunk.data.finalResponse.length,
-                messageType: 'structured_text'
+                messageType: 'unified_structured_text'
               });
             }
           }
@@ -820,25 +846,24 @@ export class ChatService {
    */
   private formatIntentMessage(intent: UserIntent): string {
     const confidenceLevel = intent.confidence >= 0.8 ? 'High' : intent.confidence >= 0.6 ? 'Medium' : 'Low';
-    const confidenceEmoji = intent.confidence >= 0.8 ? '🎯' : intent.confidence >= 0.6 ? '🤔' : '🔍';
     
     switch (intent.category) {
       case 'workflow_action':
-        return `_${confidenceEmoji} I see you want to ${intent.workflowName ? `create a ${intent.workflowName}` : 'start a workflow'}. Let me set that up..._`;
+        return `_I see you want to ${intent.workflowName ? `create a ${intent.workflowName}` : 'start a workflow'}. Let me set that up...  Confidence: (${intent.confidence})_`;
       
       case 'workflow_management':
         if (intent.action === 'cancel_workflow') {
-          return `_${confidenceEmoji} I understand you want to ${intent.workflowName ? `switch to ${intent.workflowName}` : 'exit the current workflow'}. Processing..._`;
+          return `_I understand you want to ${intent.workflowName ? `switch to ${intent.workflowName}` : 'exit the current workflow'}. Processing..._`;
         } else if (intent.action === 'continue_workflow') {
-          return `_${confidenceEmoji} I'll help you continue with your current workflow..._`;
+          return `_I'll help you continue with your current workflow..._`;
         }
-        return `_${confidenceEmoji} Managing your workflow..._`;
+        return `_Managing your workflow..._`;
       
       case 'conversational':
-        return `_${confidenceEmoji} I'll provide information to help answer your question..._`;
+        return `_I'll provide information to help answer your question..._`;
       
       default:
-        return `_${confidenceEmoji} Processing your request..._`;
+        return `_Processing your request..._`;
     }
   }
 

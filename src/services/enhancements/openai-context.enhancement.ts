@@ -46,7 +46,7 @@ export class OpenAIContextEnhancer {
     // Add workflow context
     if (contextLayers.workflowContext) {
       const wfContext = contextLayers.workflowContext;
-      systemMessage += `\n\n🎯 WORKFLOW CONTEXT:`;
+      systemMessage += `\n\nWORKFLOW CONTEXT:`;
       systemMessage += `\nCurrently working on: ${wfContext.workflowType || 'Unknown Workflow'}`;
       if (wfContext.currentStep) {
         systemMessage += `\nCurrent step: ${wfContext.currentStep}`;

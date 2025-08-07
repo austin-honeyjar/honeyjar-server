@@ -7274,7 +7274,7 @@ RESPONSE FORMAT: Return ONLY the revised ${assetType} content, no JSON, no expla
       const totalArticles = searchResult.searchResults.totalArticlesFound;
 
       // Format detailed results for each author
-      let detailedResponse = `🔍 **Article Search Results**\n\nFound articles from ${authorsWithArticles} of ${searchResult.searchResults.authorsSearched} AI-suggested authors:\n\n`;
+      let detailedResponse = `**Article Search Results**\n\nFound articles from ${authorsWithArticles} of ${searchResult.searchResults.authorsSearched} AI-suggested authors:\n\n`;
       
       searchResult.searchResults.authorResults.forEach((authorResult, index) => {
         detailedResponse += `**${index + 1}. ${authorResult.name}** (${authorResult.organization})\n`;

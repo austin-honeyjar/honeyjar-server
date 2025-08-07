@@ -39,7 +39,7 @@ export class RAGContextEnhancer {
 
     // Add context from related examples
     if (smartDefaults.relatedExamples && smartDefaults.relatedExamples.length > 0) {
-      enhancedPrompt += `\n\n🎯 RELATED EXAMPLES:\nBased on your previous successful work:`;
+      enhancedPrompt += `\n\nRELATED EXAMPLES:\nBased on your previous successful work:`;
       smartDefaults.relatedExamples.slice(0, 2).forEach((example: any, index: number) => {
         enhancedPrompt += `\n${index + 1}. ${example.context}: "${example.content.slice(0, 100)}..."`;
       });

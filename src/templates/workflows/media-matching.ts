@@ -76,7 +76,7 @@ TWO-PHASE APPROACH:
 - **PHASE 2**: Algorithmic filtering will reduce to top 10 with actual relevant recent articles
 - **GOAL**: Cast a wider net to ensure we find authors with real recent coverage
 
-🎯 **CRITICAL: RECENT PUBLICATION FOCUS**
+**CRITICAL: RECENT PUBLICATION FOCUS**
 Your PRIMARY job is suggesting authors who have RECENTLY written about this SPECIFIC topic area (not just general industry). Think:
 - Who covered similar fundraising announcements in the past 6 months?
 - Which reporters specifically write about autonomous delivery/robotics (not just "tech")?
@@ -91,7 +91,7 @@ REQUIREMENTS:
 - 2-3 sentence reasoning explaining why contact each author AND what specific recent articles they likely wrote
 - 10 relevant keywords
 
-🔍 **ENHANCED AUTHOR SELECTION STRATEGY**:
+**ENHANCED AUTHOR SELECTION STRATEGY**:
 **STEP 1: Topic-Specific Beat Reporters**
 - Start with journalists who specifically cover the exact topic area (e.g., autonomous delivery, not just "transportation")
 - Look for reporters who regularly write about funding rounds in this specific industry
@@ -112,7 +112,7 @@ REQUIREMENTS:
 - Include less obvious but highly relevant specialists from trade publications
 - Prioritize active coverage over publication size for niche topics
 
-🎯 **PUBLICATION PRIORITIZATION**:
+**PUBLICATION PRIORITIZATION**:
 **For Tech/Business Topics**: 
 - **First Priority**: Authors with recent coverage of similar companies, funding, or technology
 - **Trade Publications**: TechCrunch (funding), The Information (inside tech), Forbes (business), Axios (tech policy)

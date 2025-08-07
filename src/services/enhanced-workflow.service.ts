@@ -1470,6 +1470,15 @@ Just let me know what you'd like to create!`
   }
 
   /**
+   * UNIFIED: Add a text message using structured content (PREFERRED METHOD)
+   * This should be used for all new text messages to ensure consistency
+   */
+  async addTextMessage(threadId: string, text: string): Promise<void> {
+    const structuredContent = MessageContentHelper.createTextMessage(text);
+    return this.addStructuredMessage(threadId, structuredContent);
+  }
+
+  /**
    * Add a structured message directly to the chat thread
    * Enhanced version with proper JSON string storage
    */
@@ -2296,7 +2305,7 @@ Just let me know what you'd like to create!`
   /**
    * Get current step safely with auto-recovery
    */
-  private async getCurrentStepSafely(workflow: any): Promise<any> {
+  public async getCurrentStepSafely(workflow: any): Promise<any> {
     if (!workflow) return null;
     
     // Find the current step
@@ -2947,7 +2956,7 @@ CRITICAL APPROACH:
     // Skip redundant conversation history (already in RAG context)
 
     // Add task instruction (condensed)
-    prompt += `\n\n🎯 TASK: Create professional ${assetType}. Use "${ragContext?.userDefaults?.companyName || 'Company'}" throughout. Replace all placeholders with actual context above.
+    prompt += `\n\nTASK: Create professional ${assetType}. Use "${ragContext?.userDefaults?.companyName || 'Company'}" throughout. Replace all placeholders with actual context above.
 
 Generate the ${assetType}:`;
 
@@ -3260,7 +3269,9 @@ Generate a contextual initial message that feels personal and relevant to this s
   }
 
   /**
+   * @deprecated Use addTextMessage() instead to ensure consistent structured messaging
    * Add direct message - CONSOLIDATED from WorkflowService
+   * MIGRATION WARNING: This method can cause double-nesting of JSON content
    * Full message processing logic without delegation
    */
   async addDirectMessage(threadId: string, content: string): Promise<void> {
@@ -3439,7 +3450,7 @@ Role: ${userDefaults.jobTitle || 'CTO'}
 ${userDefaults.fullName ? `Name: ${userDefaults.fullName}` : ''}
 ${userDefaults.preferredTone ? `Tone: ${userDefaults.preferredTone}` : 'Tone: Technical'}
 
-🎯 CRITICAL INSTRUCTION: Use the above USER CONTEXT to replace ALL placeholders in the generated content. Do NOT leave any [Company Name], [CTO Name], [Contact Information], etc. placeholders. Use the actual company name "${userDefaults.companyName || 'the provided company'}" and other provided details throughout the content.
+CRITICAL INSTRUCTION: Use the above USER CONTEXT to replace ALL placeholders in the generated content. Do NOT leave any [Company Name], [CTO Name], [Contact Information], etc. placeholders. Use the actual company name "${userDefaults.companyName || 'the provided company'}" and other provided details throughout the content.
 
 ${enhancedPrompt}`;
     }
@@ -3464,7 +3475,7 @@ ${enhancedPrompt}`;
     }
     
     // Add specific instructions for asset type
-    enhancedPrompt += `\n\n🎯 ASSET GENERATION INSTRUCTIONS:
+    enhancedPrompt += `\n\nASSET GENERATION INSTRUCTIONS:
 - Generate a professional ${assetType} for ${userDefaults.companyName || '[Company Name]'}
 - Use the company name and industry context throughout
 - Maintain ${userDefaults.preferredTone || 'technical'} tone
@@ -3929,7 +3940,7 @@ ${enhancedPrompt}`;
         
         try {
           // Send the conversational response to the user (like original service does)
-          await this.addDirectMessage(workflow.threadId, conversationalResponse);
+          await this.addTextMessage(workflow.threadId, conversationalResponse);
           
                   logger.info('✅ ENHANCED SERVICE: CONVERSATIONAL RESPONSE SENT SUCCESSFULLY', {
           stepId: enhancedStep.id.substring(0, 8),
@@ -5073,11 +5084,11 @@ ${enhancedPrompt}`;
     const dualRAGResults = ragContext?.dualRAGResults;
     
     // Build enhanced context header with dual RAG results
-    let contextHeader = '\n\n=== 🎯 ENHANCED DUAL RAG CONTEXT ===\n';
+    let contextHeader = '\n\n=== ENHANCED DUAL RAG CONTEXT ===\n';
     
     // SECTION 1: Global Workflow Knowledge
     if (dualRAGResults?.globalWorkflowKnowledge?.length > 0) {
-      contextHeader += '\n📚 GLOBAL WORKFLOW KNOWLEDGE:\n';
+      contextHeader += '\nGLOBAL WORKFLOW KNOWLEDGE:\n';
       dualRAGResults.globalWorkflowKnowledge.slice(0, 3).forEach((result: any) => {
         const relevance = (result.relevanceScore * 100).toFixed(0);
         const fileName = result.context?.fileName || 'workflow-guide';
@@ -5088,7 +5099,7 @@ ${enhancedPrompt}`;
     
     // SECTION 2: Organization Context
     if (dualRAGResults?.organizationContext?.length > 0) {
-      contextHeader += '\n🏢 ORGANIZATION CONTEXT:\n';
+      contextHeader += '\nORGANIZATION CONTEXT:\n';
       dualRAGResults.organizationContext.slice(0, 3).forEach((result: any) => {
         const category = result.context?.contentCategory || result.source;
         const snippet = result.content.substring(0, 150).replace(/\n/g, ' ').trim();
@@ -5098,14 +5109,14 @@ ${enhancedPrompt}`;
     
     // SECTION 3: User Profile (essential only)
     if (userDefaults.companyName || userDefaults.industry || userDefaults.jobTitle) {
-      contextHeader += '\n🏢 USER PROFILE:\n';
+      contextHeader += '\nUSER PROFILE:\n';
       if (userDefaults.jobTitle) contextHeader += `Role: ${userDefaults.jobTitle}\n`;
       if (userDefaults.companyName) contextHeader += `Company: ${userDefaults.companyName}\n`;
       if (userDefaults.industry) contextHeader += `Industry: ${userDefaults.industry}\n`;
     }
     
     // SECTION 4: Context Integration Instructions  
-    contextHeader += '\n🎯 CONTEXT INTEGRATION INSTRUCTIONS:\n';
+    contextHeader += '\nCONTEXT INTEGRATION INSTRUCTIONS:\n';
     contextHeader += '• Apply global workflow knowledge for structure and best practices\n';
     contextHeader += '• Integrate organization context for brand voice and company-specific details\n';
     contextHeader += '• Maintain consistency with previous work and messaging\n';
@@ -5200,7 +5211,7 @@ ${enhancedPrompt}`;
       
       try {
         // Send the conversational response to the user (like original service does)
-        await this.addDirectMessage(threadId, conversationalResponse);
+        await this.addTextMessage(threadId, conversationalResponse);
         
         logger.info('✅ ENHANCED SERVICE: CONVERSATIONAL RESPONSE SENT SUCCESSFULLY', {
           stepId: enhancedStep.id,
@@ -5363,7 +5374,7 @@ ${enhancedPrompt}`;
   /**
    * Get workflow display name from template ID
    */
-  private getWorkflowDisplayName(templateId: string): string | null {
+  public getWorkflowDisplayName(templateId: string): string | null {
     const templateMap: Record<string, string> = {
       [TEMPLATE_UUIDS.PRESS_RELEASE]: 'Press Release',
       [TEMPLATE_UUIDS.SOCIAL_POST]: 'Social Post',
@@ -5380,7 +5391,7 @@ ${enhancedPrompt}`;
   /**
    * Get template ID for a workflow name
    */
-  private getTemplateIdForWorkflow(workflowName: string): string | null {
+  public getTemplateIdForWorkflow(workflowName: string): string | null {
     const templateMap: Record<string, string> = {
       'Press Release': TEMPLATE_UUIDS.PRESS_RELEASE,
       'Social Post': TEMPLATE_UUIDS.SOCIAL_POST,
@@ -8383,7 +8394,7 @@ ${enhancedPrompt}`;
       layer += 'Focus: Professional content creation and strategic messaging\n';
     }
     
-    layer += '\n🎯 Instructions: Apply domain expertise to provide high-quality, professional responses.\n';
+    layer += '\nInstructions: Apply domain expertise to provide high-quality, professional responses.\n';
     
     return layer;
   }
@@ -8786,6 +8797,8 @@ Response Guidelines:
       return { autoExecuted: false };
     }
   }
+
+
 }
 
 // Export singleton instance for easy use
