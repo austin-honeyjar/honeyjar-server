@@ -3,57 +3,59 @@ import { WorkflowTemplate, StepType } from '../../types/workflow';
 export const MEDIA_MATCHING_TEMPLATE: WorkflowTemplate = {
   id: "00000000-0000-0000-0000-000000000006",
   name: "Media Matching",
-  description: "Use AI to suggest relevant authors, then search for their recent articles using news pipeline data to match topic relevance",
+  description: "Generate a prioritized media contact list based on topic relevance using news pipeline data and RocketReach API",
   steps: [
     {
       type: StepType.JSON_DIALOG,
       name: "Topic Input",
       description: "Collect topic/subject matter for media matching analysis",
-      prompt: "Please provide the topic or subject matter you want to analyze for media matching. I'll use AI to suggest relevant authors who typically write about this topic, then search for their recent articles to show topic relevance and coverage.",
+      prompt: "Let's create your media list. What topic or industry should I focus on for finding relevant media contacts?",
       order: 0,
       dependencies: [],
       metadata: {
-        goal: "Collect topic input from user to determine relevant media authors and articles",
+        goal: "Collect topic input to generate targeted media contacts",
         essential: ["collectedInformation"],
         initialPromptSent: false,
-        baseInstructions: `You are a media matching assistant. This is STEP 1 of 4 in the workflow.
+        baseInstructions: `EFFICIENT MEDIA LIST TOPIC COLLECTOR
 
-GOAL:
-Collect the topic or subject matter for which the user wants to analyze media coverage and author relevance.
+CORE LOGIC:
+1. Accept any clear topic for media list generation
+2. Auto-generate keywords and context from topic
+3. Complete immediately when topic is provided
+4. Only ask for clarification if truly unclear
 
-TASK:
-1. Accept specific topics for media matching analysis
-2. Store the topic for use in AI author generation and article searches
-3. Only mark as complete when you have actionable topic input
+USER INTENT DETECTION:
+- If user provides a topic (e.g., "robotics", "AI healthcare", "fintech") → Complete immediately
+- If user says "generate", "create media list", "proceed" → Ask for topic
+- Only ask follow-up if topic is genuinely unclear
 
-EXAMPLES OF ACCEPTABLE INPUTS:
-- Specific: "artificial intelligence in healthcare", "renewable energy policy", "cryptocurrency regulation"
-- Industry: "fintech", "biotech", "climate tech"
-- General: "AI", "healthcare", "technology", "climate change"
+RESPONSE FORMAT: JSON only, no conversational text.
 
-RESPONSE FORMAT:
-You MUST respond with a valid JSON object following this structure:
-
-If the user provides a valid topic:
+When sufficient topic provided:
 {
   "isComplete": true,
   "collectedInformation": {
     "topic": "user's topic exactly as provided",
-    "topicKeywords": ["keyword1", "keyword2", "keyword3"],
-    "topicCategory": "general category (e.g. technology, healthcare, policy, etc.)",
+    "topicKeywords": ["auto-generated", "keywords", "from topic"],
+    "topicCategory": "auto-detected category",
     "searchContext": "context for AI author generation"
   },
-  "nextQuestion": "Perfect! I'll use AI to identify authors who typically write about '[topic]', then search for their recent articles. Moving to AI author generation...",
+  "autofilledInformation": ["keywords", "category", "search context"],
+  "completionPercentage": 80,
+  "nextQuestion": null,
   "suggestedNextStep": "AI Author Generation"
 }
 
-Only if the user's input is unclear or too vague:
+If topic unclear:
 {
   "isComplete": false,
   "collectedInformation": {
     "lastInput": "user's input"
   },
-  "nextQuestion": "I need a specific topic to analyze media coverage effectively. Please provide a topic like 'artificial intelligence', 'climate policy', 'fintech regulation', or any subject you want to analyze for media coverage and author expertise."
+  "autofilledInformation": [],
+  "completionPercentage": 20,
+  "nextQuestion": "What topic or industry should I focus on? (e.g., 'robotics', 'healthcare AI', 'fintech')",
+  "suggestedNextStep": null
 }`
       }
     },
@@ -68,104 +70,52 @@ Only if the user's input is unclear or too vague:
         goal: "Generate relevant authors using AI based on topic expertise",
         essential: ["collectedInformation"],
         initialPromptSent: false,
-        autoExecute: true, // Auto-execute after completion
-        baseInstructions: `Generate 20 potential journalists and 10 keywords for this topic. These will be filtered down to the top 10 based on actual article relevance.
+        autoExecute: false, // Disabled auto-execute to prevent infinite loop
+        assetType: "author_list",
+        useUniversalRAG: true,
+        baseInstructions: `Generate 10 potential journalists who write about the provided topic. This is STEP 2 of 5 in the workflow.
 
-TWO-PHASE APPROACH:
-- **PHASE 1**: Generate 20 potential authors who might write about this topic
-- **PHASE 2**: Algorithmic filtering will reduce to top 10 with actual relevant recent articles
-- **GOAL**: Cast a wider net to ensure we find authors with real recent coverage
+GOAL:
+Use AI to identify authors who typically write about the specified topic.
 
-**CRITICAL: RECENT PUBLICATION FOCUS**
-Your PRIMARY job is suggesting authors who have RECENTLY written about this SPECIFIC topic area (not just general industry). Think:
-- Who covered similar fundraising announcements in the past 6 months?
-- Which reporters specifically write about autonomous delivery/robotics (not just "tech")?
-- Who follows this exact company type, technology, or market segment?
-- What journalists have bylines on stories about related companies, funding rounds, or innovations?
+TASK:
+1. Generate 10 real journalist names who write about this topic
+2. Focus on quality over quantity
+3. Score each author's topic relevance
+4. Keep response simple and fast
 
 REQUIREMENTS:
-- 20 real journalist names (no placeholders like "John Doe")
+- 10 REAL journalist names from major publications (e.g., Reuters, TechCrunch, Wired, IEEE Spectrum, Wall Street Journal, etc.)
+- Use actual names of real journalists who cover this topic
 - Industry/trade publications prioritized for niche topics  
 - One author per publication (no duplicates)
-- Score recent topic relevance 1-10 for each author based on likelihood they've written about THIS specific topic recently
-- 2-3 sentence reasoning explaining why contact each author AND what specific recent articles they likely wrote
-- 10 relevant keywords
+- Score recent topic relevance 1-10 for each author
+- Simple JSON structure for fast processing
 
-**ENHANCED AUTHOR SELECTION STRATEGY**:
-**STEP 1: Topic-Specific Beat Reporters**
-- Start with journalists who specifically cover the exact topic area (e.g., autonomous delivery, not just "transportation")
-- Look for reporters who regularly write about funding rounds in this specific industry
-- Include beat reporters from trade publications who focus on this niche
+IMPORTANT: Generate REAL names of actual journalists, not fake placeholder names like "Tech Journalist 1" or "Science Writer 3". Use names like "Kristen Korosec", "Brian Heater", "John Markoff", etc.
 
-**STEP 2: Company/Competitor Coverage**
-- Find authors who've written about similar companies, competitors, or industry players
-- Include journalists who covered related funding announcements or product launches
-- Look for reporters who follow specific investors, accelerators, or VCs in this space
+RESPONSE FORMAT:
+You MUST respond with a valid JSON object following this SIMPLIFIED structure:
 
-**STEP 3: Strategic Adjacent Coverage**
-- Include emerging voices and specialized beat reporters with relevant recent coverage
-- Consider authors who cover adjacent topics that frequently intersect (e.g., AI + logistics, robotics + urban planning)
-- Focus on authors likely to have written SOMETHING directly related in past 3-6 months
-
-**STEP 4: Publication Strategy**
-- Mix obvious tier-1 choices with niche specialists who have recent relevant coverage
-- Include less obvious but highly relevant specialists from trade publications
-- Prioritize active coverage over publication size for niche topics
-
-**PUBLICATION PRIORITIZATION**:
-**For Tech/Business Topics**: 
-- **First Priority**: Authors with recent coverage of similar companies, funding, or technology
-- **Trade Publications**: TechCrunch (funding), The Information (inside tech), Forbes (business), Axios (tech policy)
-- **Industry Specialist**: VentureBeat (funding), IEEE Spectrum (robotics), Supply Chain Dive (logistics)
-- **Major Outlets**: Only if they have reporters who specifically cover this beat
-
-**For Niche Topics**: 
-- **Prioritize trade/industry publications** with recent relevant coverage over general news
-- **Focus**: Authors actively covering this topic area with recent relevant content
-- **Include**: Specialized publications that readers in this industry actually follow
-
-🚨 **CRITICAL INSTRUCTIONS**:
-- Use REAL journalist names like "Kirsten Korosec" (TechCrunch autonomous vehicles), "Alex Davies" (Wired transportation tech), "Will Knight" (Wired AI)
-- NO placeholder names like "John Doe", "Jane Smith", "Author Name"
-- Always return "isComplete": true to auto-proceed
-- Include actual author names in nextQuestion response
-- For "reasoning" field: Specifically mention what recent articles they likely wrote about this topic
-
-JSON RESPONSE:
 {
   "isComplete": true,
   "collectedInformation": {
     "topic": "the topic",
-    "totalSuggestions": 20,
+    "totalSuggestions": 10,
     "suggestedAuthors": [
       {
-        "id": "author-1",
         "name": "Real Author Name",
-        "alternativeNames": ["Alt Name"],
-        "organization": "Publication Name", 
-        "expertise": "specific expertise area",
-        "reasoning": "2-3 sentence explanation of relevance and what recent articles they likely wrote on this topic",
-        "publicationType": "major_news|trade_publication|independent",
-        "searchPriority": "high|medium|low",
-        "recentTopicRelevance": 8,
-        "analysisInsight": "2-3 sentence why contact explanation based on their likely recent article coverage of this specific topic"
+        "organization": "Publication Name",
+        "expertise": "specific area",
+        "relevanceScore": 8
       }
-    ],
-    "targetedKeywords": [
-      {
-        "keyword": "relevant keyword",
-        "category": "industry_term|company_name|technical_term", 
-        "priority": "high|medium|low"
-      }
-    ],
-    "generationStrategy": "Two-phase: 20 potential authors, algorithmic filtering to top 10",
-    "searchReadiness": true
+    ]
   },
-  "nextQuestion": "**AI Author Generation Complete!**\n\nI've identified 20 potential authors who might write about '[topic]'. These will be searched for actual recent articles and algorithmically filtered to the top 10 with real coverage:\n\n**Potential Authors for Article Search:**\n1. **[Author 1 Name]** ([Organization]) - Likelihood: [X/10]\n2. **[Author 2 Name]** ([Organization]) - Likelihood: [X/10]\n[...list all 20 with actual names from suggestedAuthors]\n\n**Keywords:** [list 10 keywords]\n\n**Proceeding automatically to search for their actual recent articles...**",
+  "nextQuestion": "Perfect! I've generated 10 potential journalists who write about this topic. Now I'll search for their recent articles.",
   "suggestedNextStep": "Metabase Article Search"
 }`
-      }
-    },
+    }
+  },
     {
       type: StepType.API_CALL,
       name: "Metabase Article Search",
@@ -176,6 +126,10 @@ JSON RESPONSE:
       metadata: {
         autoExecute: true, // Auto-execute after AI Author Generation completes
         apiEndpoint: "metabase_author_search",
+        securityLevel: "confidential", // Mark as confidential - exclude from conversation history and RAG
+        excludeFromHistory: true, // Exclude from conversation history
+        excludeFromRAG: true, // Exclude from RAG context pulls
+        securityTags: ["database_search", "article_data", "sensitive_content"],
         serviceCall: {
           service: "metabase",
           method: "searchArticlesByAuthors",
@@ -232,10 +186,19 @@ JSON RESPONSE:
       dependencies: ["Article Analysis & Ranking"],
       metadata: {
         autoExecute: true,
+        assetType: "media_contacts_list",
+        useUniversalRAG: true,
         serviceCall: {
           service: "rocketreach",
           method: "enrichContacts",
           extractAuthorsFrom: "Article Analysis & Ranking.collectedInformation.top10Authors"
+        },
+        templates: {
+          contactEnrichment: `Generate a comprehensive media contacts list using RocketReach API enrichment.
+
+STRUCTURE: For each author, include complete contact information, relevance analysis, and recent article context.
+
+CRITICAL: Maintain ranking order and provide actionable contact insights.`
         },
         apiInstructions: `You are a contact enrichment specialist. This is STEP 5 of 5 in the workflow.
 

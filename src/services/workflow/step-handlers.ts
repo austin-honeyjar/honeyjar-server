@@ -253,7 +253,9 @@ export class StepHandlers {
       }
 
       // For regular JSON dialog steps, enhance with RAG context
-      const enhancedPrompt = this.buildEnhancedPrompt(step, userInput, ragContext);
+      // Get previous step responses for context
+      const previousResponses = await WorkflowUtilities.gatherPreviousStepsContext(workflow);
+      const enhancedPrompt = this.buildEnhancedPrompt(step, userInput, ragContext, previousResponses ? [previousResponses] : []);
       
       // Use the enhanced OpenAI service for context-aware responses
       const aiResult = await this.openAIService.generateStepResponse(
@@ -337,6 +339,9 @@ export class StepHandlers {
               break;
             } else if (message.includes('Media Pitch')) {
               targetWorkflow = 'Media Pitch';
+              break;
+            } else if (message.includes('Media Matching')) {
+              targetWorkflow = 'Media Matching';
               break;
             } else if (message.includes('FAQ')) {
               targetWorkflow = 'FAQ';
@@ -622,6 +627,94 @@ export class StepHandlers {
       }
     }
 
+    if (step.name === "AI Author Generation") {
+      // Handle Media Matching AI Author Generation auto-execution
+      logger.info('🎯 Auto-executing AI Author Generation step');
+      
+      // Get the topic from previous step context
+      const previousStepsContext = await WorkflowUtilities.gatherPreviousStepsContext(workflow);
+      const topic = previousStepsContext.collectedInformation?.topic || ragContext?.topic || "robotics delivery companies";
+      
+      // Build enhanced prompt for AI author generation
+      const enhancedPrompt = step.metadata?.baseInstructions || step.prompt || "";
+      const finalPrompt = enhancedPrompt.replace(/\{topic\}/g, topic);
+      
+      // Generate AI response for author suggestions
+      try {
+        const aiResult = await this.openAIService.generateStepResponse(
+          step,
+          finalPrompt + `\n\nTopic: ${topic}`,
+          []
+        );
+
+        // Process the AI response
+        return await this.processAIResponse(step, workflow, aiResult.responseText, "auto-execute");
+      } catch (error) {
+        logger.error('❌ Failed to auto-execute AI Author Generation', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stepId: step.id.substring(0, 8)
+        });
+        
+        return {
+          response: "I encountered an issue generating author suggestions. Let me continue with the media matching process.",
+          isComplete: true
+        };
+      }
+    }
+
+    // DISABLED: Old simulated Metabase handler - now using real implementation in media-matching-handlers.ts
+    if (false && step.name === "Metabase Article Search") {
+      // Handle Metabase Article Search auto-execution with security
+      logger.info('🔒 Auto-executing Metabase Article Search step (SECURED)', {
+        stepId: step.id.substring(0, 8),
+        securityLevel: step.metadata?.securityLevel,
+        excludeFromHistory: step.metadata?.excludeFromHistory
+      });
+      
+      // Get the authors from previous step context
+      const previousStepsContext = await WorkflowUtilities.gatherPreviousStepsContext(workflow);
+      const authors = previousStepsContext.collectedInformation?.suggestedAuthors || [];
+      
+      // Simulate database search (in real implementation, this would call the actual Metabase API)
+      try {
+        // This is where the actual Metabase API call would happen
+        // For now, simulate a successful search result
+        const searchResults = {
+          searchCompleted: true,
+          authorsSearched: authors.length,
+          articlesFound: Math.floor(Math.random() * 50) + 20, // Simulate 20-70 articles found
+          timespan: "past 6 months",
+          database: "metabase_articles"
+        };
+
+        const responseMessage = `🔍 Database search completed. Found ${searchResults.articlesFound} recent articles from ${searchResults.authorsSearched} authors. Moving to analysis phase...`;
+
+        // Use the enhanced workflow service to save with security metadata
+        const enhancedService = new EnhancedWorkflowService();
+        await enhancedService.addSecureStepMessage(workflow.threadId, responseMessage, step);
+
+        return {
+          response: responseMessage,
+          isComplete: true,
+          collectedInformation: {
+            searchResults: searchResults,
+            authors: authors,
+            securityLevel: "confidential" // Mark results as confidential
+          }
+        };
+      } catch (error: any) {
+        logger.error('❌ Failed to auto-execute Metabase Article Search', {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stepId: step.id.substring(0, 8)
+        });
+        
+        return {
+          response: "Database search encountered an issue. Continuing with analysis using available data.",
+          isComplete: true
+        };
+      }
+    }
+
     // Default auto-execute behavior
     return {
       response: "Step completed automatically.",
@@ -633,14 +726,31 @@ export class StepHandlers {
    * Build enhanced prompt with RAG context
    */
   public buildEnhancedPrompt(step: WorkflowStep, userInput: string, ragContext: any, previousResponses?: any[]): string {
-    let prompt = step.prompt || "";
+    // Start with base instructions which contain the critical JSON format requirements
+    let prompt = step.metadata?.baseInstructions || step.prompt || "";
+    
+    // If we have both baseInstructions and prompt, combine them properly
+    if (step.metadata?.baseInstructions && step.prompt && step.metadata.baseInstructions !== step.prompt) {
+      prompt = step.metadata.baseInstructions + `\n\nADDITIONAL CONTEXT:\n${step.prompt}`;
+    }
     
     // Inject user context
     if (ragContext?.userDefaults?.companyName) {
-      prompt += `\n\nCONTEXT: User works at ${ragContext.userDefaults.companyName}`;
+      prompt += `\n\nUSER CONTEXT: User works at ${ragContext.userDefaults.companyName}`;
       
       if (ragContext.userDefaults.industry) {
         prompt += ` in the ${ragContext.userDefaults.industry} industry`;
+      }
+    }
+    
+    // Add previous step context for Media Matching workflows
+    if (step.name === "AI Author Generation" && previousResponses) {
+      const topicInfo = previousResponses.find(r => r.collectedInformation?.topic);
+      if (topicInfo?.collectedInformation?.topic) {
+        prompt += `\n\nTOPIC FROM PREVIOUS STEP: ${topicInfo.collectedInformation.topic}`;
+        if (topicInfo.collectedInformation.topicKeywords) {
+          prompt += `\nKEYWORDS: ${topicInfo.collectedInformation.topicKeywords.join(', ')}`;
+        }
       }
     }
     
@@ -862,6 +972,190 @@ If they're asking a general question, respond with JSON: {"conversationalRespons
         }
       }
       
+      // Handle Media Matching "Topic Input" step completion
+      if (step.name === "Topic Input" && parsed.isComplete === true && parsed.collectedInformation?.topic) {
+        logger.info('🎯 STREAMING: Topic Input completed, advancing to AI Author Generation', {
+          stepId: step.id.substring(0, 8),
+          topic: parsed.collectedInformation.topic,
+          keywords: parsed.collectedInformation.topicKeywords?.length || 0
+        });
+
+        // Auto-advance to AI Author Generation step
+        try {
+          const dbService = new WorkflowDBService();
+          
+          // Mark current step as complete
+          await dbService.updateStep(step.id, {
+            status: 'complete' as any
+          });
+
+          // Find and activate the AI Author Generation step
+          const nextStep = workflow.steps?.find(s => s.name === "AI Author Generation");
+          if (nextStep) {
+            await dbService.updateStep(nextStep.id, {
+              status: 'in_progress' as any
+            });
+            await dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+
+            logger.info('✅ STREAMING: Advanced to AI Author Generation step', {
+              stepId: nextStep.id.substring(0, 8),
+              fromStepId: step.id.substring(0, 8),
+              autoExecute: nextStep.metadata?.autoExecute
+            });
+
+            // Auto-execute the AI Author Generation step
+            if (nextStep.metadata?.autoExecute) {
+              try {
+                const enhancedService = new EnhancedWorkflowService();
+                
+                // Auto-execute the next step
+                const autoExecResult = await enhancedService.checkAndHandleAutoExecution(
+                  nextStep.id,
+                  workflow.id,
+                  workflow.threadId,
+                  '', // userId
+                  ''  // orgId
+                );
+
+                if (autoExecResult.autoExecuted) {
+                  logger.info('✅ STREAMING: AI Author Generation auto-executed successfully', {
+                    stepId: nextStep.id.substring(0, 8)
+                  });
+                } else {
+                  logger.warn('⚠️ STREAMING: AI Author Generation auto-execution failed', {
+                    stepId: nextStep.id.substring(0, 8)
+                  });
+                }
+              } catch (autoExecError) {
+                logger.error('❌ STREAMING: Failed to auto-execute AI Author Generation', {
+                  error: autoExecError instanceof Error ? autoExecError.message : 'Unknown error',
+                  stepId: nextStep.id.substring(0, 8)
+                });
+              }
+            }
+          }
+        } catch (error) {
+          logger.error('❌ STREAMING: Failed to advance to AI Author Generation', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            stepId: step.id.substring(0, 8)
+          });
+        }
+
+        return {
+          response: parsed.nextQuestion || "Perfect! I've collected your topic. Now I'll use AI to identify relevant authors and search for their recent articles.",
+          isComplete: true,
+          nextStep: parsed.nextStep
+        };
+      }
+
+      // Handle Metabase Article Search step completion (SECURED)
+      if (step.name === "Metabase Article Search" && parsed.isComplete === true) {
+        logger.info('🔒 STREAMING: Metabase Article Search completed (SECURED), advancing to Article Analysis', {
+          stepId: step.id.substring(0, 8),
+          searchResults: parsed.collectedInformation?.searchResults?.articlesFound || 'unknown',
+          securityLevel: 'confidential'
+        });
+
+        // Auto-advance to Article Analysis & Ranking step
+        try {
+          const dbService = new WorkflowDBService();
+          
+          // Mark current step as complete
+          await dbService.updateStep(step.id, {
+            status: 'complete' as any
+          });
+
+          // Find and activate the Article Analysis & Ranking step
+          const nextStep = workflow.steps?.find(s => s.name === "Article Analysis & Ranking");
+          if (nextStep) {
+            await dbService.updateStep(nextStep.id, {
+              status: 'in_progress' as any
+            });
+            await dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+
+            logger.info('✅ STREAMING: Advanced to Article Analysis & Ranking step', {
+              stepId: nextStep.id.substring(0, 8),
+              fromStepId: step.id.substring(0, 8)
+            });
+          }
+        } catch (error) {
+          logger.error('❌ STREAMING: Failed to advance to Article Analysis & Ranking', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            stepId: step.id.substring(0, 8)
+          });
+        }
+
+        return {
+          response: parsed.response || "Database search completed. Proceeding to analyze and rank the articles for relevance.",
+          isComplete: true,
+          nextStep: parsed.nextStep
+        };
+      }
+
+      // Handle AI Author Generation step completion  
+      if (step.name === "AI Author Generation" && parsed.isComplete === true && parsed.collectedInformation?.suggestedAuthors) {
+        logger.info('🎯 STREAMING: AI Author Generation completed, advancing to Database Search', {
+          stepId: step.id.substring(0, 8),
+          authorCount: parsed.collectedInformation.suggestedAuthors?.length || 0,
+          keywords: parsed.collectedInformation.keywords?.length || 0
+        });
+
+        // Auto-advance to Database Search step
+        try {
+          const dbService = new WorkflowDBService();
+          
+          // Mark current step as complete and store the collected information
+          await dbService.updateStep(step.id, {
+            status: 'complete' as any,
+            metadata: {
+              ...step.metadata,
+              collectedInformation: parsed.collectedInformation,
+              completedAt: new Date().toISOString()
+            }
+          });
+
+          // Find and activate the Database Search step
+          const nextStep = workflow.steps?.find(s => s.name === "Database Search");
+          if (nextStep) {
+            await dbService.updateStep(nextStep.id, {
+              status: 'in_progress' as any
+            });
+            await dbService.updateWorkflowCurrentStep(workflow.id, nextStep.id);
+
+            logger.info('✅ STREAMING: Advanced to Database Search step', {
+              stepId: nextStep.id.substring(0, 8),
+              fromStepId: step.id.substring(0, 8)
+            });
+          }
+        } catch (error) {
+          logger.error('❌ STREAMING: Failed to advance to Database Search', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            stepId: step.id.substring(0, 8)
+          });
+        }
+
+        // Format the author list for display
+        const authors = parsed.collectedInformation.suggestedAuthors || [];
+        const authorListText = authors.length > 0 
+          ? authors.map((author: any, index: number) => 
+              `${index + 1}. **${author.name}** (${author.organization}) - Score: ${author.relevanceScore}/10`
+            ).join('\n')
+          : "No authors generated";
+
+        const displayMessage = `Perfect! I've generated ${authors.length} potential journalists who write about this topic:
+
+**Generated Authors:**
+${authorListText}
+
+Now I'll search for their recent articles.`;
+
+        return {
+          response: displayMessage,
+          isComplete: true,
+          nextStep: parsed.nextStep
+        };
+      }
+
       // Handle Information Collection step completion
       if (step.name === "Information Collection" && parsed.isComplete === true && parsed.suggestedNextStep === "Asset Generation") {
         logger.info('🎯 STREAMING: Information Collection completed, advancing to Asset Generation', {

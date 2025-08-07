@@ -619,10 +619,55 @@ export class ChatService {
         } else if (chunk.type === 'done') {
           // Save the final accumulated response with proper structured messaging
           if (chunk.data.finalResponse) {
-            // Check if this looks like an Asset Generation response that should use structured messaging
-            const assetType = this.detectAssetType(chunk.data.finalResponse);
+            // CRITICAL FIX: Check if this is already a structured message with asset decorator
+            let hasAssetDecorator = false;
+            if (chunk.data.structuredMessage) {
+              try {
+                const structured = typeof chunk.data.structuredMessage === 'string' 
+                  ? JSON.parse(chunk.data.structuredMessage) 
+                  : chunk.data.structuredMessage;
+                hasAssetDecorator = structured.decorators?.some((d: any) => d.type === 'asset');
+              } catch (e) {
+                // Ignore parse errors
+              }
+            }
             
-            if (assetType) {
+            // Only treat messages as assets if they're explicitly from Asset Generation steps OR already have asset decorators
+            const isExplicitAssetStep = hasAssetDecorator ||
+                                       chunk.data.stepName?.includes('Asset Generation') || 
+                                       chunk.data.stepName?.includes('Asset Creation') ||
+                                       chunk.data.finalResponse.includes('Here\'s your generated') ||
+                                       chunk.data.finalResponse.includes('Here\'s your revised');
+            
+            // Never treat these as assets regardless of length
+            const isNonAssetContent = chunk.data.finalResponse.includes('📰 Article Search Results') ||
+                                    chunk.data.finalResponse.includes('Found articles from') ||
+                                    chunk.data.finalResponse.includes('Generated Authors:') ||
+                                    chunk.data.finalResponse.includes('Article Analysis Complete') ||
+                                    chunk.data.finalResponse.includes('Metabase');
+            
+            // Debug logging for asset detection and chunk structure
+            logger.info('🔍 CHAT SERVICE: Full chunk data structure', {
+              chunkType: chunk.type,
+              chunkDataKeys: Object.keys(chunk.data || {}),
+              hasStepName: !!chunk.data.stepName,
+              hasFinalResponse: !!chunk.data.finalResponse,
+              hasStructuredMessage: !!chunk.data.structuredMessage,
+              hasMetadata: !!chunk.data.metadata,
+              chunkDataPreview: chunk.data
+            });
+            
+            logger.info('🔍 CHAT SERVICE: Asset detection analysis', {
+              hasAssetDecorator: hasAssetDecorator,
+              isExplicitAssetStep: isExplicitAssetStep,
+              isNonAssetContent: isNonAssetContent,
+              stepName: chunk.data.stepName,
+              responseLength: chunk.data.finalResponse.length,
+              responsePreview: chunk.data.finalResponse.substring(0, 100) + '...',
+              willCreateAsset: !!(isExplicitAssetStep && !isNonAssetContent)
+            });
+            
+            if (isExplicitAssetStep && !isNonAssetContent) {
               // Check if a similar asset message already exists to prevent duplicates
               const recentMessages = await db.query.chatMessages.findMany({
                 where: eq(chatMessages.threadId, threadId),
@@ -656,13 +701,16 @@ export class ChatService {
                 
                 // Only add structured asset message if we have a valid step ID
                 if (currentStepId) {
+                  // Determine asset type from step name or content
+                  const assetType = this.determineAssetTypeFromStep(chunk.data.stepName, chunk.data.finalResponse);
+                  
                   // Call Enhanced Workflow Service to add asset message
                   await this.workflowService.addAssetMessage(
                     threadId,
                     chunk.data.finalResponse,
                     assetType,
                     currentStepId,
-                    'Asset Generation'
+                    chunk.data.stepName || 'Asset Generation'
                   );
                   
                   logger.info('💾 Enhanced streaming: Asset message saved with structured content', {
@@ -680,13 +728,41 @@ export class ChatService {
               }
               
             } else {
-              // Use unified structured messaging for consistency
-              await this.workflowService.addTextMessage(threadId, chunk.data.finalResponse);
-              
-              logger.info('💾 Enhanced streaming: Final AI message saved with unified structured messaging', {
-                responseLength: chunk.data.finalResponse.length,
-                messageType: 'unified_structured_text'
-              });
+              // Check if chunk already contains a structured message (e.g., contact list)
+              if (chunk.data.structuredMessage) {
+                try {
+                  const structuredContent = typeof chunk.data.structuredMessage === 'string' 
+                    ? chunk.data.structuredMessage 
+                    : JSON.stringify(chunk.data.structuredMessage);
+                  
+                  await this.workflowService.addDirectMessage(threadId, structuredContent);
+                  
+                  logger.info('💾 Enhanced streaming: Structured message saved directly', {
+                    responseLength: chunk.data.finalResponse.length,
+                    messageType: 'pre_structured',
+                    hasDecorators: !!(chunk.data.structuredMessage?.decorators?.length),
+                    decoratorTypes: chunk.data.structuredMessage?.decorators?.map((d: any) => d.type) || []
+                  });
+                } catch (e) {
+                  // Fallback to regular text message if structured message parsing fails
+                  await this.workflowService.addTextMessage(threadId, chunk.data.finalResponse);
+                  
+                  logger.warn('💾 Enhanced streaming: Structured message failed, saved as text', {
+                    responseLength: chunk.data.finalResponse.length,
+                    error: e instanceof Error ? e.message : 'Unknown error'
+                  });
+                }
+              } else {
+                // Use unified structured messaging for consistency
+                await this.workflowService.addTextMessage(threadId, chunk.data.finalResponse);
+                
+                logger.info('💾 Enhanced streaming: Final AI message saved with unified structured messaging', {
+                  responseLength: chunk.data.finalResponse.length,
+                  messageType: 'unified_structured_text',
+                  isNonAssetContent: isNonAssetContent,
+                  skippedAssetCreation: isExplicitAssetStep
+                });
+              }
             }
           }
           
@@ -876,7 +952,7 @@ export class ChatService {
     
     // Map template IDs to display names
     const templateIdMap: Record<string, string> = {
-
+      '00000000-0000-0000-0000-000000000006': 'Media Matching',
       '00000000-0000-0000-0000-000000000008': 'Press Release',
       '00000000-0000-0000-0000-000000000010': 'Social Post',
       '00000000-0000-0000-0000-000000000011': 'Blog Article',
@@ -900,6 +976,25 @@ export class ChatService {
       if (match) return match[1].trim();
     }
     return null;
+  }
+
+  /**
+   * Determine asset type from step name and content (explicit only)
+   */
+  private determineAssetTypeFromStep(stepName?: string, content?: string): string {
+    if (!stepName && !content) return 'press_release';
+    
+    const combined = `${stepName || ''} ${content || ''}`.toLowerCase();
+    
+    if (combined.includes('press release')) return 'press_release';
+    if (combined.includes('media pitch')) return 'media_pitch';
+    if (combined.includes('social post')) return 'social_post';
+    if (combined.includes('blog post') || combined.includes('blog article')) return 'blog_post';
+    if (combined.includes('faq')) return 'faq';
+    if (combined.includes('contact list') || combined.includes('media list')) return 'contact_list';
+    
+    // Default fallback
+    return 'press_release';
   }
 
   /**

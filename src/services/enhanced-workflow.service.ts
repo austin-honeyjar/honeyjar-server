@@ -34,12 +34,14 @@ import { JSON_DIALOG_PR_WORKFLOW_TEMPLATE } from "../templates/workflows/json-di
 import { TEST_STEP_TRANSITIONS_TEMPLATE } from "../templates/workflows/test-step-transitions";
 
 import { MEDIA_LIST_TEMPLATE } from "../templates/workflows/media-list";
+import { MEDIA_MATCHING_TEMPLATE } from "../templates/workflows/media-matching";
 import { PRESS_RELEASE_TEMPLATE } from "../templates/workflows/press-release";
 import { MEDIA_PITCH_TEMPLATE } from "../templates/workflows/media-pitch";
 import { SOCIAL_POST_TEMPLATE } from "../templates/workflows/social-post";
 import { BLOG_ARTICLE_TEMPLATE } from "../templates/workflows/blog-article";
 import { FAQ_TEMPLATE } from "../templates/workflows/faq";
-import { MEDIA_MATCHING_TEMPLATE } from '../templates/workflows/media-matching';
+import { MediaMatchingHandlers } from './workflow/media-matching-handlers';
+import { MediaListHandlers } from './workflow/media-list-handlers';
 
 // Database imports (moved from WorkflowService for consolidation)
 
@@ -94,12 +96,10 @@ export interface EnhancedWorkflowResult {
  * ✅ Social Post: json_dialog + api_call (Information Collection + Asset Generation)
  * ✅ FAQ: json_dialog + api_call (Information Collection + Asset Generation) [PHASE 1 NEW]
  * ✅ Media Pitch: json_dialog + api_call (Information Collection + Asset Generation) [PHASE 1 NEW]
+ * ✅ Media Matching: Multi-step API_CALL workflow with auto-execution chains [PHASE 2 NEW]
  * 
  * SECURITY BLOCKS (Correct Behavior):
  * ❌ Media List Generator: Contains PII/contact info - delegates to Original Service
- * ❌ Media Matching: Contains email addresses - delegates to Original Service  
- * ❌ Metabase Steps: Contains sensitive articles - delegates to Original Service
- * ❌ Contact Enrichment: Blocked in openai.service.ts
  * 
  * NEXT PHASES:
  * 🔄 Phase 2: Security hardening & explicit workflow routing
@@ -142,6 +142,8 @@ export class EnhancedWorkflowService {
   
   // New modular handlers
   private stepHandlers: StepHandlers;
+  private mediaMatchingHandlers: MediaMatchingHandlers;
+  private mediaListHandlers: MediaListHandlers;
 
   constructor() {
     // Original service fully migrated ✅
@@ -163,6 +165,8 @@ export class EnhancedWorkflowService {
     
     // Initialize modular handlers
     this.stepHandlers = new StepHandlers();
+    this.mediaMatchingHandlers = new MediaMatchingHandlers();
+    this.mediaListHandlers = new MediaListHandlers();
 
     // Step 2: Enhanced service validation and coordination
     this.validateServiceIntegration();
@@ -1276,17 +1280,45 @@ Just let me know what you'd like to create!`
               logger.info('🔄 Step completion detected in streaming', {
                 currentStep: workflowData.step.name,
                 workflowId: workflowData.workflow.id.substring(0, 8),
-                isComplete: stepData.isComplete
+                isComplete: stepData.isComplete,
+                hasCollectedInfo: !!(stepData as any).collectedInformation
               });
 
-              // Mark current step as complete
+              // Parse the full response to extract collectedInformation
+              let collectedInformation = null;
+              if (fullResponse) {
+                try {
+                  let cleanedResponse = fullResponse.trim();
+                  if (cleanedResponse.startsWith('```json')) {
+                    cleanedResponse = cleanedResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+                  } else if (cleanedResponse.startsWith('```')) {
+                    cleanedResponse = cleanedResponse.replace(/^```\s*/, '').replace(/\s*```$/, '');
+                  }
+                  const parsed = JSON.parse(cleanedResponse);
+                  collectedInformation = parsed.collectedInformation;
+                  
+                  logger.info('✅ Extracted collectedInformation from JSON response', {
+                    stepName: workflowData.step.name,
+                    hasCollectedInfo: !!collectedInformation,
+                    collectedKeys: collectedInformation ? Object.keys(collectedInformation) : []
+                  });
+                } catch (parseError) {
+                  logger.warn('⚠️ Could not parse JSON response for collectedInformation', {
+                    stepName: workflowData.step.name,
+                    error: parseError instanceof Error ? parseError.message : 'Unknown error'
+                  });
+                }
+              }
+
+              // Mark current step as complete with collectedInformation
               await this.dbService.updateStep(workflowData.step.id, {
                 status: StepStatus.COMPLETE,
                 userInput: userInput,
                 metadata: {
                   ...workflowData.step.metadata,
                   isStepComplete: true,
-                  completedAt: new Date().toISOString()
+                  completedAt: new Date().toISOString(),
+                  ...(collectedInformation && { collectedInformation })
                 }
               });
 
@@ -1392,6 +1424,161 @@ Just let me know what you'd like to create!`
         }
         
       } else {
+        // Check if this is an auto-execute API_CALL step before streaming
+        if (workflowData.step.stepType === StepType.API_CALL && workflowData.step.metadata?.autoExecute) {
+          logger.info('🚀 Auto-executing API_CALL step in streaming path', {
+            stepName: workflowData.step.name,
+            stepType: workflowData.step.stepType,
+            autoExecute: workflowData.step.metadata.autoExecute
+          });
+          
+          // Execute the API call directly instead of streaming
+          const autoExecResult = await this.handleApiCallStep(workflowData.step, workflowData.workflow, "auto-execute", userId, orgId);
+          
+          logger.info('🎯 API_CALL result - sending to user', {
+            stepName: workflowData.step.name,
+            hasResponse: !!autoExecResult.response,
+            responseLength: autoExecResult.response?.length || 0,
+            responseType: typeof autoExecResult.response,
+            responsePreview: autoExecResult.response?.substring(0, 100) + '...' || 'No response'
+          });
+          
+          // Special handling for Metabase Article Search to ensure response is displayed
+          if (workflowData.step.name === "Metabase Article Search") {
+            logger.info('🔍 METABASE RESPONSE: Ensuring display to user', {
+              stepName: workflowData.step.name,
+              responseLength: autoExecResult.response?.length || 0,
+              responsePreview: autoExecResult.response?.substring(0, 100) + '...'
+            });
+          }
+          
+          yield {
+            type: 'content',
+            data: {
+              content: autoExecResult.response || 'API call completed successfully.',
+            }
+          };
+          
+          yield {
+            type: 'done',
+            data: {
+              finalResponse: autoExecResult.response || 'API call completed successfully.',
+              fullResponse: autoExecResult.response || 'API call completed successfully.',
+              isComplete: true,
+              nextStep: autoExecResult.nextStep
+            }
+          };
+          
+          // Check if we should auto-advance to the next step
+          if (autoExecResult.isComplete && autoExecResult.nextStep) {
+            const nextStep = autoExecResult.nextStep;
+            
+            logger.info('🔍 Checking next step for auto-execution', {
+              hasNextStep: !!nextStep,
+              nextStepName: nextStep?.name,
+              nextStepType: nextStep?.stepType,
+              nextStepAutoExecute: nextStep?.metadata?.autoExecute,
+              currentStep: workflowData.step.name
+            });
+            
+            // If next step is also an API_CALL with autoExecute, trigger it immediately
+            // Check for both enum (StepType.API_CALL) and string ('api_call') values
+            const isApiCall = nextStep.stepType === 'api_call' || nextStep.stepType === StepType.API_CALL;
+            if (isApiCall && nextStep.metadata?.autoExecute) {
+              logger.info('🔄 Auto-advancing to next API_CALL step', {
+                fromStep: workflowData.step.name,
+                toStep: nextStep.name,
+                stepType: nextStep.stepType
+              });
+              
+              // Update workflow to point to next step
+              await this.updateWorkflowCurrentStep(workflowData.workflow.id, nextStep.id);
+              
+              // Mark next step as in progress
+              await this.dbService.updateStep(nextStep.id, {
+                status: StepStatus.IN_PROGRESS
+              });
+              
+              // Execute the next step immediately
+              try {
+                const nextStepResult = await this.handleApiCallStep(nextStep, workflowData.workflow, "auto-execute", userId, orgId);
+                
+                // Send the next step's response
+                if (nextStepResult.response) {
+                  yield {
+                    type: 'content',
+                    data: {
+                      content: nextStepResult.response,
+                    }
+                  };
+                }
+                
+                // If the next step also completed and has another autoExecute step, continue the chain
+                const nextNextStepIsApiCall = nextStepResult.nextStep?.stepType === 'api_call' || nextStepResult.nextStep?.stepType === StepType.API_CALL;
+                if (nextStepResult.isComplete && nextStepResult.nextStep && 
+                    nextNextStepIsApiCall && 
+                    nextStepResult.nextStep.metadata?.autoExecute) {
+                  
+                  logger.info('🔄 Continuing auto-execution chain', {
+                    fromStep: nextStep.name,
+                    toStep: nextStepResult.nextStep.name
+                  });
+                  
+                  // Update workflow to next step
+                  await this.updateWorkflowCurrentStep(workflowData.workflow.id, nextStepResult.nextStep.id);
+                  
+                  // Mark next step as in progress  
+                  await this.dbService.updateStep(nextStepResult.nextStep.id, {
+                    status: StepStatus.IN_PROGRESS
+                  });
+                  
+                  // Execute the third step
+                  try {
+                    const thirdStepResult = await this.handleApiCallStep(nextStepResult.nextStep, workflowData.workflow, "auto-execute", userId, orgId);
+                    
+                    if (thirdStepResult.response) {
+                      yield {
+                        type: 'content',
+                        data: {
+                          content: thirdStepResult.response,
+                        }
+                      };
+                    }
+                    
+                    // Mark workflow as complete if this was the final step
+                    if (thirdStepResult.isComplete && !thirdStepResult.nextStep) {
+                      await this.updateWorkflowStatus(workflowData.workflow.id, WorkflowStatus.COMPLETED);
+                      
+                      yield {
+                        type: 'done',
+                        data: {
+                          finalResponse: thirdStepResult.response || 'Workflow completed successfully.',
+                          isComplete: true,
+                          workflowComplete: true
+                        }
+                      };
+                    }
+                    
+                  } catch (thirdStepError) {
+                    logger.error('❌ Failed to auto-execute third API_CALL step', {
+                      error: thirdStepError instanceof Error ? thirdStepError.message : 'Unknown error',
+                      stepName: nextStepResult.nextStep.name
+                    });
+                  }
+                }
+                
+              } catch (nextStepError) {
+                logger.error('❌ Failed to auto-execute next API_CALL step', {
+                  error: nextStepError instanceof Error ? nextStepError.message : 'Unknown error',
+                  nextStepName: nextStep.name
+                });
+              }
+            }
+          }
+          
+          return; // Exit early to avoid streaming
+        }
+        
         // For non-JSON dialog steps, use original streaming
         const openaiService = new OpenAIService();
         
@@ -1479,6 +1666,71 @@ Just let me know what you'd like to create!`
   }
 
   /**
+   * Add a step response with security metadata
+   * This ensures secure steps are properly marked for exclusion from history/RAG
+   */
+  async addSecureStepMessage(
+    threadId: string, 
+    content: string, 
+    step: WorkflowStep
+  ): Promise<void> {
+    try {
+      // Check if this step should be excluded from history
+      const excludeFromHistory = step.metadata?.excludeFromHistory === true ||
+                                step.metadata?.securityLevel === 'confidential' ||
+                                step.name === 'Metabase Article Search';
+
+      if (excludeFromHistory) {
+        logger.info('🔒 SECURE STEP: Message marked for exclusion from history', {
+          stepName: step.name,
+          threadId: threadId.substring(0, 8),
+          securityLevel: step.metadata?.securityLevel,
+          securityTags: step.metadata?.securityTags
+        });
+
+        // Save with security metadata
+        const secureContent = {
+          type: 'text',
+          text: content,
+          metadata: {
+            stepId: step.id,
+            stepName: step.name,
+            excludeFromHistory: true,
+            excludeFromRAG: step.metadata?.excludeFromRAG === true,
+            securityLevel: step.metadata?.securityLevel || 'confidential',
+            securityTags: step.metadata?.securityTags || ['secured_step'],
+            timestamp: new Date().toISOString()
+          }
+        };
+
+        await db.insert(chatMessages)
+          .values({
+            threadId,
+            content: JSON.stringify(secureContent),
+            role: "assistant",
+            userId: "system"
+          });
+
+        logger.info('✅ SECURE STEP: Message saved with security metadata', {
+          stepName: step.name,
+          threadId: threadId.substring(0, 8),
+          excludeFromHistory: true
+        });
+      } else {
+        // Regular message - use standard method
+        await this.addTextMessage(threadId, content);
+      }
+    } catch (error) {
+      logger.error('❌ Failed to add secure step message', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stepName: step.name,
+        threadId: threadId.substring(0, 8)
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Add a structured message directly to the chat thread
    * Enhanced version with proper JSON string storage
    */
@@ -1498,10 +1750,28 @@ Just let me know what you'd like to create!`
         return existingText === content.text;
       });
       
-      // Skip adding the message if it's a duplicate
-      if (isDuplicate) {
+      // TEMPORARILY DISABLED - Allow all messages through for debugging
+      if (false && isDuplicate && !content.text.includes('📰 Article Search Results')) {
         console.log(`[ENHANCED] Skipping duplicate structured message: "${content.text.substring(0, 50)}..."`);
         return;
+      }
+      
+      // Log ALL messages being processed for debugging
+      logger.info('📝 PROCESSING MESSAGE in addStructuredMessage', {
+        messageType: content.type,
+        messageLength: content.text.length,
+        messagePreview: content.text.substring(0, 100) + '...',
+        hasDecorators: !!content.decorators,
+        decoratorCount: content.decorators?.length || 0,
+        isDuplicate: isDuplicate
+      });
+      
+      // Log when we're allowing potentially duplicate content through
+      if (isDuplicate && content.text.includes('📰 Article Search Results')) {
+        logger.info('📝 ALLOWING duplicate Metabase response through', {
+          messageLength: content.text.length,
+          messagePreview: content.text.substring(0, 100) + '...'
+        });
       }
       
       // Add the structured message with proper JSON string storage
@@ -2001,10 +2271,9 @@ Just let me know what you'd like to create!`
             ...PRESS_RELEASE_TEMPLATE,
           id: TEMPLATE_UUIDS.PRESS_RELEASE
         };
-      case MEDIA_LIST_TEMPLATE.name:
       case 'Media Matching':
         return { 
-          ...MEDIA_LIST_TEMPLATE,
+          ...MEDIA_MATCHING_TEMPLATE,
           id: TEMPLATE_UUIDS.MEDIA_MATCHING
         };
       case PRESS_RELEASE_TEMPLATE.name:
@@ -2048,12 +2317,27 @@ Just let me know what you'd like to create!`
 
     // CRITICAL: Check for existing active workflows BEFORE creating a new one
     const existingActiveWorkflow = await this.getWorkflowByThreadId(threadId);
-    if (existingActiveWorkflow && existingActiveWorkflow.templateId === templateId && existingActiveWorkflow.status === 'active') {
-      console.log(`[ENHANCED] ⚠️ DUPLICATE PREVENTION: Active workflow already exists for template ${templateId}`, {
-        existingWorkflowId: existingActiveWorkflow.id.substring(0, 8),
-        templateId: templateId.substring(0, 8)
-      });
-      return existingActiveWorkflow;
+    if (existingActiveWorkflow && existingActiveWorkflow.status === 'active') {
+      // If same template ID, return existing workflow
+      if (existingActiveWorkflow.templateId === templateId) {
+        console.log(`[ENHANCED] ⚠️ DUPLICATE PREVENTION: Active workflow already exists for template ${templateId}`, {
+          existingWorkflowId: existingActiveWorkflow.id.substring(0, 8),
+          templateId: templateId.substring(0, 8)
+        });
+        return existingActiveWorkflow;
+      } 
+      // If different template ID, cancel existing and continue with new one
+      else {
+        console.log(`[ENHANCED] 🔄 WORKFLOW SWITCH: Cancelling existing workflow to start new one`, {
+          existingTemplateId: existingActiveWorkflow.templateId.substring(0, 8),
+          newTemplateId: templateId.substring(0, 8),
+          existingWorkflowId: existingActiveWorkflow.id.substring(0, 8)
+        });
+        
+        // Cancel the existing workflow
+        await this.dbService.updateWorkflowStatus(existingActiveWorkflow.id, WorkflowStatus.FAILED);
+        console.log(`[ENHANCED] ✅ Cancelled existing workflow ${existingActiveWorkflow.id.substring(0, 8)}`);
+      }
     }
 
     // Add debug logging for template resolution
@@ -3058,8 +3342,14 @@ Generate the ${assetType}:`;
         []
       );
 
-      // 🚨 CRITICAL: Save the Universal RAG generated content as an asset message
-      if (result.responseText && workflow.threadId) {
+      // 🚨 CRITICAL: Save content as an asset message ONLY for actual asset generation steps
+      // Do NOT create asset messages for data retrieval steps like Metabase Article Search
+      const isAssetGenerationStep = step.metadata?.assetType && 
+                                   (step.name.includes('Asset Generation') || 
+                                    step.name.includes('Asset Creation') ||
+                                    step.metadata?.generateAsset === true);
+      
+      if (result.responseText && workflow.threadId && isAssetGenerationStep) {
         await this.addAssetMessage(
           workflow.threadId,
           result.responseText,
@@ -3072,6 +3362,22 @@ Generate the ${assetType}:`;
           threadId: workflow.threadId.substring(0, 8),
           responseLength: result.responseText.length,
           assetType: step.metadata?.assetType
+        });
+      } else if (result.responseText && workflow.threadId) {
+        // For non-asset steps (like Metabase search), add as regular text message
+        logger.info('📝 API_CALL result: BEFORE adding as regular text message', {
+          stepName: step.name,
+          responseLength: result.responseText.length,
+          threadId: workflow.threadId.substring(0, 8),
+          responsePreview: result.responseText.substring(0, 100) + '...'
+        });
+        
+        await this.addTextMessage(workflow.threadId, result.responseText);
+        
+        logger.info('📝 API_CALL result: AFTER adding as regular text message', {
+          stepName: step.name,
+          responseLength: result.responseText.length,
+          threadId: workflow.threadId.substring(0, 8)
         });
       }
 
@@ -3144,17 +3450,97 @@ Generate the ${assetType}:`;
         response: result.responseText,
         isComplete: true
       };
-    } else {
-      // Fall back to enhanced handlers without user context
-      return await this.stepHandlers.handleEnhancedJsonDialogStep(
-        step,
-        workflow,
-        userInput,
-        {}, // No RAG context without user info
-        '', // No userId
-        ''  // No orgId
+    }
+
+    // Handle Media Matching workflow API calls
+    if (step.stepType === StepType.API_CALL && step.name === "Metabase Article Search") {
+      return await this.mediaMatchingHandlers.handleMetabaseAuthorSearch(
+        step.id,
+        workflow.id,
+        workflow.threadId,
+        this.addDirectMessage.bind(this),
+        this.updateStep.bind(this),
+        this.getWorkflow.bind(this),
+        this.getNextStep.bind(this),
+(workflow: Workflow) => WorkflowUtilities.gatherPreviousStepsContext(workflow)
       );
     }
+
+    if (step.stepType === StepType.API_CALL && step.name === "Article Analysis & Ranking") {
+      return await this.mediaMatchingHandlers.handleArticleAnalysisRanking(
+        step.id,
+        workflow.id,
+        workflow.threadId,
+        this.addDirectMessage.bind(this),
+        this.updateStep.bind(this),
+        this.getWorkflow.bind(this),
+        this.getNextStep.bind(this),
+(workflow: Workflow) => WorkflowUtilities.gatherPreviousStepsContext(workflow)
+      );
+    }
+
+    if (step.stepType === StepType.API_CALL && step.name === "Contact Enrichment" && 
+        step.dependencies?.includes("Article Analysis & Ranking")) {
+      return await this.mediaMatchingHandlers.handleMediaMatchingContactEnrichment(
+        step.id,
+        workflow.id,
+        workflow.threadId,
+        this.addAssetMessage.bind(this),
+        this.addDirectMessage.bind(this),
+        this.updateStep.bind(this),
+        this.getWorkflow.bind(this),
+(workflow: Workflow) => WorkflowUtilities.gatherPreviousStepsContext(workflow)
+      );
+    }
+
+    // Handle Media List workflow API calls  
+    if (step.stepType === StepType.API_CALL && step.name === "Database Query") {
+      return await this.mediaListHandlers.handleMediaListDatabaseQuery(
+        step.id,
+        workflow.id,
+        workflow.threadId,
+        this.addDirectMessage.bind(this),
+        this.updateStep.bind(this),
+        this.getWorkflow.bind(this),
+        this.getNextStep.bind(this)
+      );
+    }
+
+    if (step.stepType === StepType.JSON_DIALOG && step.name === "Author Ranking & Selection") {
+      return await this.mediaListHandlers.handleMediaListAuthorRanking(
+        step.id,
+        workflow.id,
+        workflow.threadId,
+        userInput,
+        this.addDirectMessage.bind(this),
+        this.updateStep.bind(this),
+        this.getWorkflow.bind(this),
+        this.getNextStep.bind(this)
+      );
+    }
+
+    if (step.stepType === StepType.API_CALL && step.name === "Contact Enrichment" && 
+        step.dependencies?.includes("Author Ranking & Selection")) {
+      return await this.mediaListHandlers.handleMediaListContactEnrichment(
+        step.id,
+        workflow.id,
+        workflow.threadId,
+        this.addAssetMessage.bind(this),
+        this.addDirectMessage.bind(this),
+        this.updateStep.bind(this),
+        this.getWorkflow.bind(this)
+      );
+    }
+
+    // Fall back to enhanced handlers without user context
+    return await this.stepHandlers.handleEnhancedJsonDialogStep(
+      step,
+      workflow,
+      userInput,
+      {}, // No RAG context without user info
+      '', // No userId
+      ''  // No orgId
+    );
   }
 
   /**
@@ -3163,7 +3549,7 @@ Generate the ${assetType}:`;
   private async sendContextualInitialPrompt(threadId: string, step: WorkflowStep, workflowName: string): Promise<void> {
     try {
       // Check if this is one of our updated efficient workflows
-      const efficientWorkflows = ['Press Release', 'Social Post', 'Blog Article', 'Media Pitch', 'FAQ'];
+      const efficientWorkflows = ['Press Release', 'Social Post', 'Blog Article', 'Media Pitch', 'FAQ', 'Media Matching'];
       
       if (efficientWorkflows.includes(workflowName)) {
         // For efficient workflows, use the simple prompt directly (no AI generation)
@@ -3366,13 +3752,34 @@ Generate a contextual initial message that feels personal and relevant to this s
         return;
       }
       
-      // Add the message with structured content for consistency
-      const structuredContent = MessageContentHelper.createTextMessage(messageContent);
+      // Check if content is already a structured message JSON
+      let finalContent: string;
+      try {
+        const parsed = JSON.parse(messageContent);
+        if (parsed.type && parsed.text && parsed.decorators) {
+          // Already a structured message - use as-is
+          finalContent = messageContent;
+          logger.info('📤 ENHANCED SERVICE: Using pre-structured message content', {
+            threadId: threadId.substring(0, 8),
+            messageType: parsed.type,
+            hasDecorators: !!parsed.decorators,
+            decoratorCount: parsed.decorators?.length || 0
+          });
+        } else {
+          // Regular content - wrap in structured message
+          const structuredContent = MessageContentHelper.createTextMessage(messageContent);
+          finalContent = JSON.stringify(structuredContent);
+        }
+      } catch (e) {
+        // Not JSON - wrap in structured message
+        const structuredContent = MessageContentHelper.createTextMessage(messageContent);
+        finalContent = JSON.stringify(structuredContent);
+      }
       
       await db.insert(chatMessages)
         .values({
           threadId,
-          content: JSON.stringify(structuredContent),
+          content: finalContent,
           role: "assistant",
           userId: "system"
         });
@@ -3552,8 +3959,11 @@ ${enhancedPrompt}`;
             }
             
             // Check if this looks like a press release
+            // BUT NOT for Media Matching workflows which have "Generated Authors:" content
             if (contentText && 
                 contentText.length > 500 && 
+                !step.name.includes('Media Matching') &&
+                !contentText.includes('Generated Authors:') &&
                 (contentText.includes('FOR IMMEDIATE RELEASE') || 
                  contentText.includes('Press Release') ||
                  contentText.includes('**Contact:') ||
@@ -4031,7 +4441,7 @@ ${enhancedPrompt}`;
           if (typeof rawRevisedContent === 'string') {
             revisedContent = rawRevisedContent;
           } else if (Array.isArray(rawRevisedContent)) {
-            // Handle lists (contact lists, media lists, etc.)
+            // Handle lists (contact lists, etc.)
             revisedContent = Array.isArray(rawRevisedContent[0]) ? 
               JSON.stringify(rawRevisedContent, null, 2) : // Nested arrays
               rawRevisedContent.map(item => typeof item === 'object' ? JSON.stringify(item, null, 2) : item).join('\n\n');
@@ -5376,6 +5786,7 @@ ${enhancedPrompt}`;
    */
   public getWorkflowDisplayName(templateId: string): string | null {
     const templateMap: Record<string, string> = {
+      [TEMPLATE_UUIDS.MEDIA_MATCHING]: 'Media Matching',
       [TEMPLATE_UUIDS.PRESS_RELEASE]: 'Press Release',
       [TEMPLATE_UUIDS.SOCIAL_POST]: 'Social Post',
       [TEMPLATE_UUIDS.BLOG_ARTICLE]: 'Blog Article',
@@ -5393,15 +5804,13 @@ ${enhancedPrompt}`;
    */
   public getTemplateIdForWorkflow(workflowName: string): string | null {
     const templateMap: Record<string, string> = {
+      'Media Matching': TEMPLATE_UUIDS.MEDIA_MATCHING,
       'Press Release': TEMPLATE_UUIDS.PRESS_RELEASE,
       'Social Post': TEMPLATE_UUIDS.SOCIAL_POST,
       'Blog Article': TEMPLATE_UUIDS.BLOG_ARTICLE,
       'Media Pitch': TEMPLATE_UUIDS.MEDIA_PITCH,
       'FAQ': TEMPLATE_UUIDS.FAQ,
       'Launch Announcement': TEMPLATE_UUIDS.LAUNCH_ANNOUNCEMENT,
-  
-      'Media List Generator': TEMPLATE_UUIDS.MEDIA_LIST,
-      'Media Matching': TEMPLATE_UUIDS.MEDIA_MATCHING,
       'JSON Dialog PR Workflow': TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW
     };
     
@@ -6354,7 +6763,6 @@ ${enhancedPrompt}`;
       'Dummy Workflow': '00000000-0000-0000-0000-000000000004',
   
       'Media Matching': '00000000-0000-0000-0000-000000000006',
-      'Media List Generator': '00000000-0000-0000-0000-000000000007',
       'Press Release': '00000000-0000-0000-0000-000000000008',
       'Media Pitch': '00000000-0000-0000-0000-000000000009',
       'Social Post': '00000000-0000-0000-0000-000000000010',
@@ -7535,6 +7943,20 @@ ${enhancedPrompt}`;
    */
   private async filterConversationForSecurity(conversation: any, userId: string, orgId: string): Promise<any | null> {
     try {
+      // Check if conversation is from a secured step (e.g., Metabase Article Search)
+      if (conversation.metadata?.excludeFromHistory === true || 
+          conversation.metadata?.securityLevel === 'confidential' ||
+          conversation.stepName === 'Metabase Article Search' ||
+          conversation.metadata?.securityTags?.includes('database_search')) {
+        logger.warn('🚫 FILTERED: Conversation from secured step excluded from history', {
+          conversationId: conversation.id?.substring(0, 8) || 'unknown',
+          stepName: conversation.stepName || 'unknown',
+          userId: userId.substring(0, 8),
+          reason: 'secured_step_exclusion'
+        });
+        return null;
+      }
+
       // Check if conversation contains sensitive content
       const contentToCheck = `${conversation.title || ''} ${conversation.content || ''} ${conversation.summary || ''}`;
       
@@ -8564,8 +8986,8 @@ Response Guidelines:
       };
     } else if (templateId === TEMPLATE_UUIDS.MEDIA_LIST) {
       return { 
-        ...MEDIA_LIST_TEMPLATE, 
-        id: TEMPLATE_UUIDS.MEDIA_LIST 
+        ...MEDIA_MATCHING_TEMPLATE, 
+        id: TEMPLATE_UUIDS.MEDIA_MATCHING 
       };
     }
     
@@ -8677,29 +9099,12 @@ Response Guidelines:
           stepType: step.stepType
         });
         
-        // Use our Universal RAG system for Asset Generation
-        if (userId && orgId && step.name === "Asset Generation") {
-          const workflow = await this.dbService.getWorkflow(workflowId);
-          if (workflow) {
-            autoExecResult = await this.handleApiCallStep(step, workflow, "auto-execute", userId, orgId);
-          } else {
-            throw new Error(`Workflow not found: ${workflowId}`);
-          }
+        // Use handleApiCallStep for all API_CALL steps (including Media Matching steps)
+        const workflow = await this.dbService.getWorkflow(workflowId);
+        if (workflow) {
+          autoExecResult = await this.handleApiCallStep(step, workflow, "auto-execute", userId, orgId);
         } else {
-          // Fall back to enhanced handlers for other API_CALL steps
-          const workflow = await this.dbService.getWorkflow(workflowId);
-          if (workflow) {
-            autoExecResult = await this.stepHandlers.handleEnhancedJsonDialogStep(
-              step,
-              workflow,
-              "auto-execute",
-              ragContext,
-              userId || '',
-              orgId || ''
-            );
-          } else {
-            throw new Error(`Workflow not found: ${workflowId}`);
-          }
+          throw new Error(`Workflow not found: ${workflowId}`);
         }
         
         // Mark this as processed to avoid double-messaging

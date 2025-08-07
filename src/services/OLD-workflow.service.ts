@@ -232,10 +232,9 @@ export class WorkflowService {
           ...PRESS_RELEASE_TEMPLATE,
           id: TEMPLATE_UUIDS.PRESS_RELEASE
         };
-      case MEDIA_LIST_TEMPLATE.name:
       case 'Media Matching':
         return { 
-          ...MEDIA_LIST_TEMPLATE,
+          ...MEDIA_MATCHING_TEMPLATE,
           id: TEMPLATE_UUIDS.MEDIA_MATCHING
         };
       case PRESS_RELEASE_TEMPLATE.name:
@@ -290,7 +289,6 @@ export class WorkflowService {
       { id: TEMPLATE_UUIDS.JSON_DIALOG_PR_WORKFLOW, name: 'JSON Dialog PR Workflow' },
       { id: TEMPLATE_UUIDS.TEST_STEP_TRANSITIONS, name: 'Test Step Transitions' },
   
-        { id: TEMPLATE_UUIDS.MEDIA_LIST, name: 'Media List Generator' },
       { id: TEMPLATE_UUIDS.MEDIA_MATCHING, name: 'Media Matching' },
       { id: TEMPLATE_UUIDS.PRESS_RELEASE, name: 'Press Release' },
       { id: TEMPLATE_UUIDS.MEDIA_PITCH, name: 'Media Pitch' },
@@ -397,8 +395,8 @@ export class WorkflowService {
       };
     } else if (templateId === TEMPLATE_UUIDS.MEDIA_LIST) {
       return { 
-        ...MEDIA_LIST_TEMPLATE, 
-        id: TEMPLATE_UUIDS.MEDIA_LIST 
+        ...MEDIA_MATCHING_TEMPLATE, 
+        id: TEMPLATE_UUIDS.MEDIA_MATCHING 
       };
     }
     
@@ -5232,26 +5230,16 @@ Respond with only "search_more" or "proceed" based on their input.`;
         // Extract unique authors from articles
         const authorsMap = new Map();
         
-        // Log first few articles to see the actual data structure and editorial ranks
-        logger.info('Sample article data for debugging FIXED extraction', {
+        // Debug article data structure without exposing sensitive content
+        logger.info('Article data structure analysis for editorial ranking:', {
           totalArticles: searchResults.articles.length,
-          sampleArticles: searchResults.articles.slice(0, 5).map((article: any) => ({
-            id: article.id,
-            title: article.title?.substring(0, 100) + '...',
-            author: article.author,
-            source: article.source,
-            topics: article.topics,
-            publishedAt: article.publishedAt,
-            metadata: article.metadata,
-            // FIXED: Test multiple possible paths for editorial rank
-            editorialRankPaths: {
-              'metadata?.source?.editorialRank': article.metadata?.source?.editorialRank,
-              'source?.editorialRank': article.source?.editorialRank,
-              'metadata?.editorialRank': article.metadata?.editorialRank,
-              'editorialRank': article.editorialRank,
-              'source?.rank': article.source?.rank
-            }
-          }))
+          hasArticleData: searchResults.articles.length > 0,
+          dataStructureCheck: searchResults.articles.length > 0 ? {
+            hasTitle: !!searchResults.articles[0].title,
+            hasAuthor: !!searchResults.articles[0].author,
+            hasSource: !!searchResults.articles[0].source,
+            hasEditorialRank: !!searchResults.articles[0].source?.editorialRank
+          } : null
         });
         
         // Process articles and extract authors with FIXED editorial rank extraction

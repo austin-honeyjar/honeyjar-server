@@ -211,9 +211,11 @@ export class WorkflowUtilities {
       'write a media pitch': 'Media Pitch',
       'media pitch': 'Media Pitch',
       
-      'generate media list': 'Media List Generator',
-      'create media list': 'Media List Generator',
-      'media list': 'Media List Generator',
+      'create media matching': 'Media Matching',
+      'media matching': 'Media Matching',
+      'generate media list': 'Media Matching',
+      'create media list': 'Media Matching',
+      'media list': 'Media Matching',
       
       'launch announcement': 'Launch Announcement',
       'create an faq': 'FAQ',
@@ -348,7 +350,6 @@ export class WorkflowUtilities {
       'Social Post': '00000000-0000-0000-0000-000000000010',
       'Blog Article': '00000000-0000-0000-0000-000000000011',
       'FAQ': '00000000-0000-0000-0000-000000000012',
-      'Media List Generator': '00000000-0000-0000-0000-000000000007',
       'Media Matching': '00000000-0000-0000-0000-000000000006',
       'Launch Announcement': '00000000-0000-0000-0000-000000000002',
       'JSON Dialog PR Workflow': '00000000-0000-0000-0000-000000000003',

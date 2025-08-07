@@ -40,6 +40,7 @@ export class IntentClassificationService {
     ['social post', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Social Post', confidence: 0.95 }],
     ['blog article', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Blog Article', confidence: 0.95 }],
     ['media pitch', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Media Pitch', confidence: 0.95 }],
+    ['media matching', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Media Matching', confidence: 0.95 }],
     ['launch announcement', { category: 'workflow_action', action: 'start_workflow', workflowName: 'Launch Announcement', confidence: 0.95 }],
     ['faq', { category: 'workflow_action', action: 'start_workflow', workflowName: 'FAQ', confidence: 0.95 }],
     // Action phrases
@@ -520,6 +521,7 @@ Provide a helpful, contextual response. If the user is asking about a specific t
    */
   private getWorkflowDescription(workflowName: string): string {
     const descriptions = {
+      'Media Matching': 'Prioritized media contact lists based on topic relevance',
       'Press Release': 'Professional press releases for announcements',
       'Media Pitch': 'Compelling pitches to journalists and media outlets',
       'Social Post': 'Engaging social media content',

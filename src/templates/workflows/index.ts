@@ -4,6 +4,7 @@ import { JSON_DIALOG_PR_WORKFLOW_TEMPLATE } from "./json-dialog-pr-workflow";
 
 import { TEST_STEP_TRANSITIONS_TEMPLATE } from "./test-step-transitions";
 import { MEDIA_LIST_TEMPLATE } from "./media-list";
+import { MEDIA_MATCHING_TEMPLATE } from "./media-matching";
 import { MEDIA_PITCH_TEMPLATE } from "./media-pitch";
 import { SOCIAL_POST_TEMPLATE } from "./social-post";
 import { BLOG_ARTICLE_TEMPLATE } from "./blog-article";
@@ -15,8 +16,7 @@ export const WORKFLOW_TEMPLATES = {
   "JSON Dialog PR Workflow": JSON_DIALOG_PR_WORKFLOW_TEMPLATE,
 
   "Test Step Transitions": TEST_STEP_TRANSITIONS_TEMPLATE,
-  "Media List Generator": MEDIA_LIST_TEMPLATE,
-  "Media Matching": MEDIA_LIST_TEMPLATE,
+  "Media Matching": MEDIA_MATCHING_TEMPLATE,
   "Media Pitch": MEDIA_PITCH_TEMPLATE,
   "Social Post": SOCIAL_POST_TEMPLATE,
   "Blog Article": BLOG_ARTICLE_TEMPLATE,
