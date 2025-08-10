@@ -1204,7 +1204,6 @@ export class MetabaseService {
     logger.info('🔍 DEBUG: Editorial rank analysis from Metabase API response', {
       totalArticles: transformedArticles.length,
       rankBreakdown,
-      sampleArticles: rankAnalysis.slice(0, 5),
       nonRank1Count: rankAnalysis.filter(a => 
         a.editorialRank !== '1' && 
         a.editorialRank !== 1 && 

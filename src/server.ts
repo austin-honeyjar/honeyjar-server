@@ -33,6 +33,16 @@ import { requestLogger } from './middleware/logger.middleware';
 import { errorHandler } from './middleware/error.middleware';
 import devRoutes from './routes/dev';
 
+// Import comprehensive queue system
+import { initializeQueues, shutdownQueues } from './services/comprehensiveQueues';
+
+// Import all workers to register their processors
+import './workers/intentWorker';
+import './workers/openaiWorker';
+import './workers/securityWorker';
+import './workers/ragWorker';
+import './workers/rocketreachWorker';
+
 // Initialize express app
 export const app = express();
 
@@ -1949,6 +1959,12 @@ if (process.env.NODE_ENV !== 'test') {
 // Initialize background services
 async function initializeBackgroundServices(): Promise<void> {
   try {
+    // Initialize comprehensive queue system first
+    logger.info('🚀 Initializing comprehensive queue system...');
+    await initializeQueues();
+    logger.info('✅ Comprehensive queue system initialized successfully');
+    
+    // Initialize existing background worker
     await backgroundWorker.initialize();
     logger.info('Background services initialized successfully');
   } catch (error) {
@@ -1961,10 +1977,15 @@ async function initializeBackgroundServices(): Promise<void> {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully...');
   try {
+    // Shutdown queue system first
+    await shutdownQueues();
+    logger.info('✅ Queue system shutdown completed');
+    
+    // Then shutdown background worker
     await backgroundWorker.shutdown();
     logger.info('Background worker shutdown completed');
   } catch (error) {
-    logger.error('Error during background worker shutdown', { error: (error as Error).message });
+    logger.error('Error during shutdown', { error: (error as Error).message });
   }
   process.exit(0);
 });
@@ -1972,10 +1993,15 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully...');
   try {
+    // Shutdown queue system first
+    await shutdownQueues();
+    logger.info('✅ Queue system shutdown completed');
+    
+    // Then shutdown background worker
     await backgroundWorker.shutdown();
     logger.info('Background worker shutdown completed');
   } catch (error) {
-    logger.error('Error during background worker shutdown', { error: (error as Error).message });
+    logger.error('Error during shutdown', { error: (error as Error).message });
   }
   process.exit(0);
 }); 

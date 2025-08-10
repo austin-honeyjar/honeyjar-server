@@ -8,9 +8,11 @@ const redisConfig = {
   port: parseInt(process.env.REDIS_PORT || '6379'),
   password: process.env.REDIS_PASSWORD,
   db: 1, // Use DB 1 for queues (assuming cache uses DB 0)
+  maxRetriesPerRequest: 3,
   retryDelayOnFailover: 100,
-  enableReadyCheck: false,
-  lazyConnect: true,
+  // Remove problematic settings that prevent Bull from working
+  // enableReadyCheck: false,  // This prevents proper connection
+  // lazyConnect: true,        // This prevents immediate connection
 };
 
 export const redis = new IORedis(redisConfig);

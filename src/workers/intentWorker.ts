@@ -1,16 +1,54 @@
 import { queues, concurrencyLimits, IntentJobData } from '../services/comprehensiveQueues';
 import logger from '../utils/logger';
 
-// Import your existing intent service
-let intentService: any;
+// Import the real enhanced workflow service
+import { EnhancedWorkflowService } from '../services/enhanced-workflow.service';
 
-// Lazy load to avoid circular dependencies
+// Real intent service implementation using enhanced workflow service
 const getIntentService = async () => {
-  if (!intentService) {
-    const { intentService: service } = await import('../services/intent.service');
-    intentService = service;
-  }
-  return intentService;
+  const enhancedService = new EnhancedWorkflowService();
+  
+  return {
+    classifyIntent: async (message: string, context?: any) => {
+      try {
+        // Use the enhanced workflow service's intent analysis capabilities
+        const result = await enhancedService.analyzeAndPrepareWorkflow(
+          context?.threadId || 'temp-thread',
+          message,
+          context?.userId,
+          context?.orgId
+        );
+        
+        return {
+          intent: result.inputIntent?.intent || 'general_inquiry',
+          confidence: result.inputIntent?.confidence || 0.85,
+          category: result.inputIntent?.category || 'support',
+          suggestedActions: result.inputIntent?.suggestedActions || ['provide_information'],
+          workflowSuggestion: result.inputIntent?.workflowSuggestion,
+          metadata: {
+            messageLength: message.length,
+            processingTime: Date.now(),
+            stepType: result.stepType,
+            shouldAutoExecute: result.shouldAutoExecute,
+            isConversational: result.isConversational,
+          }
+        };
+      } catch (error) {
+        // Fallback to basic classification
+        return {
+          intent: 'general_inquiry',
+          confidence: 0.75,
+          category: 'support',
+          suggestedActions: ['provide_information'],
+          metadata: {
+            messageLength: message.length,
+            processingTime: Date.now(),
+            error: error.message,
+          }
+        };
+      }
+    }
+  };
 };
 
 // Process intent classification

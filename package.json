@@ -22,7 +22,6 @@
     "test:workflow-context": "npx tsx scripts/test-workflow-context.ts",
     "migrate:workflow-context": "npx tsx scripts/migrate-workflow-context.ts",
     "reinit:workflow-context": "npx tsx scripts/reinitialize-workflow-context.ts",
-
     "test:pgvector": "npx tsx scripts/test-pgvector-performance.ts",
     "validate:pgvector": "npx tsx scripts/validate-pgvector-setup.ts",
     "check:env": "npx tsx scripts/check-environment.ts"
@@ -37,12 +36,13 @@
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
     "axios": "^1.8.4",
+    "bull": "^4.16.5",
     "cors": "^2.8.5",
     "dotenv": "^16.4.1",
     "express": "^4.18.2",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.1.0",
-    "ioredis": "^5.6.1",
+    "ioredis": "^5.7.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "node-cron": "^3.0.3",
@@ -58,6 +58,7 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@types/bull": "^4.10.4",
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^20.11.16",
     "@types/node-cron": "^3.0.11",

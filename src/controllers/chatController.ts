@@ -5,6 +5,7 @@ import { eq, and, desc } from 'drizzle-orm';
 import logger from '../utils/logger';
 import { CreateChatInput, CreateThreadInput } from '../validators/chat.validator';
 import { ChatService } from '../services/chat.service';
+import { hybridChatService } from '../services/hybridChat.service';
 import { v4 as uuidv4 } from 'uuid';
 import { simpleCache } from '../utils/simpleCache';
 import { enhancedWorkflowService } from '../services/enhanced-workflow.service'; // Changed from upgradedWorkflowService
@@ -97,6 +98,111 @@ export const chatController = {
       res.status(500).json({
         error: 'INTERNAL_SERVER_ERROR',
         message: 'Failed to create chat message'
+      });
+    }
+  },
+
+  // New queue-based chat message creation (non-blocking)
+  createWithQueues: async (req: Request, res: Response) => {
+    try {
+      const { content, role } = req.body as CreateChatInput;
+      const { threadId } = req.params;
+      const userId = req.user?.id;
+      const orgId = req.headers['x-organization-id'] as string;
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'User ID not found in request'
+        });
+      }
+
+      if (!orgId) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Organization ID is required'
+        });
+      }
+
+      // Verify thread exists and belongs to user and organization
+      const thread = await db.select()
+        .from(chatThreads)
+        .where(and(
+          eq(chatThreads.id, threadId),
+          eq(chatThreads.userId, userId),
+          eq(chatThreads.orgId, orgId)
+        ))
+        .limit(1);
+
+      if (!thread.length) {
+        return res.status(404).json({
+          error: 'NOT_FOUND',
+          message: 'Thread not found or access denied'
+        });
+      }
+
+      // Use hybrid service for queue-based processing
+      const result = await hybridChatService.handleUserMessageWithQueues(
+        threadId, 
+        content, 
+        userId, 
+        orgId
+      );
+
+      logger.info('✅ Queue-based chat message processing initiated', { 
+        messageId: result.immediate.messageId, 
+        threadId,
+        batchId: result.tracking.batchId
+      });
+
+      // Invalidate thread cache
+      try {
+        simpleCache.del(`thread:${threadId}`);
+        simpleCache.del(`threads:${userId}:${orgId}`);
+        logger.info('Invalidated caches for thread and thread list', { threadId, userId, orgId });
+      } catch (cacheError) {
+        logger.error('Error invalidating cache', { error: cacheError });
+      }
+
+      res.status(202).json({
+        status: 'accepted',
+        message: 'Processing started',
+        data: result
+      });
+      
+    } catch (error) {
+      logger.error('Error in queue-based chat processing:', error);
+      res.status(500).json({
+        error: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to start chat processing'
+      });
+    }
+  },
+
+  // Get results from queued processing
+  getBatchResults: async (req: Request, res: Response) => {
+    try {
+      const { batchId } = req.params;
+      
+      if (!batchId) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Batch ID is required'
+        });
+      }
+
+      const results = await hybridChatService.getBatchResults(batchId);
+      
+      res.json({
+        batchId,
+        ...results
+      });
+      
+    } catch (error) {
+      logger.error('Error retrieving batch results:', error);
+      res.status(500).json({
+        error: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to retrieve batch results'
       });
     }
   },

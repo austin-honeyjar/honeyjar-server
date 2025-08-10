@@ -2,9 +2,12 @@ import { Router } from 'express';
 import logger from '../utils/logger';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { ChatService } from '../services/chat.service';
+import { hybridChatService } from '../services/hybridChat.service';
 import { eq } from 'drizzle-orm';
 import { db } from '../db';
 import { chatThreads } from '../db/schema';
+import { ComprehensiveChatController } from '../controllers/comprehensiveChatController';
+import { HealthController } from '../controllers/health.controller';
 
 const router = Router();
 
@@ -21,7 +24,45 @@ router.use((req, res, next) => {
   next();
 });
 
-// Apply authentication middleware to all chat routes
+// Public endpoints (BEFORE auth middleware) - no authentication required
+router.post('/test/queue-simple', async (req, res) => {
+  try {
+    console.log('🧪 Simple queue test endpoint hit');
+    
+    const testMessage = req.body.message || 'Simple test of queue system';
+    const result = await hybridChatService.handleUserMessageWithQueues(
+      '550e8400-e29b-41d4-a716-446655440000', // test thread ID
+      testMessage,
+      'test-user-123', // test user ID
+      'test-org-456'   // test org ID
+    );
+    
+    console.log('✅ Queue test successful:', result.tracking.batchId);
+    
+    res.json({
+      success: true,
+      message: 'Queue test completed successfully',
+      batchId: result.tracking.batchId,
+      jobIds: result.tracking.jobIds,
+      immediate: result.immediate
+    });
+  } catch (error) {
+    console.error('❌ Queue test failed:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Performance monitoring endpoints (public for testing)
+router.get('/system/health', HealthController.basicHealth);
+router.get('/system/health/detailed', HealthController.detailedHealth);
+router.get('/system/metrics', HealthController.getMetrics);
+router.get('/system/alerts', HealthController.getAlerts);
+router.get('/jobs/queue-stats', ComprehensiveChatController.getQueueStats);
+
+// Apply authentication middleware to all other chat routes
 router.use(authMiddleware);
 
 const chatService = new ChatService();
@@ -58,7 +99,7 @@ router.get('/threads/:threadId/messages', async (req, res) => {
   }
 });
 
-// Send a message to a thread (non-streaming)
+// Send a message to a thread (non-streaming) - ORIGINAL BLOCKING VERSION
 router.post('/threads/:threadId/messages', async (req, res) => {
   try {
     const { threadId } = req.params;
@@ -78,6 +119,56 @@ router.post('/threads/:threadId/messages', async (req, res) => {
   } catch (error) {
     logger.error('Error handling message:', error);
     res.status(500).json({ error: 'Failed to handle message' });
+  }
+});
+
+// Send a message to a thread (queue-based, non-blocking) - NEW PERFORMANCE VERSION
+router.post('/threads/:threadId/messages/queued', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { content } = req.body;
+    const userId = req.user?.id || 'anonymous';
+    const orgId = Array.isArray(req.headers['x-organization-id'])
+      ? req.headers['x-organization-id'][0] 
+      : req.headers['x-organization-id'] || '';
+    
+    if (!content) {
+      return res.status(400).json({ error: 'Content is required' });
+    }
+
+    // Use hybrid service for queue-based processing
+    const result = await hybridChatService.handleUserMessageWithQueues(
+      threadId, 
+      content, 
+      userId, 
+      orgId
+    );
+    
+    res.status(202).json({
+      status: 'accepted',
+      message: 'Processing started',
+      data: result
+    });
+  } catch (error) {
+    logger.error('Error starting queued message processing:', error);
+    res.status(500).json({ error: 'Failed to start message processing' });
+  }
+});
+
+// Get results from batch processing
+router.get('/batch/:batchId/results', async (req, res) => {
+  try {
+    const { batchId } = req.params;
+    
+    const results = await hybridChatService.getBatchResults(batchId);
+    
+    res.json({
+      batchId,
+      ...results
+    });
+  } catch (error) {
+    logger.error('Error retrieving batch results:', error);
+    res.status(500).json({ error: 'Failed to retrieve batch results' });
   }
 });
 
@@ -227,5 +318,19 @@ router.use('/threads/:threadId/messages/stream', (req, res, next) => {
 // Removed endpoints:
 // - POST /json-pr (use standard workflow creation instead)
 // - POST /json-pr/:threadId/messages (use /:threadId/messages instead)
+
+// ========================================
+// 🚀 COMPREHENSIVE QUEUE-BASED ENDPOINTS
+// ========================================
+
+// Non-blocking comprehensive chat endpoint with queue-based processing
+router.post('/comprehensive', ComprehensiveChatController.chat);
+
+// Job status and management endpoints (using actual controller methods)
+router.post('/jobs/status', ComprehensiveChatController.getComprehensiveStatus);
+router.post('/jobs/cancel', ComprehensiveChatController.cancelJobs);
+
+// Authenticated performance monitoring endpoints
+router.post('/system/alerts/:alertId/acknowledge', HealthController.acknowledgeAlert);
 
 export default router; 
