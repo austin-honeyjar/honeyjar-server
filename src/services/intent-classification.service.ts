@@ -862,28 +862,49 @@ Provide a helpful, contextual response. If the user is asking about a specific t
           availableWorkflows: self.getAvailableWorkflows()
         };
 
-        // Generate intelligent response using intent service
-        const response = await self.generateConversationalResponse(
-          intentContext,
-          userInput
-        );
-
-        // Stream the AI response
+        // Generate intelligent response using streaming chunks
+        const systemPrompt = self.buildConversationalPrompt(intentContext);
+        let accumulatedResponse = '';
+        
+        // Stream the AI response in word chunks (more efficient than character-by-character)
+        for await (const chunk of self.openAIService.generateStreamingResponse(
+          systemPrompt,
+          userInput,
+          {
+            temperature: 0.7,
+            max_tokens: 500,
+            model: 'gpt-4o-mini'
+          }
+        )) {
+          accumulatedResponse += chunk;
+          
+          // Send chunks (words/phrases) to frontend for progressive display
+          yield {
+            type: 'ai_response' as const,
+            data: {
+              content: chunk,
+              isComplete: false,
+              accumulated: accumulatedResponse
+            }
+          };
+        }
+        
+        // Final chunk to mark completion
         yield {
           type: 'ai_response' as const,
           data: {
-            content: response,
+            content: '',
             isComplete: true,
-            accumulated: response
+            accumulated: accumulatedResponse
           }
         };
 
         // Save the response to the database using unified structured messaging
-        await workflowService.addTextMessage(threadId, response);
+        await workflowService.addTextMessage(threadId, accumulatedResponse);
 
         logger.info('INTENT SERVICE: Conversational response completed', {
           threadId: threadId.substring(0, 8),
-          responseLength: response.length,
+          responseLength: accumulatedResponse.length,
           hasContext: conversationHistory.length > 0
         });
         

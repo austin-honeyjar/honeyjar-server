@@ -712,6 +712,59 @@ Return ONLY the new prompt text. Do not include any explanations, metadata, or f
   }
 
   /**
+   * Generate a streaming AI response for real-time use cases
+   */
+  async* generateStreamingResponse(
+    systemPrompt: string,
+    userInput: string,
+    options: {
+      model?: string;
+      temperature?: number;
+      max_tokens?: number;
+    } = {}
+  ): AsyncGenerator<string> {
+    try {
+      const { model = 'gpt-4o-mini', temperature = 0.7, max_tokens = 500 } = options;
+
+      logger.info('Generating OpenAI streaming response', {
+        model,
+        temperature,
+        max_tokens,
+        systemPromptLength: systemPrompt.length,
+        userInputLength: userInput.length
+      });
+
+      const response = await this.client.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userInput }
+        ],
+        temperature,
+        max_tokens,
+        stream: true,
+      });
+
+      for await (const chunk of response) {
+        const delta = chunk.choices[0]?.delta?.content || '';
+        if (delta) {
+          yield delta;
+        }
+      }
+      
+      logger.info('✅ OpenAI streaming response completed');
+
+    } catch (error) {
+      logger.error('❌ OpenAI streaming response generation failed', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        systemPromptLength: systemPrompt.length,
+        userInputLength: userInput.length
+      });
+      throw error;
+    }
+  }
+
+  /**
    * Generate a simple AI response for general use cases like intent classification
    */
   async generateResponse(
