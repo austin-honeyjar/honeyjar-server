@@ -8,6 +8,7 @@ import { db } from '../db';
 import { chatThreads } from '../db/schema';
 import { ComprehensiveChatController } from '../controllers/comprehensiveChatController';
 import { HealthController } from '../controllers/health.controller';
+import { simpleCache } from '../utils/simpleCache';
 
 const router = Router();
 
@@ -225,6 +226,20 @@ router.post('/threads/:threadId/messages/stream', async (req, res) => {
         res.write(`data: ${eventData}\n\n`);
         lastChunkTime = now;
         
+        // Invalidate cache immediately when user message is saved (enables immediate UI update)
+        if (chunk.type === 'message_saved' && chunk.data?.role === 'user') {
+          try {
+            simpleCache.del(`thread:${threadId}`);
+            simpleCache.del(`threads:${userId}:${orgId}`);
+            logger.info('Invalidated cache after user message saved', { 
+              threadId: threadId.substring(0, 8), 
+              messageId: chunk.data?.messageId?.substring(0, 8) 
+            });
+          } catch (cacheError) {
+            logger.error('Error invalidating cache after user message', { error: cacheError });
+          }
+        }
+        
         // Force flush for better streaming performance
         if ('flush' in res && typeof res.flush === 'function') {
           (res as any).flush();
@@ -266,6 +281,15 @@ router.post('/threads/:threadId/messages/stream', async (req, res) => {
       res.write('data: {"type": "done", "data": {"success": true}}\n\n');
       res.end();
       
+      // Invalidate thread cache after streaming completes
+      try {
+        simpleCache.del(`thread:${threadId}`);
+        simpleCache.del(`threads:${userId}:${orgId}`);
+        logger.info('Invalidated caches after streaming completion', { threadId, userId, orgId });
+      } catch (cacheError) {
+        logger.error('Error invalidating cache after streaming', { error: cacheError });
+      }
+      
       logger.info('Streaming chat response completed', {
         threadId,
                  userId: typeof userId === 'string' ? userId.substring(0, 8) : 'anonymous'
@@ -273,6 +297,16 @@ router.post('/threads/:threadId/messages/stream', async (req, res) => {
       
     } catch (streamError) {
       logger.error('Error in streaming response:', streamError);
+      
+      // Invalidate cache even on error to ensure fresh data on retry
+      try {
+        simpleCache.del(`thread:${threadId}`);
+        simpleCache.del(`threads:${userId}:${orgId}`);
+        logger.info('Invalidated caches after streaming error', { threadId, userId, orgId });
+      } catch (cacheError) {
+        logger.error('Error invalidating cache after streaming error', { error: cacheError });
+      }
+      
       res.write(`data: ${JSON.stringify({
         type: 'error',
         data: { error: 'Streaming failed', message: streamError instanceof Error ? streamError.message : 'Unknown error' },
