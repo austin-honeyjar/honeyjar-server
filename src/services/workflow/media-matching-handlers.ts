@@ -380,9 +380,165 @@ export class MediaMatchingHandlers {
         throw new Error('Topic not found from previous step');
       }
 
-      // Use the direct context data instead of looking for nested step data
+      // Handle the case when no articles/authors are found - return mock data
       if (!top10Authors || top10Authors.length === 0) {
-        throw new Error('No ranked authors found - top10Authors missing from context');
+        logger.info('No ranked authors found - returning mock contact data', {
+          stepId,
+          workflowId,
+          threadId,
+          topic
+        });
+
+        // Create 2 mock contacts with full RocketReach structure for demo purposes
+        const mockContacts = [
+          {
+            name: "Sarah Johnson",
+            firstName: "Sarah",
+            lastName: "Johnson",
+            title: "Senior Technology Reporter",
+            jobTitle: "Senior Technology Reporter",
+            organization: "TechDaily News",
+            currentEmployer: "TechDaily News",
+            email: "sarah.johnson@techdaily.com",
+            workEmail: "s.johnson@techdaily.com",
+            phone: "+1 (555) 123-4567",
+            workPhone: "+1 (555) 123-4568",
+            linkedin: "https://linkedin.com/in/sarahjohnson-tech",
+            twitter: "@SarahTechWriter",
+            location: "San Francisco, CA",
+            city: "San Francisco",
+            state: "CA",
+            country: "United States",
+            bio: "Award-winning technology journalist with 8+ years covering AI, machine learning, and emerging tech trends.",
+            recentArticles: [
+              "The Future of AI in Healthcare: 2024 Predictions",
+              "Breaking Down the Latest Machine Learning Breakthroughs"
+            ],
+            relevanceScore: 8.5,
+            contactQuality: "high",
+            confidence: "high",
+            matchQuality: 9,
+            expertise: "AI and Machine Learning",
+            source: "Mock Data - Demo Purpose",
+            lastUpdated: new Date().toISOString(),
+            rocketReachId: "mock_rr_001",
+            verified: true
+          },
+          {
+            name: "Michael Chen",
+            firstName: "Michael",
+            lastName: "Chen",
+            title: "AI & Innovation Correspondent",
+            jobTitle: "AI & Innovation Correspondent", 
+            organization: "Innovation Weekly",
+            currentEmployer: "Innovation Weekly",
+            email: "m.chen@innovationweekly.com",
+            workEmail: "michael.chen@innovationweekly.com",
+            phone: "+1 (555) 987-6543",
+            workPhone: "+1 (555) 987-6544",
+            linkedin: "https://linkedin.com/in/michaelchen-ai",
+            twitter: "@MikeAIReporter",
+            location: "New York, NY",
+            city: "New York",
+            state: "NY",
+            country: "United States",
+            bio: "Specialized journalist focusing on artificial intelligence, startup ecosystem, and technology policy.",
+            recentArticles: [
+              "How Startups Are Leveraging AI for Growth",
+              "Policy Implications of Advanced AI Systems"
+            ],
+            relevanceScore: 8.2,
+            contactQuality: "high",
+            confidence: "high",
+            matchQuality: 8,
+            expertise: "AI and Digital Innovation",
+            source: "Mock Data - Demo Purpose",
+            lastUpdated: new Date().toISOString(),
+            rocketReachId: "mock_rr_002",
+            verified: true
+          }
+        ];
+
+        // Complete the step with mock contact data
+        await updateStep(stepId, {
+          status: 'complete',
+          metadata: {
+            contactEnrichmentResults: {
+              status: "completed_with_mock_data",
+              message: "No specific authors found for this topic, returning sample journalist contacts.",
+              topic: topic,
+              authorsEnriched: 2,
+              contactsFound: 2,
+              mockDataUsed: true,
+              contacts: mockContacts
+            },
+            completedAt: new Date().toISOString()
+          }
+        });
+
+        // Send individual contact messages for testing contact decorator
+        for (const contact of mockContacts) {
+          await addAssetMessage(
+            threadId,
+            JSON.stringify(contact),
+            'contact',
+            stepId,
+            'Contact Enrichment',
+            {
+              displayName: contact.name,
+              organization: contact.organization,
+              jobTitle: contact.jobTitle,
+              email: contact.email,
+              phone: contact.phone,
+              linkedin: contact.linkedin
+            }
+          );
+        }
+
+        // Send contact list message for testing contact list decorator
+        await addAssetMessage(
+          threadId,
+          JSON.stringify(mockContacts),
+          'contact_list',
+          stepId,
+          'Contact Enrichment',
+          {
+            totalContacts: mockContacts.length,
+            topic: topic,
+            summary: "Mock contacts for testing purposes"
+          }
+        );
+
+        const mockResultsMessage = `**🔍 Contact Enrichment Complete (Mock Data)**
+
+**Status:** Demo mode - testing contact decorators
+**Topic:** ${topic}
+
+Since no specific authors were found for this topic, we've provided 2 mock journalist contacts with full RocketReach data structure for testing:
+
+**📧 Individual Contacts (Testing Contact Decorator):**
+• **Sarah Johnson** - Senior Technology Reporter at TechDaily News
+• **Michael Chen** - AI & Innovation Correspondent at Innovation Weekly
+
+**📋 Contact List (Testing Contact List Decorator):**
+• Total contacts: 2
+• Full contact data with emails, phones, LinkedIn profiles
+• Complete RocketReach structure including verification status
+
+**🔧 Testing Features:**
+• Individual contact asset messages
+• Contact list asset message  
+• Full mock RocketReach contact structure
+• Both contact and contact_list decorators
+
+**💡 Note:** This is mock data for testing contact enrichment workflow and UI decorators.`;
+
+        await addDirectMessage(threadId, mockResultsMessage);
+
+        return {
+          response: "Contact enrichment completed with 2 mock contacts for testing both contact and contact_list decorators",
+          isComplete: true
+        };
       }
 
       const selectedAuthors = top10Authors;
@@ -1048,7 +1204,28 @@ The list is prioritized based on recent article relevance and coverage depth. Al
       };
 
       // Format the results nicely with article snippets
-      const formattedResponse = `**✅ Article Analysis Complete**
+      let formattedResponse;
+      
+      if (allAuthors.length === 0 || top10Authors.length === 0) {
+        formattedResponse = `**✅ Article Analysis Complete**
+
+**Summary:**
+• No authors found with relevant articles for this topic
+• This may indicate the topic is very specialized or the search terms need adjustment
+
+**📊 Search Results:**
+• Total authors searched: 0
+• Articles found: 0
+• Authors with recent coverage: 0
+
+**💡 Suggestions:**
+• Try refining your topic with more specific keywords
+• Consider broadening your search criteria
+• Use alternative terminology or related topics
+
+**🔄 Proceeding to contact enrichment (will be skipped)...**`;
+      } else {
+        formattedResponse = `**✅ Article Analysis Complete**
 
 **Summary:**
 • Analyzed ${allAuthors.length} authors with articles
@@ -1092,6 +1269,7 @@ ${top10Authors.slice(0, 4).map((author: any, index: number) => {
 • Source Quality: 20% - Publication quality metrics
 
 **🔄 Proceeding to contact enrichment...**`;
+      }
 
       await addDirectMessage(threadId, formattedResponse);
 
