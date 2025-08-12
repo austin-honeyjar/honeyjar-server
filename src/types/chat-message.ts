@@ -8,12 +8,30 @@ export interface MessageDecorator {
 export interface AssetDecorator extends MessageDecorator {
   type: 'asset';
   data: {
-    assetType: string;
+    assetType: 'text' | 'list' | 'contact';
     assetId?: string;
     stepId: string;
     stepName: string;
     isRevision?: boolean;
     showCreateButton?: boolean;
+    // Contact-specific data
+    name?: string;
+    email?: string;
+    publication?: string;
+    organization?: string;
+    jobTitle?: string;
+    phone?: string;
+    linkedin?: string;
+    relevanceScore?: number;
+    // List-specific data
+    title?: string;
+    itemCount?: number;
+    totalContacts?: number;
+    topic?: string;
+    summary?: string;
+    contacts?: any[];
+    // Additional metadata
+    [key: string]: any;
   };
 }
 
@@ -53,14 +71,7 @@ export interface ProgressDecorator extends MessageDecorator {
   };
 }
 
-export interface MediaContactsDecorator extends MessageDecorator {
-  type: 'media_contacts';
-  data: {
-    contactCount: number;
-    searchQuery: string;
-    showExportButton?: boolean;
-  };
-}
+
 
 export interface StreamingDecorator extends MessageDecorator {
   type: 'streaming';
@@ -89,7 +100,6 @@ export type ChatMessageDecorator =
   | SystemNotificationDecorator
   | ButtonDecorator
   | ProgressDecorator
-  | MediaContactsDecorator
   | StreamingDecorator
   | TypingDecorator;
 
@@ -244,13 +254,30 @@ export class MessageContentHelper {
    */
   static createAssetMessage(
     text: string,
-    assetType: string,
+    assetType: 'text' | 'list' | 'contact',
     stepId: string,
     stepName: string,
     options: {
       assetId?: string;
       isRevision?: boolean;
       showCreateButton?: boolean;
+      // Contact-specific options
+      name?: string;
+      email?: string;
+      publication?: string;
+      organization?: string;
+      jobTitle?: string;
+      phone?: string;
+      linkedin?: string;
+      relevanceScore?: number;
+      // List-specific options
+      title?: string;
+      itemCount?: number;
+      totalContacts?: number;
+      topic?: string;
+      summary?: string;
+      contacts?: any[];
+      [key: string]: any;
     } = {}
   ): StructuredMessageContent {
     return {
@@ -258,17 +285,17 @@ export class MessageContentHelper {
       text,
       decorators: [
         {
-          type: 'asset',
+          type: 'asset', // Always 'asset'
           data: {
-            assetType,
+            assetType, // 'text', 'list', or 'contact'
             stepId,
             stepName,
             assetId: options.assetId,
             isRevision: options.isRevision || false,
-            showCreateButton: options.showCreateButton !== false // Re-enable decorator buttons - will be hidden in dev mode on frontend
+            showCreateButton: options.showCreateButton !== false,
+            ...options // Pass through all additional options
           }
         }
-        // Removed duplicate button decorator - asset decorator handles the button
       ]
     };
   }
@@ -345,39 +372,7 @@ export class MessageContentHelper {
     };
   }
 
-  /**
-   * Create a media contacts message
-   */
-  static createMediaContactsMessage(
-    text: string,
-    contactCount: number,
-    searchQuery: string,
-    showExportButton: boolean = true
-  ): StructuredMessageContent {
-    return {
-      type: 'asset',
-      text,
-      decorators: [
-        {
-          type: 'media_contacts',
-          data: {
-            contactCount,
-            searchQuery,
-            showExportButton
-          }
-        },
-        ...(showExportButton ? [{
-          type: 'button' as const,
-          data: {
-            buttonType: 'create_asset' as const,
-            text: 'Export Media List',
-            action: 'create_asset',
-            variant: 'primary' as const
-          }
-        } as ButtonDecorator] : [])
-      ]
-    };
-  }
+
 
   /**
    * Check if content is structured
@@ -602,7 +597,9 @@ export class MessageContentHelper {
    * Convert structured content to legacy string format (for backward compatibility)
    */
   static toLegacyContent(content: StructuredMessageContent): string {
+    // Look for asset decorator
     const assetDecorator = this.getDecorator(content, 'asset') as AssetDecorator;
+    
     if (assetDecorator) {
       const assetData = {
         type: 'asset_generated',

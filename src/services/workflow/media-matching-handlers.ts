@@ -480,32 +480,36 @@ export class MediaMatchingHandlers {
         for (const contact of mockContacts) {
           await addAssetMessage(
             threadId,
-            JSON.stringify(contact),
+            '', // Empty text - let the decorator handle the display
             'contact',
             stepId,
             'Contact Enrichment',
             {
-              displayName: contact.name,
+              name: contact.name,
               organization: contact.organization,
               jobTitle: contact.jobTitle,
               email: contact.email,
               phone: contact.phone,
-              linkedin: contact.linkedin
+              linkedin: contact.linkedin,
+              relevanceScore: contact.relevanceScore
             }
           );
         }
 
-        // Send contact list message for testing contact list decorator
+        // Send contact list message for testing list decorator
         await addAssetMessage(
           threadId,
-          JSON.stringify(mockContacts),
-          'contact_list',
+          '', // Empty text - let the decorator handle the display
+          'list',
           stepId,
           'Contact Enrichment',
           {
+            title: "Media Contacts",
+            itemCount: mockContacts.length,
             totalContacts: mockContacts.length,
             topic: topic,
-            summary: "Mock contacts for testing purposes"
+            summary: "Mock contacts for testing purposes",
+            contacts: mockContacts
           }
         );
 
@@ -520,23 +524,23 @@ Since no specific authors were found for this topic, we've provided 2 mock journ
 • **Sarah Johnson** - Senior Technology Reporter at TechDaily News
 • **Michael Chen** - AI & Innovation Correspondent at Innovation Weekly
 
-**📋 Contact List (Testing Contact List Decorator):**
+**📋 Contact List (Testing List Decorator):**
 • Total contacts: 2
 • Full contact data with emails, phones, LinkedIn profiles
 • Complete RocketReach structure including verification status
 
 **🔧 Testing Features:**
-• Individual contact asset messages
-• Contact list asset message  
+• Individual contact asset messages (type: 'contact')
+• Contact list asset message (type: 'list')
 • Full mock RocketReach contact structure
-• Both contact and contact_list decorators
+• Unified asset decorator system
 
 **💡 Note:** This is mock data for testing contact enrichment workflow and UI decorators.`;
 
         await addDirectMessage(threadId, mockResultsMessage);
 
         return {
-          response: "Contact enrichment completed with 2 mock contacts for testing both contact and contact_list decorators",
+          response: "Contact enrichment completed with 2 mock contacts for testing contact and list decorators",
           isComplete: true
         };
       }

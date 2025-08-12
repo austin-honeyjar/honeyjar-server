@@ -1803,8 +1803,11 @@ Just let me know what you'd like to create!`
     assetType: string, 
     stepId: string, 
     stepName: string = 'Asset Generation',
-    isRevision: boolean = false
+    options: any = {}
   ): Promise<void> {
+    // Handle both old boolean signature and new options object signature
+    const isRevision = typeof options === 'boolean' ? options : (options?.isRevision || false);
+    
     const messagePrefix = isRevision ? 'Here\'s your revised' : 'Here\'s your generated';
     const structuredMessage = MessageContentHelper.createAssetMessage(
       `${messagePrefix} ${assetType}:\n\n${assetContent}`,
@@ -1813,7 +1816,8 @@ Just let me know what you'd like to create!`
       stepName,
       {
         isRevision: isRevision,
-        showCreateButton: true
+        showCreateButton: true,
+        ...options // Pass through any additional options
       }
     );
 
