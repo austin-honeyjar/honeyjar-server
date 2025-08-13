@@ -152,6 +152,7 @@ export const assets = pgTable('assets', {
   subtitle: text('subtitle'),
   content: text('content').notNull(),
   author: text('author').notNull(), // User as author
+  orgId: text('org_id').notNull(), // Organization ID for proper filtering
   metadata: jsonb('metadata'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),

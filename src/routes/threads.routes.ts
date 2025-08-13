@@ -5,7 +5,7 @@ import { AuthRequest } from '../types/request';
 import { Thread } from '../types/thread';
 import { db } from '../db';
 import { chatThreads, chatMessages, workflows, workflowSteps } from '../db/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, asc, desc } from 'drizzle-orm';
 import { validateRequest } from '../middleware/validation.middleware';
 import { createChatSchema } from '../validators/chat.validator';
 import { chatController } from '../controllers/chatController';
@@ -79,43 +79,138 @@ router.get('/', async (req: AuthRequest, res) => {
 
     const wallStart = Date.now();
 
-    logger.info('Getting threads for user:', { 
+    // Remove pagination - get ALL threads
+    const orderBy = 'createdAt';
+    const orderDir = 'desc';
+
+    logger.info('🔍 CRITICAL DEBUG: Getting threads for user:', { 
       userId: req.user.id,
       orgId,
       sessionId: req.user.sessionId,
-      permissions: req.user.permissions
+      permissions: req.user.permissions,
+      userEmail: req.user.email,
+      userName: req.user.firstName || req.user.email,
+      expectedUserId: 'user_2yxlxLLGfO2IuYmImaBZFItv9KU'
     });
     
-    const cacheKey = `threads:${req.user.id}:${orgId}`;
+    const cacheKey = `threads:${req.user.id}:${orgId}:all:${orderBy}:${orderDir}`;
     const cached = simpleCache.get<any[]>(cacheKey);
     if (cached) {
-      logger.info('Returning threads from cache', { count: cached.length });
+      logger.info('🚀 DEBUG: Returning threads from CACHE', { 
+        count: cached.length,
+        cacheKey,
+        userId: req.user.id,
+        orgId
+      });
+      
+      // Log first 3 cached threads for debugging
+      if (cached.length > 0) {
+        const first3Cached = cached.slice(0, 3).map(t => ({
+          id: t.id,
+          title: t.title,
+          createdAt: t.createdAt
+        }));
+        logger.info('🔍 DEBUG: First 3 cached threads', { first3Cached });
+      }
+      
       logger.info(`[perf] GET /threads finished in ${Date.now() - wallStart} ms`);
+      
+      // Prevent aggressive browser caching for threads list
+      res.set({
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      });
+      
       return res.json({ threads: cached });
     }
     
-    // Try to get threads with org_id first
-    let threads = await db
+    logger.info('💾 DEBUG: No cache found, querying database', { cacheKey });
+    
+    // Build filters (org + user by default). Optionally allow admin to include all users via includeAll=true
+    const includeAll = (Array.isArray(req.query.includeAll) ? req.query.includeAll[0] : (req.query.includeAll as string | undefined)) === 'true';
+
+    const baseWhere = includeAll
+      ? eq(chatThreads.orgId, orgId)
+      : and(eq(chatThreads.orgId, orgId), eq(chatThreads.userId, req.user.id));
+
+    // Use createdAt in descending order (newest first)
+    const orderColumn = chatThreads.createdAt;
+    const orderExpr = desc(orderColumn);
+
+    logger.info('🔍 DEBUG: About to execute database query (NO PAGINATION)', {
+      userId: req.user.id,
+      orgId,
+      orderBy,
+      orderDir,
+      includeAll
+    });
+
+    const threads = await db
       .select()
       .from(chatThreads)
-      .where(
-        and(
-          eq(chatThreads.userId, req.user.id),
-          eq(chatThreads.orgId, orgId)
-        )
-      )
-      .orderBy(chatThreads.createdAt);
+      .where(baseWhere)
+      .orderBy(orderExpr);
+    
+    logger.info('📊 DEBUG: Database query results (ALL THREADS)', {
+      userId: req.user.id,
+      orgId,
+      totalFound: threads.length
+    });
+
+    // Log first 5 and last 5 threads for debugging
+    if (threads.length > 0) {
+      const first5 = threads.slice(0, 5).map(t => ({
+        id: t.id,
+        title: t.title,
+        createdAt: t.createdAt,
+        userId: t.userId,
+        orgId: t.orgId
+      }));
+      
+      const last5 = threads.length > 5 
+        ? threads.slice(-5).map(t => ({
+            id: t.id,
+            title: t.title,
+            createdAt: t.createdAt,
+            userId: t.userId,
+            orgId: t.orgId
+          }))
+        : [];
+
+      logger.info('🔍 DEBUG: First 5 threads from DB', { first5 });
+      if (last5.length > 0) {
+        logger.info('🔍 DEBUG: Last 5 threads from DB', { last5 });
+      }
+
+      // Log date range
+      const newest = threads[0];
+      const oldest = threads[threads.length - 1];
+      logger.info('📅 DEBUG: Date range', {
+        newest: { title: newest.title, date: newest.createdAt },
+        oldest: { title: oldest.title, date: oldest.createdAt }
+      });
+    }
     
     // Cache for 30 seconds
     simpleCache.set(cacheKey, threads, CACHE_TTL);
 
-    logger.info('Returning threads:', { 
+    logger.info('✅ DEBUG: About to return ALL threads response', { 
       userId: req.user.id,
       orgId,
-      count: threads.length
+      count: threads.length,
+      cacheKey
     });
     
     logger.info(`[perf] GET /threads finished in ${Date.now() - wallStart} ms`);
+    
+    // Prevent aggressive browser caching for threads list
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
+    
     res.json({ threads });
   } catch (error) {
     logger.error('Error getting threads:', { error });

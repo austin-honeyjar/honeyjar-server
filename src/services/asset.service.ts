@@ -59,7 +59,8 @@ export class AssetService {
     workflowId: string,
     threadId: string,
     stepData: any,
-    userId: string
+    userId: string,
+    orgId: string
   ): Promise<Asset> {
     logger.info(`Generating asset from workflow step for thread ${threadId}`);
     
@@ -83,6 +84,7 @@ export class AssetService {
       subtitle: assetSubtitle,
       content: assetContent,
       author: userId,
+      orgId,
       metadata: assetMetadata
     });
     

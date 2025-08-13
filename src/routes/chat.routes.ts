@@ -68,24 +68,7 @@ router.use(authMiddleware);
 
 const chatService = new ChatService();
 
-// Create a new chat thread
-router.post('/threads', async (req, res) => {
-  try {
-    const { title } = req.body;
-    const userId = req.user?.id || 'anonymous';
-    
-    if (!title) {
-      return res.status(400).json({ error: 'Title is required' });
-    }
-
-    const thread = await chatService.createThread(userId, title);
-    
-    res.json({ thread });
-  } catch (error) {
-    logger.error('Error creating thread:', error);
-    res.status(500).json({ error: 'Failed to create thread' });
-  }
-});
+// Thread creation moved to /api/v1/threads route for better organization support
 
 // Get thread messages
 router.get('/threads/:threadId/messages', async (req, res) => {

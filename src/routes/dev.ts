@@ -300,7 +300,7 @@ devRoutes.get('/verify-enhanced-migration', async (req, res) => {
       ragService: !!enhancedWorkflowService['ragService'],
       securityService: !!enhancedWorkflowService['securityService'],
       contextService: !!enhancedWorkflowService['contextService'],
-      chatService: !!enhancedWorkflowService['chatService'],
+      chatService: !!(enhancedWorkflowService as any)['chatService'],
       embeddingService: !!enhancedWorkflowService['embeddingService'],
       stepHandlers: !!enhancedWorkflowService['stepHandlers'],
       openAIService: !!enhancedWorkflowService['openAIService'],

@@ -1,6 +1,6 @@
 import { db } from "../db";
 import { assets } from "../db/schema";
-import { eq, asc, desc } from "drizzle-orm";
+import { eq, asc, desc, and } from "drizzle-orm";
 import { Asset } from "../types/asset";
 import logger from "../utils/logger";
 
@@ -130,30 +130,43 @@ export class AssetDBService {
     logger.warn(`Deleted asset ${id}`);
   }
   
-  // Get all assets for a user
+  // Get all assets for a user in a specific organization
   async getAllAssets(userId: string, orgId: string): Promise<Asset[]> {
-    logger.info(`Getting all assets for user ${userId} in organization ${orgId}`);
-    
-    const userAssets = await db.query.assets.findMany({
-      where: eq(assets.author, userId),
-      orderBy: [desc(assets.createdAt)]
-    });
-    
-    logger.info(`Found ${userAssets.length} assets for user ${userId}`);
-    return userAssets as Asset[];
+    try {
+      logger.info(`Getting all assets for user ${userId} in organization ${orgId}`);
+      
+      const userAssets = await db.query.assets.findMany({
+        where: and(
+          eq(assets.author, userId),
+          eq(assets.orgId, orgId)
+        ),
+        orderBy: [desc(assets.createdAt)]
+      });
+      
+      logger.info(`Found ${userAssets.length} assets for user ${userId} in organization ${orgId}`);
+      return userAssets as Asset[];
+    } catch (error) {
+      logger.error(`Error getting assets for user ${userId} in org ${orgId}:`, error);
+      throw new Error(`Failed to get assets: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
   
   // Get all assets for a user by userId without organization
   async getAssetsByUserId(userId: string): Promise<Asset[]> {
-    logger.info(`Getting all assets for user ${userId} without organization filter`);
-    
-    const userAssets = await db.query.assets.findMany({
-      where: eq(assets.author, userId),
-      orderBy: [desc(assets.createdAt)]
-    });
-    
-    logger.info(`Found ${userAssets.length} assets for user ${userId}`);
-    return userAssets as Asset[];
+    try {
+      logger.info(`Getting all assets for user ${userId} without organization filter`);
+      
+      const userAssets = await db.query.assets.findMany({
+        where: eq(assets.author, userId),
+        orderBy: [desc(assets.createdAt)]
+      });
+      
+      logger.info(`Found ${userAssets.length} assets for user ${userId}`);
+      return userAssets as Asset[];
+    } catch (error) {
+      logger.error(`Error getting assets for user ${userId}:`, error);
+      throw new Error(`Failed to get assets for user: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
   
   // Get all assets for an organization
@@ -161,6 +174,7 @@ export class AssetDBService {
     logger.info(`Getting all assets for organization ID: ${orgId}`);
     
     const orgAssets = await db.query.assets.findMany({
+      where: eq(assets.orgId, orgId),
       orderBy: [desc(assets.createdAt)]
     });
     

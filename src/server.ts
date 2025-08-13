@@ -113,6 +113,8 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 // Function to initialize database tables
 async function initializeDatabase() {
   try {
+    // Suppress PostgreSQL NOTICE messages during boot-time DDL
+    await db.execute(sql`SET client_min_messages TO WARNING;`);
     // First run migrations to ensure tables exist
     try {
       await ensureTables();
@@ -224,6 +226,50 @@ async function initializeDatabase() {
         WHERE table_name = 'assets'
       );
     `);
+    
+    // Check if org_id column exists in assets table
+    const orgIdColumnCheck = await db.execute(sql`
+      SELECT EXISTS (
+        SELECT FROM information_schema.columns 
+        WHERE table_name = 'assets' AND column_name = 'org_id'
+      );
+    `);
+    
+    // Add org_id column if assets table exists but column doesn't
+    if (assetTableCheck[0]?.exists && !orgIdColumnCheck[0]?.exists) {
+      logger.info('Assets table exists but missing org_id column, adding it...');
+      try {
+        // Add org_id column to assets table
+        await db.execute(sql`ALTER TABLE assets ADD COLUMN IF NOT EXISTS org_id text;`);
+        
+        // Update existing assets with org_id from their associated chat_threads
+        await db.execute(sql`
+          UPDATE assets 
+          SET org_id = chat_threads.org_id
+          FROM chat_threads 
+          WHERE assets.thread_id = chat_threads.id 
+          AND assets.org_id IS NULL;
+        `);
+        
+        // For any remaining assets without org_id (orphaned assets), set to admin org
+        await db.execute(sql`
+          UPDATE assets 
+          SET org_id = 'org_2vuyiIbzL85gWIeDV0i6xODX048'
+          WHERE org_id IS NULL;
+        `);
+        
+        // Make org_id NOT NULL after populating data
+        await db.execute(sql`ALTER TABLE assets ALTER COLUMN org_id SET NOT NULL;`);
+        
+        // Add indexes for better performance
+        await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_assets_org_id ON assets(org_id);`);
+        await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_assets_author_org_id ON assets(author, org_id);`);
+        
+        logger.info('✅ Successfully added org_id column to assets table');
+      } catch (orgIdError) {
+        logger.error('Error adding org_id column to assets table:', orgIdError);
+      }
+    }
     
     if (!assetTableCheck[0]?.exists) {
       logger.info('Assets table not found, running full database initialization...');
@@ -1134,6 +1180,8 @@ async function initializeContextAwareChat(): Promise<boolean> {
 async function initializeRAGSystem(): Promise<boolean> {
   try {
     logger.info('Initializing RAG system...');
+    // Suppress PostgreSQL NOTICE messages during pgvector setup and index creation
+    await db.execute(sql`SET client_min_messages TO WARNING;`);
     
     // Create uploads directory if it doesn't exist
     const uploadDir = process.env.UPLOAD_DIR || './uploads';
@@ -1489,7 +1537,7 @@ async function initializeRAGSystem(): Promise<boolean> {
                            WHERE table_name = 'conversation_embeddings' 
                            AND column_name = 'embedding_vector' 
                            AND data_type != 'USER-DEFINED') THEN
-                      RAISE NOTICE 'Converting conversation_embeddings.embedding_vector to vector(1536)...';
+                      RAISE DEBUG 'Converting conversation_embeddings.embedding_vector to vector(1536)...';
                       ALTER TABLE conversation_embeddings 
                       ALTER COLUMN embedding_vector TYPE vector(1536) USING 
                         CASE 
@@ -1497,11 +1545,11 @@ async function initializeRAGSystem(): Promise<boolean> {
                           WHEN embedding_vector = '' THEN NULL
                           ELSE embedding_vector::vector
                         END;
-                      RAISE NOTICE 'Successfully converted conversation_embeddings.embedding_vector';
+                      RAISE DEBUG 'Successfully converted conversation_embeddings.embedding_vector';
                   END IF;
               EXCEPTION
                   WHEN OTHERS THEN
-                      RAISE NOTICE 'Could not convert conversation_embeddings.embedding_vector to vector type: %', SQLERRM;
+                      RAISE DEBUG 'Could not convert conversation_embeddings.embedding_vector to vector type: %', SQLERRM;
               END;
               
               -- Convert rag_documents.embedding_vector to proper vector type if needed
@@ -1510,7 +1558,7 @@ async function initializeRAGSystem(): Promise<boolean> {
                            WHERE table_name = 'rag_documents' 
                            AND column_name = 'embedding_vector' 
                            AND data_type != 'USER-DEFINED') THEN
-                      RAISE NOTICE 'Converting rag_documents.embedding_vector to vector(1536)...';
+                      RAISE DEBUG 'Converting rag_documents.embedding_vector to vector(1536)...';
                       ALTER TABLE rag_documents 
                       ALTER COLUMN embedding_vector TYPE vector(1536) USING 
                         CASE 
@@ -1518,11 +1566,11 @@ async function initializeRAGSystem(): Promise<boolean> {
                           WHEN embedding_vector = '' THEN NULL
                           ELSE embedding_vector::vector
                         END;
-                      RAISE NOTICE 'Successfully converted rag_documents.embedding_vector';
+                      RAISE DEBUG 'Successfully converted rag_documents.embedding_vector';
                   END IF;
               EXCEPTION
                   WHEN OTHERS THEN
-                      RAISE NOTICE 'Could not convert rag_documents.embedding_vector to vector type: %', SQLERRM;
+                      RAISE DEBUG 'Could not convert rag_documents.embedding_vector to vector type: %', SQLERRM;
               END;
               
               -- Convert user_uploads.embedding_vector to proper vector type if needed
@@ -1531,7 +1579,7 @@ async function initializeRAGSystem(): Promise<boolean> {
                            WHERE table_name = 'user_uploads' 
                            AND column_name = 'embedding_vector' 
                            AND data_type != 'USER-DEFINED') THEN
-                      RAISE NOTICE 'Converting user_uploads.embedding_vector to vector(1536)...';
+                      RAISE DEBUG 'Converting user_uploads.embedding_vector to vector(1536)...';
                       ALTER TABLE user_uploads 
                       ALTER COLUMN embedding_vector TYPE vector(1536) USING 
                         CASE 
@@ -1539,11 +1587,11 @@ async function initializeRAGSystem(): Promise<boolean> {
                           WHEN embedding_vector = '' THEN NULL
                           ELSE embedding_vector::vector
                         END;
-                      RAISE NOTICE 'Successfully converted user_uploads.embedding_vector';
+                      RAISE DEBUG 'Successfully converted user_uploads.embedding_vector';
                   END IF;
               EXCEPTION
                   WHEN OTHERS THEN
-                      RAISE NOTICE 'Could not convert user_uploads.embedding_vector to vector type: %', SQLERRM;
+                      RAISE DEBUG 'Could not convert user_uploads.embedding_vector to vector type: %', SQLERRM;
               END;
               
               -- Convert asset_history.embedding_vector to proper vector type if needed
@@ -1552,7 +1600,7 @@ async function initializeRAGSystem(): Promise<boolean> {
                            WHERE table_name = 'asset_history' 
                            AND column_name = 'embedding_vector' 
                            AND data_type != 'USER-DEFINED') THEN
-                      RAISE NOTICE 'Converting asset_history.embedding_vector to vector(1536)...';
+                      RAISE DEBUG 'Converting asset_history.embedding_vector to vector(1536)...';
                       ALTER TABLE asset_history 
                       ALTER COLUMN embedding_vector TYPE vector(1536) USING 
                         CASE 
@@ -1560,11 +1608,11 @@ async function initializeRAGSystem(): Promise<boolean> {
                           WHEN embedding_vector = '' THEN NULL
                           ELSE embedding_vector::vector
                         END;
-                      RAISE NOTICE 'Successfully converted asset_history.embedding_vector';
+                      RAISE DEBUG 'Successfully converted asset_history.embedding_vector';
                   END IF;
               EXCEPTION
                   WHEN OTHERS THEN
-                      RAISE NOTICE 'Could not convert asset_history.embedding_vector to vector type: %', SQLERRM;
+                      RAISE DEBUG 'Could not convert asset_history.embedding_vector to vector type: %', SQLERRM;
               END;
               
               -- Convert knowledge_cache.query_embedding_vector to proper vector type if needed
@@ -1573,7 +1621,7 @@ async function initializeRAGSystem(): Promise<boolean> {
                            WHERE table_name = 'knowledge_cache' 
                            AND column_name = 'query_embedding_vector' 
                            AND data_type != 'USER-DEFINED') THEN
-                      RAISE NOTICE 'Converting knowledge_cache.query_embedding_vector to vector(1536)...';
+                      RAISE DEBUG 'Converting knowledge_cache.query_embedding_vector to vector(1536)...';
                       ALTER TABLE knowledge_cache 
                       ALTER COLUMN query_embedding_vector TYPE vector(1536) USING 
                         CASE 
@@ -1581,14 +1629,14 @@ async function initializeRAGSystem(): Promise<boolean> {
                           WHEN query_embedding_vector = '' THEN NULL
                           ELSE query_embedding_vector::vector
                         END;
-                      RAISE NOTICE 'Successfully converted knowledge_cache.query_embedding_vector';
+                      RAISE DEBUG 'Successfully converted knowledge_cache.query_embedding_vector';
                   END IF;
               EXCEPTION
                   WHEN OTHERS THEN
-                      RAISE NOTICE 'Could not convert knowledge_cache.query_embedding_vector to vector type: %', SQLERRM;
+                      RAISE DEBUG 'Could not convert knowledge_cache.query_embedding_vector to vector type: %', SQLERRM;
               END;
               
-              RAISE NOTICE 'Vector column type conversion completed';
+              RAISE DEBUG 'Vector column type conversion completed';
           END
           $$;
         `);
@@ -1667,11 +1715,11 @@ async function initializeRAGSystem(): Promise<boolean> {
                         migration_count := migration_count + 1;
                     EXCEPTION
                         WHEN OTHERS THEN
-                            RAISE NOTICE 'Failed to migrate embedding for conversation_embeddings id %: %', rec.id, SQLERRM;
+                            RAISE DEBUG 'Failed to migrate embedding for conversation_embeddings id %: %', rec.id, SQLERRM;
                     END;
                 END LOOP;
                 
-                RAISE NOTICE 'Migrated % conversation embeddings', migration_count;
+                RAISE DEBUG 'Migrated % conversation embeddings', migration_count;
                 migration_count := 0;
 
                 -- Migrate rag_documents
@@ -1686,11 +1734,11 @@ async function initializeRAGSystem(): Promise<boolean> {
                         migration_count := migration_count + 1;
                     EXCEPTION
                         WHEN OTHERS THEN
-                            RAISE NOTICE 'Failed to migrate embedding for rag_documents id %: %', rec.id, SQLERRM;
+                            RAISE DEBUG 'Failed to migrate embedding for rag_documents id %: %', rec.id, SQLERRM;
                     END;
                 END LOOP;
                 
-                RAISE NOTICE 'Migrated % rag document embeddings', migration_count;
+                RAISE DEBUG 'Migrated % rag document embeddings', migration_count;
                 migration_count := 0;
 
                 -- Migrate user_uploads
@@ -1705,13 +1753,13 @@ async function initializeRAGSystem(): Promise<boolean> {
                         migration_count := migration_count + 1;
                     EXCEPTION
                         WHEN OTHERS THEN
-                            RAISE NOTICE 'Failed to migrate embedding for user_uploads id %: %', rec.id, SQLERRM;
+                            RAISE DEBUG 'Failed to migrate embedding for user_uploads id %: %', rec.id, SQLERRM;
                     END;
                 END LOOP;
                 
-                RAISE NOTICE 'Migrated % user upload embeddings', migration_count;
+                RAISE DEBUG 'Migrated % user upload embeddings', migration_count;
                 
-                RAISE NOTICE 'pgvector embedding migration completed';
+                RAISE DEBUG 'pgvector embedding migration completed';
             END
             $$;
           `);

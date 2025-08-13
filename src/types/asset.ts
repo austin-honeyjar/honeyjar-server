@@ -16,6 +16,7 @@ export interface Asset {
   subtitle?: string;
   content: string; // Simplified to just string content
   author: string;
+  orgId: string; // Organization ID for proper filtering
   metadata?: any;
   createdAt: Date;
   updatedAt: Date;
@@ -33,5 +34,6 @@ export interface AssetCreationParams {
   subtitle?: string;
   content: string; // Simplified to just string content
   author: string;
+  orgId: string; // Organization ID for proper filtering
   metadata?: any;
 }

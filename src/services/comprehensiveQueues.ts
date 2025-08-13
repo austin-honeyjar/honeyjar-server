@@ -3,16 +3,24 @@ import IORedis from 'ioredis';
 import logger from '../utils/logger';
 
 // Redis connection for all queues (using existing Redis, different DB)
+const sanitize = (value?: string) => (value ?? '').trim();
+
 const redisConfig = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-  password: process.env.REDIS_PASSWORD,
-  db: 1, // Use DB 1 for queues (assuming cache uses DB 0)
-  maxRetriesPerRequest: 3,
+  host: sanitize(process.env.REDIS_HOST) || 'localhost',
+  port: parseInt(sanitize(process.env.REDIS_PORT) || '6379'),
+  password: sanitize(process.env.REDIS_PASSWORD) || undefined,
+  db: 1, // Use DB 1 for queues (DB 0 for cache)
+  // Google Cloud Memorystore optimized settings
+  connectTimeout: 30000,        // 30 seconds for internal Google Cloud network
+  commandTimeout: 15000,        // 15 seconds for command execution
+  lazyConnect: false,           // Connect immediately
+  keepAlive: 30000,            // Keep connection alive
+  family: 4,                   // IPv4 only for Memorystore
+  enableOfflineQueue: false,    // Base client: avoid offline queueing
+  // Retry configuration for Google Cloud Memorystore
   retryDelayOnFailover: 100,
-  // Remove problematic settings that prevent Bull from working
-  // enableReadyCheck: false,  // This prevents proper connection
-  // lazyConnect: true,        // This prevents immediate connection
+  maxRetriesPerRequest: 3,
+  retryStrategy: (times: number) => Math.min(times * 50, 2000), // Conservative backoff for internal network
 };
 
 export const redis = new IORedis(redisConfig);
@@ -25,7 +33,8 @@ redis.on('ready', () => logger.info('🎯 Redis queue connection ready'));
 export const queues = {
   // TIER 1: Critical User-Facing Operations
   intent: new Bull('intent-classification', { 
-    redis: redisConfig,
+    // Bull-specific client uses offline queue to avoid startup race crashes
+    redis: { ...redisConfig, enableOfflineQueue: true },
     defaultJobOptions: {
       removeOnComplete: 100,
       removeOnFail: 50,
@@ -35,7 +44,7 @@ export const queues = {
   }),
 
   openai: new Bull('openai-processing', { 
-    redis: redisConfig,
+    redis: { ...redisConfig, enableOfflineQueue: true },
     defaultJobOptions: {
       removeOnComplete: 100,
       removeOnFail: 50,
@@ -45,7 +54,7 @@ export const queues = {
   }),
 
   rag: new Bull('rag-processing', { 
-    redis: redisConfig,
+    redis: { ...redisConfig, enableOfflineQueue: true },
     defaultJobOptions: {
       removeOnComplete: 50,
       removeOnFail: 25,
@@ -56,7 +65,7 @@ export const queues = {
 
   // TIER 2: Important Background Operations
   security: new Bull('security-classification', { 
-    redis: redisConfig,
+    redis: { ...redisConfig, enableOfflineQueue: true },
     defaultJobOptions: {
       removeOnComplete: 50,
       removeOnFail: 25,
@@ -66,7 +75,7 @@ export const queues = {
   }),
 
   metabase: new Bull('metabase-queries', { 
-    redis: redisConfig,
+    redis: { ...redisConfig, enableOfflineQueue: true },
     defaultJobOptions: {
       removeOnComplete: 50,
       removeOnFail: 25,
@@ -77,7 +86,7 @@ export const queues = {
 
   // TIER 3: Lower Priority Operations
   rocketreach: new Bull('rocketreach-api', { 
-    redis: redisConfig,
+    redis: { ...redisConfig, enableOfflineQueue: true },
     defaultJobOptions: {
       removeOnComplete: 25,
       removeOnFail: 15,
@@ -87,7 +96,7 @@ export const queues = {
   }),
 
   fileProcessing: new Bull('file-processing', { 
-    redis: redisConfig,
+    redis: { ...redisConfig, enableOfflineQueue: true },
     defaultJobOptions: {
       removeOnComplete: 25,
       removeOnFail: 15,
@@ -97,7 +106,7 @@ export const queues = {
   }),
 
   userKnowledge: new Bull('user-knowledge', { 
-    redis: redisConfig,
+    redis: { ...redisConfig, enableOfflineQueue: true },
     defaultJobOptions: {
       removeOnComplete: 50,
       removeOnFail: 25,
@@ -176,7 +185,7 @@ export interface MetabaseJobData {
 // Queue monitoring and health
 export const monitorQueues = async () => {
   try {
-    const queueStats = {};
+    const queueStats: Record<string, any> = {};
     
     for (const [name, queue] of Object.entries(queues)) {
       const counts = await queue.getJobCounts();
@@ -186,7 +195,8 @@ export const monitorQueues = async () => {
     logger.info('📊 Queue Status Report:', queueStats);
     return queueStats;
   } catch (error) {
-    logger.error('❌ Failed to monitor queues:', error);
+    const err = error as Error;
+    logger.error('❌ Failed to monitor queues:', err);
     return {};
   }
 };
@@ -280,7 +290,11 @@ export const findJobAcrossQueues = async (jobId: string) => {
 
 // Queue health check
 export const checkQueueHealth = async () => {
-  const health = {
+  const health: {
+    redis: boolean;
+    queues: Record<string, { status: 'healthy' | 'unhealthy'; counts?: any; error?: string }>;
+    totalJobs: { waiting: number; active: number; completed: number; failed: number };
+  } = {
     redis: false,
     queues: {},
     totalJobs: {
@@ -311,14 +325,16 @@ export const checkQueueHealth = async () => {
         health.totalJobs.completed += counts.completed || 0;
         health.totalJobs.failed += counts.failed || 0;
       } catch (error) {
+        const err = error as Error;
         health.queues[name] = {
           status: 'unhealthy',
-          error: error.message,
+          error: err.message,
         };
       }
     }
   } catch (error) {
-    logger.error('❌ Queue health check failed:', error);
+    const err = error as Error;
+    logger.error('❌ Queue health check failed:', err);
   }
 
   return health;
