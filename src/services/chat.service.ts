@@ -434,7 +434,7 @@ export class ChatService {
    */
   async* handleUserMessageStream(
     threadId: string, 
-    content: string, 
+    content: string | any, 
     userId?: string, 
     orgId?: string
   ): AsyncGenerator<{
@@ -444,48 +444,84 @@ export class ChatService {
     // Generate unique request ID for this streaming session
     const requestId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
+    // Handle both string content and structured content objects
+    const contentText = typeof content === 'string' 
+      ? content 
+      : (content?.text || JSON.stringify(content));
+    
+    // Check if this is a direct workflow action (bypass intent classification)
+    const isDirectWorkflowAction = typeof content === 'object' && 
+      content?.type === 'workflow_action' &&
+      content?.decorators?.some((d: any) => d.type === 'workflow_start');
+    
     logger.info('🎯 SIMPLIFIED STREAMING: Starting unified workflow execution', {
       requestId,
       threadId: threadId.substring(0, 8),
-      userInput: content.substring(0, 50),
+      userInput: contentText.substring(0, 50),
+      contentType: typeof content,
+      isDirectWorkflowAction,
       hasUserId: !!userId
     });
 
     try {
       // Save user message first
-      const userMessage = await this.addMessage(threadId, content, true);
+      const userMessage = await this.addMessage(threadId, contentText, true);
       
       yield {
         type: 'message_saved',
-        data: { messageId: userMessage?.id, role: 'user', content }
+        data: { messageId: userMessage?.id, role: 'user', content: contentText }
       };
 
-      // 🧠 UNIVERSAL INTENT CLASSIFICATION - Applied to ALL user messages
-      logger.info('🧠 Applying universal intent classification to user input');
+      let intent: any;
+      let currentWorkflow: any;
       
-      // Show thinking message to user
-      yield {
-        type: 'ai_response',
-        data: {
-          content: '_Understanding your request..._',
-          isComplete: true
-        }
-      };
+      if (isDirectWorkflowAction) {
+        // Skip intent classification for direct workflow actions
+        logger.info('🎯 DIRECT WORKFLOW ACTION: Bypassing intent classification');
+        
+        // Extract workflow type from the structured content
+        const workflowType = content?.decorators?.find((d: any) => d.type === 'workflow_start')?.data?.workflowType;
+        
+        // Create a direct intent for workflow creation
+        intent = {
+          category: 'workflow_creation',
+          action: 'start_workflow',
+          workflowName: workflowType,
+          confidence: 1.0,
+          reasoning: 'Direct workflow action from button click'
+        };
+        
+        currentWorkflow = null; // No existing workflow for new workflow creation
+      } else {
+        // 🧠 UNIVERSAL INTENT CLASSIFICATION - Applied to text-based user messages
+        logger.info('🧠 Applying universal intent classification to user input');
+        
+        // Show thinking message to user
+        yield {
+          type: 'ai_response',
+          data: {
+            content: '_Understanding your request..._',
+            isComplete: true
+          }
+        };
+        
+        currentWorkflow = await this.workflowService.getWorkflowByThreadId(threadId);
+        const ragContext = await this.gatherRagContext(threadId, userId, orgId);
+        
+        intent = await this.classifyUserIntent(contentText, threadId, currentWorkflow, ragContext);
+      }
       
-      const currentWorkflow = await this.workflowService.getWorkflowByThreadId(threadId);
-      const ragContext = await this.gatherRagContext(threadId, userId, orgId);
-      
-      const intent = await this.classifyUserIntent(content, threadId, currentWorkflow, ragContext);
-      
-      // Show intent result to user
-      const intentMessage = this.formatIntentMessage(intent);
-      yield {
-        type: 'ai_response',
-        data: {
-          content: intentMessage,
-          isComplete: true
-        }
-      };
+      // Show intent result to user (skip for direct workflow actions)
+      if (!isDirectWorkflowAction) {
+        const intentMessage = this.formatIntentMessage(intent);
+        yield {
+          type: 'ai_response',
+          data: {
+            content: intentMessage,
+            isComplete: true
+          }
+        };
+      }
       
       yield {
         type: 'intent_classified',
@@ -525,7 +561,7 @@ export class ChatService {
         const intentGenerator = await this.intentService.handleIntent(
           intent,
           threadId,
-          content,
+          contentText,
           this.workflowService,
           userId,
           orgId
@@ -550,7 +586,7 @@ export class ChatService {
         const intentGenerator = await this.intentService.handleIntent(
           intent,
           threadId,
-          content,
+          contentText,
           this.workflowService,
           userId,
           orgId
@@ -575,7 +611,7 @@ export class ChatService {
       // Pass intent context to the enhanced workflow service
       for await (const chunk of this.workflowService.handleStepResponseStreamWithContext(
         effectiveStepId,
-        content,
+        contentText,
         userId || '',
         orgId || '',
         { intent } // Pass the classified intent to guide response generation
@@ -690,6 +726,9 @@ export class ChatService {
                 return false;
               });
               
+              // Determine asset type from step name or content
+              const assetType = this.determineAssetTypeFromStep(chunk.data.stepName, chunk.data.finalResponse);
+              
               if (existingAssetMessage) {
                 logger.info('💾 Enhanced streaming: Skipping duplicate asset message - similar content already exists', {
                   assetType,
@@ -701,8 +740,6 @@ export class ChatService {
                 
                 // Only add structured asset message if we have a valid step ID
                 if (currentStepId) {
-                  // Determine asset type from step name or content
-                  const assetType = this.determineAssetTypeFromStep(chunk.data.stepName, chunk.data.finalResponse);
                   
                   // Call Enhanced Workflow Service to add asset message
                   await this.workflowService.addAssetMessage(
