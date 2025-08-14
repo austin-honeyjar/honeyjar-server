@@ -445,9 +445,21 @@ export class ChatService {
     const requestId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
     // Handle both string content and structured content objects
-    const contentText = typeof content === 'string' 
-      ? content 
-      : (content?.text || JSON.stringify(content));
+    let contentText: string;
+    if (typeof content === 'string') {
+      contentText = content;
+    } else if (content?.text) {
+      contentText = content.text;
+    } else if (content?.title) {
+      contentText = content.title;
+    } else {
+      // Fallback to JSON string, but clean it up
+      contentText = JSON.stringify(content);
+      // Remove extra quotes if present
+      if (contentText.startsWith('"') && contentText.endsWith('"')) {
+        contentText = contentText.slice(1, -1);
+      }
+    }
     
     // Check if this is a direct workflow action (bypass intent classification)
     const isDirectWorkflowAction = typeof content === 'object' && 
