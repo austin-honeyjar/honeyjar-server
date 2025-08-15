@@ -101,23 +101,32 @@ export class ThreadTitleService {
         };
       }
 
-      // Run multiple checks in parallel for efficiency
+      // Run checks for the two essential triggers
       const [
         messageThresholdCheck,
-        intentShiftCheck,
-        workflowTransitionCheck
+        workflowCompletionCheck
       ] = await Promise.all([
         this.checkMessageThreshold(messageCount, preferences.frequency),
-        this.checkIntentShift(threadId, userId, orgId),
-        this.checkWorkflowTransition(threadId)
+        this.checkWorkflowCompletion(threadId)
       ]);
 
-      // Timing check temporarily removed for testing - titles will update immediately
-
-      // Return the first positive check
-      if (messageThresholdCheck.shouldUpdate) return messageThresholdCheck;
-      if (intentShiftCheck.shouldUpdate) return intentShiftCheck;
-      if (workflowTransitionCheck.shouldUpdate) return workflowTransitionCheck;
+      // Return the first positive check with debug logging
+      if (messageThresholdCheck.shouldUpdate) {
+        logger.info('🏷️ Title update triggered by MESSAGE THRESHOLD', {
+          threadId: threadId.substring(0, 8),
+          reason: messageThresholdCheck.reason,
+          messageCount: messageThresholdCheck.messageCount
+        });
+        return messageThresholdCheck;
+      }
+      if (workflowCompletionCheck.shouldUpdate) {
+        logger.info('🏷️ Title update triggered by WORKFLOW COMPLETION', {
+          threadId: threadId.substring(0, 8),
+          reason: workflowCompletionCheck.reason,
+          messageCount: workflowCompletionCheck.messageCount
+        });
+        return workflowCompletionCheck;
+      }
 
       return {
         shouldUpdate: false,
@@ -542,96 +551,16 @@ TITLE:`;
     };
   }
 
+  // Intent shift checking removed - simplified to only message thresholds and workflow completion
+
   /**
-   * Check for intent shifts in recent conversation
+   * Check for workflow completion (trigger when workflow finishes)
    */
-  private async checkIntentShift(threadId: string, userId: string, orgId: string): Promise<{
+  private async checkWorkflowCompletion(threadId: string): Promise<{
     shouldUpdate: boolean;
     reason?: string;
     messageCount: number;
   }> {
-    try {
-      // Get recent messages to analyze intent shift
-      const recentMessages = await db
-        .select({
-          content: chatMessages.content,
-          role: chatMessages.role,
-          createdAt: chatMessages.createdAt
-        })
-        .from(chatMessages)
-        .where(eq(chatMessages.threadId, threadId))
-        .orderBy(desc(chatMessages.createdAt))
-        .limit(12);
-
-      const messageCount = recentMessages.length;
-
-      if (messageCount < 8) {
-        return { shouldUpdate: false, reason: 'Not enough messages for intent analysis', messageCount };
-      }
-
-      // Split into early and recent messages
-      const earlyMessages = recentMessages.slice(-6).filter(m => m.role === 'user');
-      const recentMessagesFiltered = recentMessages.slice(0, 6).filter(m => m.role === 'user');
-
-      if (earlyMessages.length < 2 || recentMessagesFiltered.length < 2) {
-        return { shouldUpdate: false, reason: 'Not enough user messages for intent analysis', messageCount };
-      }
-
-      // Simple keyword-based intent detection
-      const workflowKeywords = {
-        'press_release': ['press release', 'announcement', 'news', 'media'],
-        'blog_post': ['blog', 'article', 'post', 'content'],
-        'social_media': ['social', 'twitter', 'linkedin', 'facebook', 'instagram'],
-        'email': ['email', 'newsletter', 'campaign', 'outreach'],
-        'pitch': ['pitch', 'proposal', 'deck', 'presentation'],
-        'general': ['help', 'question', 'how', 'what', 'why']
-      };
-
-      const detectIntent = (messages: any[]) => {
-        const text = messages.map(m => 
-          typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-        ).join(' ').toLowerCase();
-
-        for (const [intent, keywords] of Object.entries(workflowKeywords)) {
-          if (keywords.some(keyword => text.includes(keyword))) {
-            return intent;
-          }
-        }
-        return 'general';
-      };
-
-      const earlyIntent = detectIntent(earlyMessages);
-      const recentIntent = detectIntent(recentMessagesFiltered);
-
-      if (earlyIntent !== recentIntent && recentIntent !== 'general') {
-        return {
-          shouldUpdate: true,
-          reason: `Intent shift detected: ${earlyIntent} → ${recentIntent}`,
-          messageCount
-        };
-      }
-
-      return {
-        shouldUpdate: false,
-        reason: `No significant intent shift (${earlyIntent} → ${recentIntent})`,
-        messageCount
-      };
-
-    } catch (error) {
-      logger.error('Error checking intent shift:', { error, threadId });
-      return { shouldUpdate: false, reason: 'Error analyzing intent shift', messageCount: 0 };
-    }
-  }
-
-  /**
-   * Check for workflow transitions (simplified)
-   */
-  private async checkWorkflowTransition(threadId: string): Promise<{
-    shouldUpdate: boolean;
-    reason?: string;
-    messageCount: number;
-  }> {
-    // Simplified: Just check if we have a workflow (indicates workflow activity)
     try {
       const { enhancedWorkflowService } = await import('./enhanced-workflow.service');
       const workflow = await enhancedWorkflowService.getWorkflowByThreadId(threadId);
@@ -642,17 +571,33 @@ TITLE:`;
         .where(eq(chatMessages.threadId, threadId));
       const messageCount = messageCountResult[0]?.count || 0;
 
-      if (workflow) {
-        return {
-          shouldUpdate: true,
-          reason: 'Active workflow detected',
-          messageCount
-        };
+      if (!workflow) {
+        return { shouldUpdate: false, reason: 'No workflow found', messageCount };
       }
 
-      return { shouldUpdate: false, reason: 'No active workflow', messageCount };
+      // Check if workflow was recently completed (within last 2 minutes)
+      if (workflow.status === 'completed') {
+        const completedAt = new Date(workflow.updatedAt || '').getTime();
+        const now = Date.now();
+        const minutesSinceCompletion = (now - completedAt) / (1000 * 60);
+
+        // Only trigger if workflow was completed very recently (< 2 minutes)
+        if (minutesSinceCompletion < 2) {
+          return {
+            shouldUpdate: true,
+            reason: 'Workflow completed',
+            messageCount
+          };
+        }
+      }
+
+      return { 
+        shouldUpdate: false, 
+        reason: `Workflow not recently completed (status: ${workflow.status})`, 
+        messageCount 
+      };
     } catch (error) {
-      return { shouldUpdate: false, reason: 'Could not check workflow', messageCount: 0 };
+      return { shouldUpdate: false, reason: 'Could not check workflow completion', messageCount: 0 };
     }
   }
 
