@@ -13,6 +13,7 @@ import { requireOrgRole } from '../middleware/org.middleware';
 import { WorkflowDBService } from '../services/workflowDB.service';
 import { ChatService } from '../services/chat.service';
 import { enhancedWorkflowService } from '../services/enhanced-workflow.service';
+import { threadTitleService } from '../services/thread-title.service';
 import { simpleCache } from '../utils/simpleCache';
 import { requirePermission } from '../middleware/permissions.middleware';
 import { ApiError } from '../utils/error';
@@ -697,5 +698,202 @@ router.post('/:threadId/messages',
   validateRequest(createChatSchema), 
   chatController.create
 );
+
+/**
+ * @swagger
+ * /api/v1/threads/{threadId}/title/update:
+ *   post:
+ *     summary: Force update thread title
+ *     tags: [Threads]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: threadId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Thread ID
+ *     responses:
+ *       200:
+ *         description: Title updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 updated:
+ *                   type: boolean
+ *                 newTitle:
+ *                   type: string
+ *                 reason:
+ *                   type: string
+ *                 messageCount:
+ *                   type: number
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Thread not found
+ *       500:
+ *         description: Server error
+ */
+router.post('/:threadId/title/update', async (req: AuthRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ 
+        status: 'error', 
+        message: 'User not authenticated' 
+      });
+    }
+
+    const { threadId } = req.params;
+    const orgId = Array.isArray(req.headers['x-organization-id']) 
+      ? req.headers['x-organization-id'][0]
+      : req.headers['x-organization-id'];
+
+    if (!orgId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Organization ID is required'
+      });
+    }
+
+    // Verify thread exists and user has access
+    const thread = await db.query.chatThreads.findFirst({
+      where: and(
+        eq(chatThreads.id, threadId),
+        eq(chatThreads.userId, req.user.id),
+        eq(chatThreads.orgId, orgId)
+      )
+    });
+
+    if (!thread) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Thread not found or access denied'
+      });
+    }
+
+    logger.info('Force updating thread title:', { 
+      userId: req.user.id,
+      threadId: threadId.substring(0, 8),
+      orgId
+    });
+
+    // Force update the title
+    const result = await threadTitleService.forceUpdateTitle(threadId, req.user.id, orgId);
+
+    // Invalidate cache
+    simpleCache.del(`thread:${threadId}`);
+    simpleCache.del(`threads:${req.user.id}:${orgId}`);
+
+    res.json(result);
+
+  } catch (error) {
+    logger.error('Error updating thread title:', { error });
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to update thread title' 
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/threads/{threadId}/title/stats:
+ *   get:
+ *     summary: Get thread title update statistics
+ *     tags: [Threads]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: threadId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Thread ID
+ *     responses:
+ *       200:
+ *         description: Title statistics retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 messageCount:
+ *                   type: number
+ *                 lastUpdateCount:
+ *                   type: number
+ *                 messagesSinceLastUpdate:
+ *                   type: number
+ *                 updateHistory:
+ *                   type: array
+ *                 nextUpdateThreshold:
+ *                   type: number
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Thread not found
+ *       500:
+ *         description: Server error
+ */
+router.get('/:threadId/title/stats', async (req: AuthRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ 
+        status: 'error', 
+        message: 'User not authenticated' 
+      });
+    }
+
+    const { threadId } = req.params;
+    const orgId = Array.isArray(req.headers['x-organization-id']) 
+      ? req.headers['x-organization-id'][0]
+      : req.headers['x-organization-id'];
+
+    if (!orgId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Organization ID is required'
+      });
+    }
+
+    // Verify thread exists and user has access
+    const thread = await db.query.chatThreads.findFirst({
+      where: and(
+        eq(chatThreads.id, threadId),
+        eq(chatThreads.userId, req.user.id),
+        eq(chatThreads.orgId, orgId)
+      )
+    });
+
+    if (!thread) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Thread not found or access denied'
+      });
+    }
+
+    // Get title update statistics
+    const stats = await threadTitleService.getTitleUpdateStats(threadId);
+
+    if (!stats) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Could not retrieve title statistics'
+      });
+    }
+
+    res.json(stats);
+
+  } catch (error) {
+    logger.error('Error getting thread title stats:', { error });
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to get thread title statistics' 
+    });
+  }
+});
 
 export default router; 

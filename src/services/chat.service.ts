@@ -438,7 +438,7 @@ export class ChatService {
     userId?: string, 
     orgId?: string
   ): AsyncGenerator<{
-    type: 'message_saved' | 'workflow_status' | 'ai_response' | 'workflow_complete' | 'error' | 'intent_classified' | 'done';
+    type: 'message_saved' | 'workflow_status' | 'ai_response' | 'workflow_complete' | 'error' | 'intent_classified' | 'title_updated' | 'done';
     data: any;
   }> {
     // Generate unique request ID for this streaming session

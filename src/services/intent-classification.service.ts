@@ -1,5 +1,6 @@
 import { OpenAIService } from './openai.service';
 import { MessageContentHelper } from '../types/chat-message';
+import { threadTitleService, ThreadTitleUpdateResult } from './thread-title.service';
 import { db } from '../db';
 import { chatMessages } from '../db/schema';
 import { eq } from 'drizzle-orm';
@@ -667,6 +668,7 @@ Provide a helpful, contextual response. If the user is asking about a specific t
     data: any;
   }>> {
 
+    const self = this; // Capture 'this' context for use in generator
     async function* workflowManagementGenerator() {
       try {
         logger.info('INTENT SERVICE: Handling workflow management intent', {
@@ -710,7 +712,7 @@ Provide a helpful, contextual response. If the user is asking about a specific t
             };
 
             // Create the new workflow
-            const workflowActionGenerator = await this.handleWorkflowActionIntent(
+            const workflowActionGenerator = await self.handleWorkflowActionIntent(
               {
                 ...intent,
                 category: 'workflow_action',
@@ -773,7 +775,7 @@ Provide a helpful, contextual response. If the user is asking about a specific t
     userId?: string,
     orgId?: string
   ): Promise<AsyncGenerator<{
-    type: 'ai_response' | 'done';
+    type: 'ai_response' | 'done' | 'title_updated';
     data: any;
   }>> {
 
@@ -783,6 +785,42 @@ Provide a helpful, contextual response. If the user is asking about a specific t
       workflowName: intent.workflowName,
       threadId: threadId.substring(0, 8)
     });
+
+    // Check if we should update the thread title before processing intent
+    if (userId && orgId) {
+      try {
+        logger.info('🏷️ Checking thread title update', {
+          threadId: threadId.substring(0, 8),
+          userId: userId.substring(0, 8),
+          orgId: orgId.substring(0, 8)
+        });
+        
+        const titleUpdateResult = await this.checkAndUpdateThreadTitle(threadId, userId, orgId);
+        
+        logger.info('🏷️ Title update check result', {
+          threadId: threadId.substring(0, 8),
+          updated: titleUpdateResult.updated,
+          shouldUpdate: titleUpdateResult.shouldUpdate,
+          reason: titleUpdateResult.reason,
+          messageCount: titleUpdateResult.messageCount
+        });
+        
+        if (titleUpdateResult.updated) {
+          logger.info('🏷️ Thread title updated during intent processing', {
+            threadId: threadId.substring(0, 8),
+            newTitle: titleUpdateResult.newTitle
+          });
+        }
+      } catch (titleError) {
+        logger.error('🏷️ Error checking thread title update during intent processing:', { error: titleError, threadId });
+      }
+    } else {
+      logger.warn('🏷️ Skipping title update check - missing userId or orgId', {
+        threadId: threadId.substring(0, 8),
+        hasUserId: !!userId,
+        hasOrgId: !!orgId
+      });
+    }
 
     switch (intent.category) {
       case 'workflow_action':
@@ -931,5 +969,57 @@ Provide a helpful, contextual response. If the user is asking about a specific t
     }
 
     return conversationalGenerator();
+  }
+
+  /**
+   * Check if thread title should be updated and update it if needed
+   */
+  private async checkAndUpdateThreadTitle(
+    threadId: string, 
+    userId: string, 
+    orgId: string
+  ): Promise<ThreadTitleUpdateResult> {
+    try {
+      // Check if title should be updated
+      const shouldUpdate = await threadTitleService.shouldUpdateTitle(threadId, userId, orgId);
+      
+      if (!shouldUpdate.shouldUpdate) {
+        return {
+          updated: false,
+          reason: shouldUpdate.reason,
+          messageCount: shouldUpdate.messageCount,
+          shouldUpdate: false
+        };
+      }
+
+      // Update the title
+      logger.info('Updating thread title via intent service', {
+        threadId: threadId.substring(0, 8),
+        reason: shouldUpdate.reason,
+        messageCount: shouldUpdate.messageCount
+      });
+
+      return await threadTitleService.updateThreadTitle(threadId, userId, orgId);
+
+    } catch (error) {
+      logger.error('Error in checkAndUpdateThreadTitle:', { error, threadId });
+      return {
+        updated: false,
+        reason: `Error: ${error.message}`,
+        shouldUpdate: false
+      };
+    }
+  }
+
+  /**
+   * Get title update statistics for debugging
+   */
+  async getTitleUpdateStats(threadId: string): Promise<any> {
+    try {
+      return await threadTitleService.getTitleUpdateStats(threadId);
+    } catch (error) {
+      logger.error('Error getting title update stats:', { error, threadId });
+      return null;
+    }
   }
 }

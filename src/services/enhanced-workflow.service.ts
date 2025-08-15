@@ -26,6 +26,7 @@ import { WorkflowSecurityService } from './workflowSecurityService';
 import { WorkflowContextService } from './workflowContextService';
 
 import { EmbeddingService } from './embeddingService';
+import { threadTitleService } from './thread-title.service';
 
 // Template imports (moved from WorkflowService for consolidation)
 import { DUMMY_WORKFLOW_TEMPLATE } from "../templates/workflows/dummy-workflow";
@@ -279,6 +280,46 @@ export class EnhancedWorkflowService {
   ): Promise<EnhancedStepResponse> {
     const startTime = Date.now();
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Check if we should update the thread title before processing step
+    if (userId && orgId) {
+      try {
+        // Get thread ID from step
+        const step = await this.getStepFromService(stepId);
+        if (step) {
+          const workflow = await this.findWorkflowForStep(stepId);
+          if (workflow?.workflow) {
+            const threadId = workflow.workflow.threadId;
+            
+            logger.info('🏷️ Enhanced Service: Checking thread title update', {
+              threadId: threadId.substring(0, 8),
+              stepId: stepId.substring(0, 8),
+              userId: userId.substring(0, 8),
+              orgId: orgId.substring(0, 8)
+            });
+            
+            const titleUpdateResult = await threadTitleService.updateThreadTitle(threadId, userId, orgId);
+            
+            logger.info('🏷️ Enhanced Service: Title update result', {
+              threadId: threadId.substring(0, 8),
+              updated: titleUpdateResult.updated,
+              shouldUpdate: titleUpdateResult.shouldUpdate,
+              reason: titleUpdateResult.reason,
+              messageCount: titleUpdateResult.messageCount
+            });
+            
+            if (titleUpdateResult.updated) {
+              logger.info('🏷️ Enhanced Service: Thread title updated', {
+                threadId: threadId.substring(0, 8),
+                newTitle: titleUpdateResult.newTitle
+              });
+            }
+          }
+        }
+      } catch (titleError) {
+        logger.error('🏷️ Enhanced Service: Error checking thread title update:', { error: titleError, stepId });
+      }
+    }
     
     try {
       logger.info('Enhanced step processing started', { 
@@ -808,6 +849,68 @@ export class EnhancedWorkflowService {
   }> {
     const startTime = Date.now();
     const requestId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Check if we should update the thread title before processing step (STREAMING)
+    if (userId && orgId && userId !== 'system') {
+      try {
+        logger.info('🏷️ Enhanced Service (STREAMING): Starting title update check', {
+          stepId: stepId.substring(0, 8),
+          userId: userId.substring(0, 8),
+          orgId: orgId.substring(0, 8)
+        });
+        
+        // Get workflow and thread ID using the findWorkflowForStep method
+        const workflowForStep = await this.findWorkflowForStep(stepId);
+        
+        if (workflowForStep?.workflow?.threadId) {
+          const threadId = workflowForStep.workflow.threadId;
+          
+          logger.info('🏷️ Enhanced Service (STREAMING): Checking thread title update', {
+            threadId: threadId.substring(0, 8),
+            stepId: stepId.substring(0, 8),
+            userId: userId.substring(0, 8),
+            orgId: orgId.substring(0, 8)
+          });
+          
+          const titleUpdateResult = await threadTitleService.updateThreadTitle(threadId, userId, orgId);
+          
+          logger.info('🏷️ Enhanced Service (STREAMING): Title update result', {
+            threadId: threadId.substring(0, 8),
+            updated: titleUpdateResult.updated,
+            shouldUpdate: titleUpdateResult.shouldUpdate,
+            reason: titleUpdateResult.reason,
+            messageCount: titleUpdateResult.messageCount
+          });
+          
+          if (titleUpdateResult.updated) {
+            logger.info('🏷️ Enhanced Service (STREAMING): Thread title updated', {
+              threadId: threadId.substring(0, 8),
+              newTitle: titleUpdateResult.newTitle
+            });
+            
+            // Yield the title update event to the stream
+            yield {
+              type: 'metadata',
+              data: {
+                type: 'title_updated',
+                threadId: threadId,
+                newTitle: titleUpdateResult.newTitle,
+                reason: titleUpdateResult.reason
+              }
+            };
+          }
+        } else {
+          logger.warn('🏷️ Enhanced Service (STREAMING): Could not find thread ID for step', {
+            stepId: stepId.substring(0, 8)
+          });
+        }
+      } catch (titleError) {
+        logger.error('🏷️ Enhanced Service (STREAMING): Error checking thread title update:', { 
+          error: titleError.message, 
+          stepId: stepId.substring(0, 8) 
+        });
+      }
+    }
     
     try {
       logger.info('Enhanced streaming step processing started', { 
@@ -1809,9 +1912,14 @@ Just let me know what you'd like to create!`
     const isRevision = typeof options === 'boolean' ? options : (options?.isRevision || false);
     
     const messagePrefix = isRevision ? 'Here\'s your revised' : 'Here\'s your generated';
+    
+    // Map asset type to valid MessageContentHelper types
+    const validAssetType: 'text' | 'list' | 'contact' = assetType.toLowerCase().includes('contact') ? 'contact' : 
+                                                        assetType.toLowerCase().includes('list') ? 'list' : 'text';
+    
     const structuredMessage = MessageContentHelper.createAssetMessage(
       `${messagePrefix} ${assetType}:\n\n${assetContent}`,
-      assetType,
+      validAssetType,
       stepId,
       stepName,
       {
