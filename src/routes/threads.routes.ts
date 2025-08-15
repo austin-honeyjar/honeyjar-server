@@ -5,14 +5,15 @@ import { AuthRequest } from '../types/request';
 import { Thread } from '../types/thread';
 import { db } from '../db';
 import { chatThreads, chatMessages, workflows, workflowSteps } from '../db/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, asc, desc } from 'drizzle-orm';
 import { validateRequest } from '../middleware/validation.middleware';
 import { createChatSchema } from '../validators/chat.validator';
 import { chatController } from '../controllers/chatController';
 import { requireOrgRole } from '../middleware/org.middleware';
 import { WorkflowDBService } from '../services/workflowDB.service';
 import { ChatService } from '../services/chat.service';
-import { WorkflowService } from '../services/workflow.service';
+import { enhancedWorkflowService } from '../services/enhanced-workflow.service';
+import { threadTitleService } from '../services/thread-title.service';
 import { simpleCache } from '../utils/simpleCache';
 import { requirePermission } from '../middleware/permissions.middleware';
 import { ApiError } from '../utils/error';
@@ -79,43 +80,138 @@ router.get('/', async (req: AuthRequest, res) => {
 
     const wallStart = Date.now();
 
-    logger.info('Getting threads for user:', { 
+    // Remove pagination - get ALL threads
+    const orderBy = 'createdAt';
+    const orderDir = 'desc';
+
+    logger.info('🔍 CRITICAL DEBUG: Getting threads for user:', { 
       userId: req.user.id,
       orgId,
       sessionId: req.user.sessionId,
-      permissions: req.user.permissions
+      permissions: req.user.permissions,
+      userEmail: req.user.email,
+      userName: req.user.firstName || req.user.email,
+      expectedUserId: 'user_2yxlxLLGfO2IuYmImaBZFItv9KU'
     });
     
-    const cacheKey = `threads:${req.user.id}:${orgId}`;
+    const cacheKey = `threads:${req.user.id}:${orgId}:all:${orderBy}:${orderDir}`;
     const cached = simpleCache.get<any[]>(cacheKey);
     if (cached) {
-      logger.info('Returning threads from cache', { count: cached.length });
+      logger.info('🚀 DEBUG: Returning threads from CACHE', { 
+        count: cached.length,
+        cacheKey,
+        userId: req.user.id,
+        orgId
+      });
+      
+      // Log first 3 cached threads for debugging
+      if (cached.length > 0) {
+        const first3Cached = cached.slice(0, 3).map(t => ({
+          id: t.id,
+          title: t.title,
+          createdAt: t.createdAt
+        }));
+        logger.info('🔍 DEBUG: First 3 cached threads', { first3Cached });
+      }
+      
       logger.info(`[perf] GET /threads finished in ${Date.now() - wallStart} ms`);
+      
+      // Prevent aggressive browser caching for threads list
+      res.set({
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      });
+      
       return res.json({ threads: cached });
     }
     
-    // Try to get threads with org_id first
-    let threads = await db
+    logger.info('💾 DEBUG: No cache found, querying database', { cacheKey });
+    
+    // Build filters (org + user by default). Optionally allow admin to include all users via includeAll=true
+    const includeAll = (Array.isArray(req.query.includeAll) ? req.query.includeAll[0] : (req.query.includeAll as string | undefined)) === 'true';
+
+    const baseWhere = includeAll
+      ? eq(chatThreads.orgId, orgId)
+      : and(eq(chatThreads.orgId, orgId), eq(chatThreads.userId, req.user.id));
+
+    // Use createdAt in descending order (newest first)
+    const orderColumn = chatThreads.createdAt;
+    const orderExpr = desc(orderColumn);
+
+    logger.info('🔍 DEBUG: About to execute database query (NO PAGINATION)', {
+      userId: req.user.id,
+      orgId,
+      orderBy,
+      orderDir,
+      includeAll
+    });
+
+    const threads = await db
       .select()
       .from(chatThreads)
-      .where(
-        and(
-          eq(chatThreads.userId, req.user.id),
-          eq(chatThreads.orgId, orgId)
-        )
-      )
-      .orderBy(chatThreads.createdAt);
+      .where(baseWhere)
+      .orderBy(orderExpr);
+    
+    logger.info('📊 DEBUG: Database query results (ALL THREADS)', {
+      userId: req.user.id,
+      orgId,
+      totalFound: threads.length
+    });
+
+    // Log first 5 and last 5 threads for debugging
+    if (threads.length > 0) {
+      const first5 = threads.slice(0, 5).map(t => ({
+        id: t.id,
+        title: t.title,
+        createdAt: t.createdAt,
+        userId: t.userId,
+        orgId: t.orgId
+      }));
+      
+      const last5 = threads.length > 5 
+        ? threads.slice(-5).map(t => ({
+            id: t.id,
+            title: t.title,
+            createdAt: t.createdAt,
+            userId: t.userId,
+            orgId: t.orgId
+          }))
+        : [];
+
+      logger.info('🔍 DEBUG: First 5 threads from DB', { first5 });
+      if (last5.length > 0) {
+        logger.info('🔍 DEBUG: Last 5 threads from DB', { last5 });
+      }
+
+      // Log date range
+      const newest = threads[0];
+      const oldest = threads[threads.length - 1];
+      logger.info('📅 DEBUG: Date range', {
+        newest: { title: newest.title, date: newest.createdAt },
+        oldest: { title: oldest.title, date: oldest.createdAt }
+      });
+    }
     
     // Cache for 30 seconds
     simpleCache.set(cacheKey, threads, CACHE_TTL);
 
-    logger.info('Returning threads:', { 
+    logger.info('✅ DEBUG: About to return ALL threads response', { 
       userId: req.user.id,
       orgId,
-      count: threads.length
+      count: threads.length,
+      cacheKey
     });
     
     logger.info(`[perf] GET /threads finished in ${Date.now() - wallStart} ms`);
+    
+    // Prevent aggressive browser caching for threads list
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
+    
     res.json({ threads });
   } catch (error) {
     logger.error('Error getting threads:', { error });
@@ -245,6 +341,14 @@ router.get('/:id', async (req: AuthRequest, res) => {
     // Reverse to chronological order for UI
     messages = messages.reverse();
     
+    // Debug logging for message retrieval
+    console.log('🔍 Thread messages query result:', {
+      threadId,
+      messageCount: messages.length,
+      latestMessageIds: messages.slice(-3).map(m => ({ id: m.id, content: m.content?.toString().substring(0, 50) + '...', role: m.role })),
+      queryTime: new Date().toISOString()
+    });
+    
     logger.info('Returning thread:', { 
       userId: req.user.id,
       threadId,
@@ -355,24 +459,12 @@ router.post('/', async (req: AuthRequest, res) => {
       })
       .returning();
     
-    // Initialize the base workflow
-    const workflowService = new WorkflowService();
-    const chatService = new ChatService();
+    // No automatic workflow creation - let the intent layer handle this on demand
+    logger.info('Created thread - workflows will be created on demand via intent layer', {
+      threadId: thread.id
+    });
     
-    // Get the base workflow template
-    const baseTemplate = await workflowService.getTemplateByName('Base Workflow');
-    if (!baseTemplate) {
-      logger.error('Base workflow template not found');
-      return res.status(500).json({ 
-        status: 'error', 
-        message: 'Failed to initialize workflow - template not found' 
-      });
-    }
-    
-    // Create the base workflow - this sends the initial AI message
-    await workflowService.createWorkflow(thread.id, baseTemplate.id);
-    
-    logger.info('Thread created with base workflow:', { 
+    logger.info('Thread created successfully:', { 
       userId: req.user.id,
       orgId,
       threadId: thread.id
@@ -606,5 +698,202 @@ router.post('/:threadId/messages',
   validateRequest(createChatSchema), 
   chatController.create
 );
+
+/**
+ * @swagger
+ * /api/v1/threads/{threadId}/title/update:
+ *   post:
+ *     summary: Force update thread title
+ *     tags: [Threads]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: threadId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Thread ID
+ *     responses:
+ *       200:
+ *         description: Title updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 updated:
+ *                   type: boolean
+ *                 newTitle:
+ *                   type: string
+ *                 reason:
+ *                   type: string
+ *                 messageCount:
+ *                   type: number
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Thread not found
+ *       500:
+ *         description: Server error
+ */
+router.post('/:threadId/title/update', async (req: AuthRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ 
+        status: 'error', 
+        message: 'User not authenticated' 
+      });
+    }
+
+    const { threadId } = req.params;
+    const orgId = Array.isArray(req.headers['x-organization-id']) 
+      ? req.headers['x-organization-id'][0]
+      : req.headers['x-organization-id'];
+
+    if (!orgId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Organization ID is required'
+      });
+    }
+
+    // Verify thread exists and user has access
+    const thread = await db.query.chatThreads.findFirst({
+      where: and(
+        eq(chatThreads.id, threadId),
+        eq(chatThreads.userId, req.user.id),
+        eq(chatThreads.orgId, orgId)
+      )
+    });
+
+    if (!thread) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Thread not found or access denied'
+      });
+    }
+
+    logger.info('Force updating thread title:', { 
+      userId: req.user.id,
+      threadId: threadId.substring(0, 8),
+      orgId
+    });
+
+    // Force update the title
+    const result = await threadTitleService.forceUpdateTitle(threadId, req.user.id, orgId);
+
+    // Invalidate cache
+    simpleCache.del(`thread:${threadId}`);
+    simpleCache.del(`threads:${req.user.id}:${orgId}`);
+
+    res.json(result);
+
+  } catch (error) {
+    logger.error('Error updating thread title:', { error });
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to update thread title' 
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/v1/threads/{threadId}/title/stats:
+ *   get:
+ *     summary: Get thread title update statistics
+ *     tags: [Threads]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: threadId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Thread ID
+ *     responses:
+ *       200:
+ *         description: Title statistics retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 messageCount:
+ *                   type: number
+ *                 lastUpdateCount:
+ *                   type: number
+ *                 messagesSinceLastUpdate:
+ *                   type: number
+ *                 updateHistory:
+ *                   type: array
+ *                 nextUpdateThreshold:
+ *                   type: number
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Thread not found
+ *       500:
+ *         description: Server error
+ */
+router.get('/:threadId/title/stats', async (req: AuthRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ 
+        status: 'error', 
+        message: 'User not authenticated' 
+      });
+    }
+
+    const { threadId } = req.params;
+    const orgId = Array.isArray(req.headers['x-organization-id']) 
+      ? req.headers['x-organization-id'][0]
+      : req.headers['x-organization-id'];
+
+    if (!orgId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Organization ID is required'
+      });
+    }
+
+    // Verify thread exists and user has access
+    const thread = await db.query.chatThreads.findFirst({
+      where: and(
+        eq(chatThreads.id, threadId),
+        eq(chatThreads.userId, req.user.id),
+        eq(chatThreads.orgId, orgId)
+      )
+    });
+
+    if (!thread) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Thread not found or access denied'
+      });
+    }
+
+    // Get title update statistics
+    const stats = await threadTitleService.getTitleUpdateStats(threadId);
+
+    if (!stats) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Could not retrieve title statistics'
+      });
+    }
+
+    res.json(stats);
+
+  } catch (error) {
+    logger.error('Error getting thread title stats:', { error });
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to get thread title statistics' 
+    });
+  }
+});
 
 export default router; 

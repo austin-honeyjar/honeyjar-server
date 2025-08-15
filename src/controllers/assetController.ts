@@ -150,7 +150,13 @@ export const assetController = {
         });
       }
 
-      // Organization ID is now optional - removed requirement
+      // Organization ID is required for proper asset filtering
+      if (!orgId) {
+        return res.status(400).json({
+          error: 'BAD_REQUEST',
+          message: 'Organization ID is required'
+        });
+      }
 
       // Validate required fields
       if (!name || !type || !title || !content) {
@@ -170,6 +176,7 @@ export const assetController = {
         subtitle,
         content,
         author: userId,
+        orgId,
         metadata
       });
 

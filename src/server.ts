@@ -13,15 +13,35 @@ import { join } from 'path';
 import logger from './utils/logger';
 import csvRoutes from './routes/csv.routes';
 import chatRoutes from './routes/chat.routes';
+
+import ragRoutes from './routes/rag.routes';
 import threadsRoutes from './routes/threads.routes';
 import assetRoutes from './routes/asset.routes';
+import userRoutes from './routes/user.routes';
 import metabaseRoutes from './routes/metabase.routes';
 import rocketreachRoutes from './routes/rocketreach.routes';
 import newsRoutes from './routes/news.routes';
-import { WorkflowService } from './services/workflow.service';
+import { enhancedWorkflowService } from './services/enhanced-workflow.service';
 import { db, ensureTables } from './db/index';
 import { sql } from 'drizzle-orm';
 import { backgroundWorker } from './workers/backgroundWorker';
+import testRoutes from './routes/test.routes';
+import fs from 'fs';
+import { WorkflowContextService } from './services/workflowContextService';
+import { authMiddleware } from './middleware/auth.middleware';
+import { requestLogger } from './middleware/logger.middleware';
+import { errorHandler } from './middleware/error.middleware';
+import devRoutes from './routes/dev';
+
+// Import comprehensive queue system
+import { initializeQueues, shutdownQueues } from './services/comprehensiveQueues';
+
+// Import all workers to register their processors
+import './workers/intentWorker';
+import './workers/openaiWorker';
+import './workers/securityWorker';
+import './workers/ragWorker';
+import './workers/rocketreachWorker';
 
 // Initialize express app
 export const app = express();
@@ -36,11 +56,21 @@ app.use(rateLimiter);
 app.use(config.server.apiPrefix + '/auth', authRoutes);
 app.use(config.server.apiPrefix + '/csv', csvRoutes);
 app.use(config.server.apiPrefix + '/chat', chatRoutes);
+
+app.use(config.server.apiPrefix + '/rag', ragRoutes);
 app.use(config.server.apiPrefix + '/threads', threadsRoutes);
 app.use(config.server.apiPrefix + '/metabase', metabaseRoutes);
 app.use(config.server.apiPrefix + '/rocketreach', rocketreachRoutes);
 app.use(config.server.apiPrefix + '/news', newsRoutes);
-app.use(config.server.apiPrefix, assetRoutes);
+app.use(config.server.apiPrefix + '/test', testRoutes);
+app.use(config.server.apiPrefix + '/assets', assetRoutes);
+app.use(config.server.apiPrefix + '/user', userRoutes);
+
+// Dev routes (only in development/staging)
+if (process.env.NODE_ENV !== 'production') {
+  app.use(config.server.apiPrefix + '/dev', devRoutes);
+  logger.info('Enhanced workflow dev routes available at /api/dev');
+}
 
 // Health check routes (unversioned)
 app.use('/health', healthRoutes);
@@ -83,6 +113,8 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 // Function to initialize database tables
 async function initializeDatabase() {
   try {
+    // Suppress PostgreSQL NOTICE messages during boot-time DDL
+    await db.execute(sql`SET client_min_messages TO WARNING;`);
     // First run migrations to ensure tables exist
     try {
       await ensureTables();
@@ -194,6 +226,50 @@ async function initializeDatabase() {
         WHERE table_name = 'assets'
       );
     `);
+    
+    // Check if org_id column exists in assets table
+    const orgIdColumnCheck = await db.execute(sql`
+      SELECT EXISTS (
+        SELECT FROM information_schema.columns 
+        WHERE table_name = 'assets' AND column_name = 'org_id'
+      );
+    `);
+    
+    // Add org_id column if assets table exists but column doesn't
+    if (assetTableCheck[0]?.exists && !orgIdColumnCheck[0]?.exists) {
+      logger.info('Assets table exists but missing org_id column, adding it...');
+      try {
+        // Add org_id column to assets table
+        await db.execute(sql`ALTER TABLE assets ADD COLUMN IF NOT EXISTS org_id text;`);
+        
+        // Update existing assets with org_id from their associated chat_threads
+        await db.execute(sql`
+          UPDATE assets 
+          SET org_id = chat_threads.org_id
+          FROM chat_threads 
+          WHERE assets.thread_id = chat_threads.id 
+          AND assets.org_id IS NULL;
+        `);
+        
+        // For any remaining assets without org_id (orphaned assets), set to admin org
+        await db.execute(sql`
+          UPDATE assets 
+          SET org_id = 'org_2vuyiIbzL85gWIeDV0i6xODX048'
+          WHERE org_id IS NULL;
+        `);
+        
+        // Make org_id NOT NULL after populating data
+        await db.execute(sql`ALTER TABLE assets ALTER COLUMN org_id SET NOT NULL;`);
+        
+        // Add indexes for better performance
+        await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_assets_org_id ON assets(org_id);`);
+        await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_assets_author_org_id ON assets(author, org_id);`);
+        
+        logger.info('✅ Successfully added org_id column to assets table');
+      } catch (orgIdError) {
+        logger.error('Error adding org_id column to assets table:', orgIdError);
+      }
+    }
     
     if (!assetTableCheck[0]?.exists) {
       logger.info('Assets table not found, running full database initialization...');
@@ -946,9 +1022,922 @@ async function initializeDatabase() {
       // Don't fail the server startup for RocketReach table issues
     }
     
+    // =============================================================================
+    // ENHANCED WORKFLOW TABLES INITIALIZATION
+    // =============================================================================
+    
+    // Check if enhanced workflow tables exist and create them if needed
+    logger.info('Checking for enhanced workflow tables...');
+    
+    try {
+      // Check if user_knowledge_base table exists for enhanced workflow
+      const enhancedWorkflowTableCheck = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_name = 'enhanced_chat_messages'
+        );
+      `);
+      
+      if (!enhancedWorkflowTableCheck[0]?.exists) {
+        logger.info('Enhanced workflow tables not found, creating them...');
+        
+        // Create enhanced workflow tables
+        await db.execute(sql`
+          -- Enhanced chat messages with security and context
+          CREATE TABLE IF NOT EXISTS enhanced_chat_messages (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            thread_id UUID NOT NULL,
+            content TEXT NOT NULL,
+            role VARCHAR(20) NOT NULL,
+            security_level VARCHAR(20) NOT NULL DEFAULT 'internal',
+            security_tags TEXT[] DEFAULT '{}',
+            contains_pii BOOLEAN DEFAULT FALSE,
+            context_layers JSONB NOT NULL DEFAULT '{}',
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+          );
+
+          -- Conversation contexts for learning
+          CREATE TABLE IF NOT EXISTS conversation_contexts (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            thread_id UUID NOT NULL,
+            workflow_id UUID,
+            workflow_type VARCHAR(100),
+            step_name VARCHAR(255),
+            intent VARCHAR(255),
+            outcome VARCHAR(50),
+            user_satisfaction DECIMAL(2,1),
+            time_spent INTEGER,
+            security_level VARCHAR(20),
+            security_tags TEXT[],
+            context_used TEXT[],
+            metadata JSONB DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+          );
+        `);
+        
+        // Create indexes for enhanced workflow tables
+        logger.info('Creating indexes for enhanced workflow tables...');
+        await db.execute(sql`
+          -- Enhanced chat messages indexes
+          CREATE INDEX IF NOT EXISTS idx_enhanced_chat_messages_thread ON enhanced_chat_messages(thread_id);
+          CREATE INDEX IF NOT EXISTS idx_enhanced_chat_messages_security ON enhanced_chat_messages(security_level);
+          CREATE INDEX IF NOT EXISTS idx_enhanced_chat_messages_context ON enhanced_chat_messages USING gin(context_layers);
+          CREATE INDEX IF NOT EXISTS idx_enhanced_chat_messages_security_tags ON enhanced_chat_messages USING gin(security_tags);
+          
+          -- Conversation contexts indexes  
+          CREATE INDEX IF NOT EXISTS idx_conversation_contexts_thread ON conversation_contexts(thread_id);
+          CREATE INDEX IF NOT EXISTS idx_conversation_contexts_workflow ON conversation_contexts(workflow_type);
+          CREATE INDEX IF NOT EXISTS idx_conversation_contexts_intent ON conversation_contexts(intent, outcome);
+          CREATE INDEX IF NOT EXISTS idx_conversation_contexts_security ON conversation_contexts(security_level);
+        `);
+        
+        logger.info('Enhanced workflow tables and indexes created successfully');
+        
+      } else {
+        logger.info('Enhanced workflow tables already exist');
+      }
+      
+    } catch (enhancedWorkflowError) {
+      logger.error('Error creating enhanced workflow tables:', enhancedWorkflowError);
+      // Don't fail the server startup for enhanced workflow table issues
+    }
+    
     return true;
   } catch (error) {
     logger.error('Database initialization error:', error);
+    return false;
+  }
+}
+
+// Initialize context-aware chat support
+async function initializeContextAwareChat(): Promise<boolean> {
+  try {
+    logger.info('Initializing context-aware chat support...');
+    
+    // Check if context-aware columns exist, add them if not
+    await db.execute(sql`
+      DO $$ 
+      BEGIN
+        -- Add thread_type enum if not exists
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'thread_type') THEN
+          CREATE TYPE thread_type AS ENUM ('global', 'asset', 'workflow', 'standard');
+        END IF;
+        
+        -- Add context_type enum if not exists
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'context_type') THEN
+          CREATE TYPE context_type AS ENUM ('asset', 'workflow');
+        END IF;
+        
+        -- Add threadType column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'thread_type') THEN
+          ALTER TABLE chat_threads ADD COLUMN thread_type thread_type DEFAULT 'standard' NOT NULL;
+        END IF;
+        
+        -- Add contextType column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'context_type') THEN
+          ALTER TABLE chat_threads ADD COLUMN context_type context_type;
+        END IF;
+        
+        -- Add contextId column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'context_id') THEN
+          ALTER TABLE chat_threads ADD COLUMN context_id TEXT;
+        END IF;
+        
+        -- Add isActive column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'is_active') THEN
+          ALTER TABLE chat_threads ADD COLUMN is_active BOOLEAN DEFAULT true NOT NULL;
+        END IF;
+        
+        -- Add metadata column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'metadata') THEN
+          ALTER TABLE chat_threads ADD COLUMN metadata JSONB;
+        END IF;
+        
+        -- Add updatedAt column if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_threads' AND column_name = 'updated_at') THEN
+          ALTER TABLE chat_threads ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL;
+        END IF;
+        
+        -- Add timestamp column to chat_messages if not exists
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'chat_messages' AND column_name = 'timestamp') THEN
+          ALTER TABLE chat_messages ADD COLUMN timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL;
+        END IF;
+        
+      END $$;
+    `);
+    
+    logger.info('✅ Context-aware chat support initialized successfully');
+    return true;
+  } catch (error) {
+    logger.error('Context-aware chat initialization error:', error);
+    return false;
+  }
+}
+
+// Initialize RAG system support
+async function initializeRAGSystem(): Promise<boolean> {
+  try {
+    logger.info('Initializing RAG system...');
+    // Suppress PostgreSQL NOTICE messages during pgvector setup and index creation
+    await db.execute(sql`SET client_min_messages TO WARNING;`);
+    
+    // Create uploads directory if it doesn't exist
+    const uploadDir = process.env.UPLOAD_DIR || './uploads';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+      logger.info(`Created uploads directory: ${uploadDir}`);
+    }
+    
+    // =============================================================================
+    // PGVECTOR SETUP - Enable extension and prepare for vector operations
+    // =============================================================================
+    
+    logger.info('Setting up pgvector extension for enhanced embedding performance...');
+    try {
+      // Enable pgvector extension
+      await db.execute(sql`CREATE EXTENSION IF NOT EXISTS vector;`);
+      logger.info('✅ pgvector extension enabled successfully');
+    } catch (pgvectorError) {
+      logger.warn('⚠️ pgvector extension not available - using fallback JavaScript similarity:', pgvectorError);
+      // Continue without pgvector - the system will fall back to JavaScript similarity
+    }
+    
+    // First, create the RAG enums
+    logger.info('Creating RAG enums...');
+    try {
+      await db.execute(sql`
+        DO $$ BEGIN
+          CREATE TYPE rag_security_level AS ENUM ('public', 'internal', 'confidential', 'restricted');
+        EXCEPTION
+          WHEN duplicate_object THEN null;
+        END $$;
+        
+        DO $$ BEGIN
+          CREATE TYPE rag_content_source AS ENUM ('admin_global', 'user_personal', 'conversation', 'asset');
+        EXCEPTION
+          WHEN duplicate_object THEN null;
+        END $$;
+      `);
+      logger.info('RAG enums created successfully');
+    } catch (enumError) {
+      logger.error('Error creating RAG enums:', enumError);
+    }
+
+    // Check if RAG tables exist and create them properly
+    logger.info('Checking and creating RAG tables...');
+    
+    // Check if rag_documents table exists
+    const ragDocumentsCheck = await db.execute(sql`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'rag_documents'
+      );
+    `);
+    
+    if (!ragDocumentsCheck[0]?.exists) {
+      logger.info('Creating RAG tables with pgvector support...');
+      
+      try {
+        await db.execute(sql`
+          -- Create user_knowledge_base table if not exists
+          CREATE TABLE IF NOT EXISTS user_knowledge_base (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id TEXT NOT NULL,
+            org_id TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            company_name TEXT,
+            company_description TEXT,
+            industry TEXT,
+            company_size TEXT,
+            headquarters TEXT,
+            job_title TEXT,
+            preferred_tone TEXT,
+            preferred_workflows JSONB,
+            default_platforms JSONB,
+            writing_style_preferences JSONB,
+            UNIQUE(user_id, org_id)
+          );
+
+          -- Create conversation_embeddings table with pgvector support
+          CREATE TABLE IF NOT EXISTS conversation_embeddings (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id TEXT NOT NULL,
+            org_id TEXT NOT NULL,
+            thread_id UUID NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+            workflow_id UUID REFERENCES workflows(id) ON DELETE CASCADE,
+            content_type TEXT,
+            content_text TEXT NOT NULL,
+            content_summary TEXT,
+            structured_data JSONB,
+            -- Vector Embedding - Dual storage for migration
+            embedding TEXT, -- Keep for backward compatibility
+            embedding_vector TEXT, -- pgvector column (TEXT to work with current Drizzle)
+            embedding_provider TEXT DEFAULT 'openai', -- Track embedding provider
+            -- Security Classification
+            security_level rag_security_level DEFAULT 'internal' NOT NULL,
+            security_tags JSONB,
+            ai_safe_content TEXT,
+            workflow_type TEXT,
+            step_name TEXT,
+            intent TEXT,
+            outcome TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+          );
+
+          -- Create asset_history table if not exists
+          CREATE TABLE IF NOT EXISTS asset_history (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id TEXT NOT NULL,
+            org_id TEXT NOT NULL,
+            thread_id UUID NOT NULL REFERENCES chat_threads(id),
+            workflow_id UUID REFERENCES workflows(id),
+            asset_type TEXT,
+            original_content TEXT NOT NULL,
+            final_content TEXT,
+            -- Vector Embedding for asset content
+            embedding TEXT,
+            embedding_vector TEXT, -- pgvector column
+            embedding_provider TEXT DEFAULT 'openai',
+            -- Security Classification
+            security_level rag_security_level DEFAULT 'internal' NOT NULL,
+            security_tags JSONB,
+            ai_safe_content TEXT,
+            user_satisfaction INTEGER,
+            revision_count INTEGER DEFAULT 0,
+            feedback_text TEXT,
+            approved BOOLEAN DEFAULT FALSE,
+            successful_patterns JSONB,
+            improvement_areas JSONB,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            approved_at TIMESTAMP WITH TIME ZONE
+          );
+
+          -- Create user_interactions table if not exists
+          CREATE TABLE IF NOT EXISTS user_interactions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id TEXT NOT NULL,
+            org_id TEXT NOT NULL,
+            thread_id UUID NOT NULL REFERENCES chat_threads(id),
+            workflow_id UUID REFERENCES workflows(id),
+            step_id UUID REFERENCES workflow_steps(id),
+            user_input TEXT NOT NULL,
+            ai_response TEXT NOT NULL,
+            interaction_type TEXT,
+            security_level rag_security_level DEFAULT 'internal' NOT NULL,
+            security_tags JSONB,
+            contains_sensitive_info BOOLEAN DEFAULT FALSE,
+            workflow_context JSONB,
+            user_intent TEXT,
+            confidence_score REAL,
+            response_time_ms INTEGER,
+            user_satisfaction INTEGER,
+            follow_up_required BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+          );
+
+          -- Create knowledge_cache table with pgvector support
+          CREATE TABLE IF NOT EXISTS knowledge_cache (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            cache_key TEXT UNIQUE NOT NULL,
+            user_id TEXT NOT NULL,
+            org_id TEXT NOT NULL,
+            query_embedding TEXT, -- Legacy format
+            query_embedding_vector TEXT, -- pgvector format
+            embedding_provider TEXT DEFAULT 'openai',
+            retrieved_context JSONB,
+            relevance_score REAL,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+          );
+
+          -- Create rag_documents table with pgvector support
+          CREATE TABLE IF NOT EXISTS rag_documents (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            content_source rag_content_source NOT NULL,
+            uploaded_by TEXT NOT NULL,
+            org_id TEXT,
+            filename TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            extracted_text TEXT,
+            processed_content TEXT,
+            -- Vector Embedding - Dual storage for migration
+            embedding TEXT, -- Keep for backward compatibility
+            embedding_vector TEXT, -- pgvector column
+            embedding_provider TEXT DEFAULT 'openai',
+            -- Security Classification
+            security_level rag_security_level DEFAULT 'internal' NOT NULL,
+            security_tags JSONB,
+            ai_safe_content TEXT,
+            content_category TEXT,
+            tags JSONB,
+            access_count INTEGER DEFAULT 0,
+            last_accessed TIMESTAMP WITH TIME ZONE,
+            processing_status TEXT DEFAULT 'pending',
+            processing_error TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            processed_at TIMESTAMP WITH TIME ZONE
+          );
+
+          -- Create enhanced user_uploads table with pgvector support
+          CREATE TABLE IF NOT EXISTS user_uploads (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id TEXT NOT NULL,
+            org_id TEXT NOT NULL,
+            thread_id UUID REFERENCES chat_threads(id) ON DELETE CASCADE,
+            filename TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            extracted_text TEXT,
+            ocr_data JSONB,
+            -- Vector Embedding - Dual storage for migration
+            embedding TEXT, -- Keep for backward compatibility
+            embedding_vector TEXT, -- pgvector column
+            embedding_provider TEXT DEFAULT 'openai',
+            -- Security Classification
+            security_level rag_security_level DEFAULT 'confidential' NOT NULL,
+            security_tags JSONB,
+            ai_safe_content TEXT,
+            contains_pii BOOLEAN DEFAULT FALSE,
+            upload_context TEXT,
+            user_description TEXT,
+            ai_tags JSONB,
+            ai_summary TEXT,
+            processing_status TEXT DEFAULT 'pending',
+            processing_error TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+            processed_at TIMESTAMP WITH TIME ZONE
+          );
+        `);
+        
+        logger.info('RAG tables with pgvector support created successfully');
+        
+      } catch (tableError) {
+        logger.error('Error creating RAG tables:', tableError);
+        // Continue anyway as tables may exist
+      }
+    }
+    
+    // =============================================================================
+    // PGVECTOR COLUMN MIGRATION - Add pgvector columns to existing tables
+    // =============================================================================
+    
+    logger.info('Adding pgvector columns to existing RAG tables...');
+    try {
+      // Add pgvector columns to conversation_embeddings
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversation_embeddings' AND column_name = 'embedding_vector') THEN
+            ALTER TABLE conversation_embeddings ADD COLUMN embedding_vector TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversation_embeddings' AND column_name = 'embedding_provider') THEN
+            ALTER TABLE conversation_embeddings ADD COLUMN embedding_provider TEXT DEFAULT 'openai';
+          END IF;
+        END $$;
+      `);
+      
+      // Add pgvector columns to rag_documents
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'rag_documents' AND column_name = 'embedding_vector') THEN
+            ALTER TABLE rag_documents ADD COLUMN embedding_vector TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'rag_documents' AND column_name = 'embedding_provider') THEN
+            ALTER TABLE rag_documents ADD COLUMN embedding_provider TEXT DEFAULT 'openai';
+          END IF;
+        END $$;
+      `);
+      
+      // Add pgvector columns to user_uploads
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_uploads' AND column_name = 'embedding_vector') THEN
+            ALTER TABLE user_uploads ADD COLUMN embedding_vector TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_uploads' AND column_name = 'embedding_provider') THEN
+            ALTER TABLE user_uploads ADD COLUMN embedding_provider TEXT DEFAULT 'openai';
+          END IF;
+        END $$;
+      `);
+      
+      // Add pgvector columns to asset_history
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'asset_history' AND column_name = 'embedding_vector') THEN
+            ALTER TABLE asset_history ADD COLUMN embedding_vector TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'asset_history' AND column_name = 'embedding_provider') THEN
+            ALTER TABLE asset_history ADD COLUMN embedding_provider TEXT DEFAULT 'openai';
+          END IF;
+        END $$;
+      `);
+      
+      // Add pgvector columns to knowledge_cache
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'knowledge_cache' AND column_name = 'query_embedding_vector') THEN
+            ALTER TABLE knowledge_cache ADD COLUMN query_embedding_vector TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'knowledge_cache' AND column_name = 'embedding_provider') THEN
+            ALTER TABLE knowledge_cache ADD COLUMN embedding_provider TEXT DEFAULT 'openai';
+          END IF;
+        END $$;
+      `);
+      
+      // Add job_title column to user_knowledge_base for onboarding integration
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_knowledge_base' AND column_name = 'job_title') THEN
+            ALTER TABLE user_knowledge_base ADD COLUMN job_title TEXT;
+          END IF;
+        END $$;
+      `);
+      
+      logger.info('✅ pgvector columns and user onboarding fields added to existing tables');
+    } catch (pgvectorColumnError) {
+      logger.warn('⚠️ Error adding pgvector columns (may already exist):', pgvectorColumnError);
+    }
+    
+    // =============================================================================
+    // PGVECTOR INDEXES - Create optimized vector indexes for fast similarity search
+    // =============================================================================
+    
+    logger.info('Creating pgvector indexes for fast similarity search...');
+    try {
+      // Only create pgvector indexes if the extension is available
+      const pgvectorCheck = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_extension WHERE extname = 'vector'
+        );
+      `);
+      
+      if (pgvectorCheck[0]?.exists) {
+        logger.info('pgvector extension detected - creating vector indexes...');
+        
+        // First, convert existing embedding columns to proper vector type
+        logger.info('Converting embedding_vector columns to proper vector(1536) type...');
+        await db.execute(sql`
+          DO $$ 
+          DECLARE
+              rec RECORD;
+              embedding_array text;
+          BEGIN
+              -- Convert conversation_embeddings.embedding_vector to proper vector type if needed
+              BEGIN
+                  -- Check if column exists and is not already vector type
+                  IF EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'conversation_embeddings' 
+                           AND column_name = 'embedding_vector' 
+                           AND data_type != 'USER-DEFINED') THEN
+                      RAISE DEBUG 'Converting conversation_embeddings.embedding_vector to vector(1536)...';
+                      ALTER TABLE conversation_embeddings 
+                      ALTER COLUMN embedding_vector TYPE vector(1536) USING 
+                        CASE 
+                          WHEN embedding_vector IS NULL THEN NULL
+                          WHEN embedding_vector = '' THEN NULL
+                          ELSE embedding_vector::vector
+                        END;
+                      RAISE DEBUG 'Successfully converted conversation_embeddings.embedding_vector';
+                  END IF;
+              EXCEPTION
+                  WHEN OTHERS THEN
+                      RAISE DEBUG 'Could not convert conversation_embeddings.embedding_vector to vector type: %', SQLERRM;
+              END;
+              
+              -- Convert rag_documents.embedding_vector to proper vector type if needed
+              BEGIN
+                  IF EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'rag_documents' 
+                           AND column_name = 'embedding_vector' 
+                           AND data_type != 'USER-DEFINED') THEN
+                      RAISE DEBUG 'Converting rag_documents.embedding_vector to vector(1536)...';
+                      ALTER TABLE rag_documents 
+                      ALTER COLUMN embedding_vector TYPE vector(1536) USING 
+                        CASE 
+                          WHEN embedding_vector IS NULL THEN NULL
+                          WHEN embedding_vector = '' THEN NULL
+                          ELSE embedding_vector::vector
+                        END;
+                      RAISE DEBUG 'Successfully converted rag_documents.embedding_vector';
+                  END IF;
+              EXCEPTION
+                  WHEN OTHERS THEN
+                      RAISE DEBUG 'Could not convert rag_documents.embedding_vector to vector type: %', SQLERRM;
+              END;
+              
+              -- Convert user_uploads.embedding_vector to proper vector type if needed
+              BEGIN
+                  IF EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'user_uploads' 
+                           AND column_name = 'embedding_vector' 
+                           AND data_type != 'USER-DEFINED') THEN
+                      RAISE DEBUG 'Converting user_uploads.embedding_vector to vector(1536)...';
+                      ALTER TABLE user_uploads 
+                      ALTER COLUMN embedding_vector TYPE vector(1536) USING 
+                        CASE 
+                          WHEN embedding_vector IS NULL THEN NULL
+                          WHEN embedding_vector = '' THEN NULL
+                          ELSE embedding_vector::vector
+                        END;
+                      RAISE DEBUG 'Successfully converted user_uploads.embedding_vector';
+                  END IF;
+              EXCEPTION
+                  WHEN OTHERS THEN
+                      RAISE DEBUG 'Could not convert user_uploads.embedding_vector to vector type: %', SQLERRM;
+              END;
+              
+              -- Convert asset_history.embedding_vector to proper vector type if needed
+              BEGIN
+                  IF EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'asset_history' 
+                           AND column_name = 'embedding_vector' 
+                           AND data_type != 'USER-DEFINED') THEN
+                      RAISE DEBUG 'Converting asset_history.embedding_vector to vector(1536)...';
+                      ALTER TABLE asset_history 
+                      ALTER COLUMN embedding_vector TYPE vector(1536) USING 
+                        CASE 
+                          WHEN embedding_vector IS NULL THEN NULL
+                          WHEN embedding_vector = '' THEN NULL
+                          ELSE embedding_vector::vector
+                        END;
+                      RAISE DEBUG 'Successfully converted asset_history.embedding_vector';
+                  END IF;
+              EXCEPTION
+                  WHEN OTHERS THEN
+                      RAISE DEBUG 'Could not convert asset_history.embedding_vector to vector type: %', SQLERRM;
+              END;
+              
+              -- Convert knowledge_cache.query_embedding_vector to proper vector type if needed
+              BEGIN
+                  IF EXISTS (SELECT 1 FROM information_schema.columns 
+                           WHERE table_name = 'knowledge_cache' 
+                           AND column_name = 'query_embedding_vector' 
+                           AND data_type != 'USER-DEFINED') THEN
+                      RAISE DEBUG 'Converting knowledge_cache.query_embedding_vector to vector(1536)...';
+                      ALTER TABLE knowledge_cache 
+                      ALTER COLUMN query_embedding_vector TYPE vector(1536) USING 
+                        CASE 
+                          WHEN query_embedding_vector IS NULL THEN NULL
+                          WHEN query_embedding_vector = '' THEN NULL
+                          ELSE query_embedding_vector::vector
+                        END;
+                      RAISE DEBUG 'Successfully converted knowledge_cache.query_embedding_vector';
+                  END IF;
+              EXCEPTION
+                  WHEN OTHERS THEN
+                      RAISE DEBUG 'Could not convert knowledge_cache.query_embedding_vector to vector type: %', SQLERRM;
+              END;
+              
+              RAISE DEBUG 'Vector column type conversion completed';
+          END
+          $$;
+        `);
+        
+        logger.info('✅ Embedding columns converted to vector(1536) type');
+        
+        // Create ivfflat indexes for approximate nearest neighbor search
+        logger.info('Creating ivfflat indexes for fast vector similarity search...');
+        await db.execute(sql`
+          -- Conversation embeddings index
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS conversation_embeddings_embedding_vector_idx 
+          ON conversation_embeddings 
+          USING ivfflat (embedding_vector vector_cosine_ops) 
+          WITH (lists = 100);
+          
+          -- RAG documents index
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS rag_documents_embedding_vector_idx 
+          ON rag_documents 
+          USING ivfflat (embedding_vector vector_cosine_ops) 
+          WITH (lists = 100);
+          
+          -- User uploads index
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS user_uploads_embedding_vector_idx 
+          ON user_uploads 
+          USING ivfflat (embedding_vector vector_cosine_ops) 
+          WITH (lists = 100);
+          
+          -- Asset history index
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS asset_history_embedding_vector_idx 
+          ON asset_history 
+          USING ivfflat (embedding_vector vector_cosine_ops) 
+          WITH (lists = 50);
+          
+          -- Knowledge cache index
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS knowledge_cache_query_embedding_vector_idx 
+          ON knowledge_cache 
+          USING ivfflat (query_embedding_vector vector_cosine_ops) 
+          WITH (lists = 50);
+        `);
+        
+        // Create composite indexes for filtered vector searches
+        await db.execute(sql`
+          -- Composite indexes for filtered vector searches
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS conversation_embeddings_user_org_vector_idx
+          ON conversation_embeddings (user_id, org_id, security_level);
+          
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS rag_documents_security_source_vector_idx
+          ON rag_documents (security_level, content_source, processing_status);
+        `);
+        
+        logger.info('✅ pgvector indexes created successfully');
+        
+        // =============================================================================
+        // EXISTING EMBEDDING MIGRATION - Convert JSON strings to pgvector format
+        // =============================================================================
+        
+        logger.info('Migrating existing JSON embeddings to pgvector format...');
+        try {
+          await db.execute(sql`
+            DO $$
+            DECLARE
+                rec RECORD;
+                embedding_array text;
+                migration_count integer := 0;
+            BEGIN
+                -- Migrate conversation_embeddings
+                FOR rec IN SELECT id, embedding FROM conversation_embeddings 
+                          WHERE embedding IS NOT NULL AND embedding_vector IS NULL
+                          LIMIT 1000 -- Process in batches to avoid timeout
+                LOOP
+                    BEGIN
+                        -- Convert JSON string to pgvector format
+                        embedding_array := REPLACE(REPLACE(rec.embedding, '[', ''), ']', '');
+                        EXECUTE format('UPDATE conversation_embeddings SET embedding_vector = ''[%s]''::vector WHERE id = %L', 
+                                     embedding_array, rec.id);
+                        migration_count := migration_count + 1;
+                    EXCEPTION
+                        WHEN OTHERS THEN
+                            RAISE DEBUG 'Failed to migrate embedding for conversation_embeddings id %: %', rec.id, SQLERRM;
+                    END;
+                END LOOP;
+                
+                RAISE DEBUG 'Migrated % conversation embeddings', migration_count;
+                migration_count := 0;
+
+                -- Migrate rag_documents
+                FOR rec IN SELECT id, embedding FROM rag_documents 
+                          WHERE embedding IS NOT NULL AND embedding_vector IS NULL
+                          LIMIT 1000
+                LOOP
+                    BEGIN
+                        embedding_array := REPLACE(REPLACE(rec.embedding, '[', ''), ']', '');
+                        EXECUTE format('UPDATE rag_documents SET embedding_vector = ''[%s]''::vector WHERE id = %L', 
+                                     embedding_array, rec.id);
+                        migration_count := migration_count + 1;
+                    EXCEPTION
+                        WHEN OTHERS THEN
+                            RAISE DEBUG 'Failed to migrate embedding for rag_documents id %: %', rec.id, SQLERRM;
+                    END;
+                END LOOP;
+                
+                RAISE DEBUG 'Migrated % rag document embeddings', migration_count;
+                migration_count := 0;
+
+                -- Migrate user_uploads
+                FOR rec IN SELECT id, embedding FROM user_uploads 
+                          WHERE embedding IS NOT NULL AND embedding_vector IS NULL
+                          LIMIT 1000
+                LOOP
+                    BEGIN
+                        embedding_array := REPLACE(REPLACE(rec.embedding, '[', ''), ']', '');
+                        EXECUTE format('UPDATE user_uploads SET embedding_vector = ''[%s]''::vector WHERE id = %L', 
+                                     embedding_array, rec.id);
+                        migration_count := migration_count + 1;
+                    EXCEPTION
+                        WHEN OTHERS THEN
+                            RAISE DEBUG 'Failed to migrate embedding for user_uploads id %: %', rec.id, SQLERRM;
+                    END;
+                END LOOP;
+                
+                RAISE DEBUG 'Migrated % user upload embeddings', migration_count;
+                
+                RAISE DEBUG 'pgvector embedding migration completed';
+            END
+            $$;
+          `);
+          
+          logger.info('✅ Existing embeddings migrated to pgvector format');
+        } catch (migrationError) {
+          logger.warn('⚠️ Embedding migration had some issues (this is normal for new installations):', migrationError);
+        }
+        
+      } else {
+        logger.warn('⚠️ pgvector extension not available - vector indexes will not be created');
+        logger.info('📝 To enable pgvector, install the extension in your PostgreSQL instance');
+      }
+      
+    } catch (indexError) {
+      logger.warn('⚠️ pgvector index creation had issues (extension may not be available):', indexError);
+    }
+    
+    // Always check for missing columns regardless of whether tables were just created
+    logger.info('Checking for missing security_level columns in existing RAG tables...');
+    
+    try {
+      // Check and add security_level to conversation_embeddings if missing
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversation_embeddings' AND column_name = 'security_level') THEN
+            ALTER TABLE conversation_embeddings ADD COLUMN security_level rag_security_level DEFAULT 'internal' NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_conversation_embeddings_security ON conversation_embeddings(security_level);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversation_embeddings' AND column_name = 'security_tags') THEN
+            ALTER TABLE conversation_embeddings ADD COLUMN security_tags JSONB;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversation_embeddings' AND column_name = 'ai_safe_content') THEN
+            ALTER TABLE conversation_embeddings ADD COLUMN ai_safe_content TEXT;
+          END IF;
+        END $$;
+      `);
+      
+      // Check and add security_level to asset_history if missing
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'asset_history' AND column_name = 'security_level') THEN
+            ALTER TABLE asset_history ADD COLUMN security_level rag_security_level DEFAULT 'internal' NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_asset_history_security ON asset_history(security_level);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'asset_history' AND column_name = 'security_tags') THEN
+            ALTER TABLE asset_history ADD COLUMN security_tags JSONB;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'asset_history' AND column_name = 'ai_safe_content') THEN
+            ALTER TABLE asset_history ADD COLUMN ai_safe_content TEXT;
+          END IF;
+        END $$;
+      `);
+      
+      // Check and add security_level to user_interactions if missing
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_interactions' AND column_name = 'security_level') THEN
+            ALTER TABLE user_interactions ADD COLUMN security_level rag_security_level DEFAULT 'internal' NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_user_interactions_security ON user_interactions(security_level);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_interactions' AND column_name = 'security_tags') THEN
+            ALTER TABLE user_interactions ADD COLUMN security_tags JSONB;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_interactions' AND column_name = 'ai_safe_content') THEN
+            ALTER TABLE user_interactions ADD COLUMN ai_safe_content TEXT;
+          END IF;
+        END $$;
+      `);
+      
+      // Check and add security_level to user_uploads if missing
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_uploads' AND column_name = 'security_level') THEN
+            ALTER TABLE user_uploads ADD COLUMN security_level rag_security_level DEFAULT 'confidential' NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_user_uploads_security ON user_uploads(security_level);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_uploads' AND column_name = 'security_tags') THEN
+            ALTER TABLE user_uploads ADD COLUMN security_tags JSONB;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_uploads' AND column_name = 'ai_safe_content') THEN
+            ALTER TABLE user_uploads ADD COLUMN ai_safe_content TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_uploads' AND column_name = 'contains_pii') THEN
+            ALTER TABLE user_uploads ADD COLUMN contains_pii BOOLEAN DEFAULT FALSE;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_uploads' AND column_name = 'processing_status') THEN
+            ALTER TABLE user_uploads ADD COLUMN processing_status TEXT DEFAULT 'pending';
+          END IF;
+        END $$;
+      `);
+      
+      // Check and add security_level to rag_documents if missing
+      await db.execute(sql`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'rag_documents' AND column_name = 'security_level') THEN
+            ALTER TABLE rag_documents ADD COLUMN security_level rag_security_level DEFAULT 'internal' NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_rag_documents_security ON rag_documents(security_level);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'rag_documents' AND column_name = 'security_tags') THEN
+            ALTER TABLE rag_documents ADD COLUMN security_tags JSONB;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'rag_documents' AND column_name = 'ai_safe_content') THEN
+            ALTER TABLE rag_documents ADD COLUMN ai_safe_content TEXT;
+          END IF;
+        END $$;
+      `);
+      
+      logger.info('Missing security_level columns checked and added where needed');
+      
+    } catch (columnError) {
+      logger.error('Error adding missing columns to RAG tables:', columnError);
+    }
+    
+    // Now create remaining indexes (only after ensuring tables and columns exist)
+    logger.info('Creating remaining RAG indexes...');
+    try {
+      await db.execute(sql`
+        -- Create indexes for performance (excluding security indexes which are created with columns)
+        CREATE INDEX IF NOT EXISTS idx_conversation_embeddings_user ON conversation_embeddings(user_id, org_id);
+        CREATE INDEX IF NOT EXISTS idx_asset_history_user ON asset_history(user_id, org_id);
+        CREATE INDEX IF NOT EXISTS idx_user_interactions_user ON user_interactions(user_id, org_id);
+        CREATE INDEX IF NOT EXISTS idx_rag_documents_source ON rag_documents(content_source, processing_status);
+        CREATE INDEX IF NOT EXISTS idx_rag_documents_user ON rag_documents(uploaded_by, org_id);
+        CREATE INDEX IF NOT EXISTS idx_user_uploads_user ON user_uploads(user_id, org_id);
+        
+        -- Embedding provider tracking indexes
+        CREATE INDEX IF NOT EXISTS idx_conversation_embeddings_provider ON conversation_embeddings(embedding_provider);
+        CREATE INDEX IF NOT EXISTS idx_rag_documents_provider ON rag_documents(embedding_provider);
+        CREATE INDEX IF NOT EXISTS idx_user_uploads_provider ON user_uploads(embedding_provider);
+      `);
+      
+      logger.info('RAG indexes created successfully');
+    } catch (indexError) {
+      logger.error('Error creating RAG indexes:', indexError);
+      // Don't fail initialization for index issues
+    }
+    
+    // =============================================================================
+    // PGVECTOR SETUP COMPLETE
+    // =============================================================================
+    
+    logger.info('✅ RAG system with pgvector support initialized successfully');
+    
+    // Log pgvector status
+    try {
+      const pgvectorStatus = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_extension WHERE extname = 'vector'
+        ) as pgvector_enabled;
+      `);
+      
+      if (pgvectorStatus[0]?.pgvector_enabled) {
+        logger.info('🚀 pgvector extension is ENABLED - semantic search will be 10-100x faster!');
+      } else {
+        logger.info('📝 pgvector extension not available - using JavaScript fallback for semantic search');
+      }
+    } catch (statusError) {
+      logger.warn('Could not check pgvector status:', statusError);
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error('Failed to initialize RAG system:', error);
+    return false;
+  }
+}
+
+// Initialize workflow system context
+async function initializeWorkflowSystemContext(): Promise<boolean> {
+  try {
+    logger.info('Initializing workflow system context...');
+    const workflowContextService = new WorkflowContextService();
+    await workflowContextService.initializeSystemContext();
+    logger.info('✅ Workflow system context initialized successfully');
+    return true;
+  } catch (error) {
+    logger.error('Workflow system context initialization error:', error);
     return false;
   }
 }
@@ -957,23 +1946,45 @@ async function initializeDatabase() {
 if (process.env.NODE_ENV !== 'test') {
   const port = config.server.port || 3005;
   
-  // Initialize database first, then workflow templates, then start server
+  // Initialize database first, then context-aware chat, then workflow templates, then start server
   initializeDatabase()
     .then((dbSuccess) => {
       if (!dbSuccess) {
         logger.warn('Database initialization had errors, but continuing startup');
       }
       
-      // Initialize workflow templates
-      const workflowService = new WorkflowService();
+      // Initialize context-aware chat support
+      return initializeContextAwareChat();
+    })
+    .then((contextSuccess) => {
+      if (!contextSuccess) {
+        logger.warn('Context-aware chat initialization had errors, but continuing startup');
+      }
       
-      // Log templates
-      return workflowService.initializeTemplates().then(() => {
-        console.log('Workflow templates initialized');
+      // Initialize RAG system
+      return initializeRAGSystem();
+    })
+    .then((ragReady) => {
+      if (!ragReady) {
+        logger.warn('RAG system initialization had errors, but continuing startup');
+      }
+      
+      // Initialize workflow system context
+      return initializeWorkflowSystemContext();
+    })
+    .then((workflowContextReady) => {
+      if (!workflowContextReady) {
+        logger.warn('Workflow context initialization had errors, but continuing startup');
+      }
+      
+      // Initialize workflow templates  
+      const workflowService = enhancedWorkflowService;
+      
+      // Enhanced service doesn't need template initialization (templates are loaded in memory)
+      console.log('Workflow templates initialized (Enhanced Service)');
         
-        // Initialize background services
-        return initializeBackgroundServices();
-      }).then(() => {
+      // Initialize background services
+      return initializeBackgroundServices().then(() => {
         // Start the server
         app.listen(port, () => {
           logger.info(`Server listening on port ${port}`);
@@ -987,7 +1998,7 @@ if (process.env.NODE_ENV !== 'test') {
         });
       });
     })
-    .catch((err) => {
+    .catch((err: any) => {
       logger.error('Server startup error:', err);
       process.exit(1);
     });
@@ -996,6 +2007,12 @@ if (process.env.NODE_ENV !== 'test') {
 // Initialize background services
 async function initializeBackgroundServices(): Promise<void> {
   try {
+    // Initialize comprehensive queue system first
+    logger.info('🚀 Initializing comprehensive queue system...');
+    await initializeQueues();
+    logger.info('✅ Comprehensive queue system initialized successfully');
+    
+    // Initialize existing background worker
     await backgroundWorker.initialize();
     logger.info('Background services initialized successfully');
   } catch (error) {
@@ -1008,10 +2025,15 @@ async function initializeBackgroundServices(): Promise<void> {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully...');
   try {
+    // Shutdown queue system first
+    await shutdownQueues();
+    logger.info('✅ Queue system shutdown completed');
+    
+    // Then shutdown background worker
     await backgroundWorker.shutdown();
     logger.info('Background worker shutdown completed');
   } catch (error) {
-    logger.error('Error during background worker shutdown', { error: (error as Error).message });
+    logger.error('Error during shutdown', { error: (error as Error).message });
   }
   process.exit(0);
 });
@@ -1019,10 +2041,15 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully...');
   try {
+    // Shutdown queue system first
+    await shutdownQueues();
+    logger.info('✅ Queue system shutdown completed');
+    
+    // Then shutdown background worker
     await backgroundWorker.shutdown();
     logger.info('Background worker shutdown completed');
   } catch (error) {
-    logger.error('Error during background worker shutdown', { error: (error as Error).message });
+    logger.error('Error during shutdown', { error: (error as Error).message });
   }
   process.exit(0);
 }); 

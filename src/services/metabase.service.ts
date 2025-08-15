@@ -1204,7 +1204,6 @@ export class MetabaseService {
     logger.info('🔍 DEBUG: Editorial rank analysis from Metabase API response', {
       totalArticles: transformedArticles.length,
       rankBreakdown,
-      sampleArticles: rankAnalysis.slice(0, 5),
       nonRank1Count: rankAnalysis.filter(a => 
         a.editorialRank !== '1' && 
         a.editorialRank !== 1 && 
@@ -1335,6 +1334,7 @@ export class MetabaseService {
       }>;
       searchStrategy: string;
       relevanceAnalysis: string;
+      aiGeneratedKeywords?: any[]; // AI-generated keywords for enhanced relevance scoring
     };
   }> {
     try {
@@ -1446,7 +1446,7 @@ export class MetabaseService {
         totalArticlesFound,
         authorResults,
         searchStrategy: "Direct author field search using author:\"Name\" syntax - fast, accurate, and simple!",
-        relevanceAnalysis: "Topic relevance scoring with verified author metadata"
+        relevanceAnalysis: "Topic relevance scoring with verified author metadata",
       };
 
       logger.info('✅ Simplified author search completed', {
@@ -1968,6 +1968,14 @@ export class MetabaseService {
         keywordCount: keywordArray.length
       });
 
+      // 🔍 DEBUG: Log specific keywords for debugging
+      logger.info('🔍 KEYWORD DEBUG - Full Analysis', {
+        topic,
+        aiKeywords: aiKeywords.map((k: any) => typeof k === 'object' ? k.keyword : k),
+        finalKeywordArray: keywordArray,
+        keywordTypes: keywordArray.map(k => ({ keyword: k, type: typeof k }))
+      });
+
       if (!searchResults?.authorResults) {
         throw new Error('No author results found in search data');
       }
@@ -2018,7 +2026,7 @@ export class MetabaseService {
             const relevanceScore = this.calculateAdvancedTopicRelevance(article, topic, keywordArray);
             const relevanceFactors = this.getRelevanceFactors(article, topic, keywordArray);
             
-            console.log(`ENHANCED SCORING DEBUG - ${author.name}:`, {
+            logger.info(`ENHANCED SCORING DEBUG - ${author.name}`, {
               articleTitle: article.title?.substring(0, 100),
               relevanceScore,
               relevanceFactors,
@@ -2058,7 +2066,7 @@ export class MetabaseService {
 
           totalArticlesAnalyzed += englishArticles.length;
 
-          console.log(`ENHANCED SCORING DEBUG - ${author.name}:`, {
+          logger.info(`ENHANCED SCORING DEBUG - ${author.name}`, {
             algorithmicScore,
             editorialScore,
             topicRelevanceScore,
@@ -2302,20 +2310,66 @@ export class MetabaseService {
    */
   private extractAIGeneratedKeywords(searchResults: any): string[] {
     try {
+      // 🔍 STRONG DEBUG: Log the exact structure to understand the data flow
+      logger.info('🔍 EXTRACT KEYWORDS DEBUG - Input structure', {
+        searchResultsType: typeof searchResults,
+        searchResultsKeys: Object.keys(searchResults || {}),
+        hasAiGeneratedKeywords: !!searchResults?.aiGeneratedKeywords,
+        aiGeneratedKeywordsType: typeof searchResults?.aiGeneratedKeywords,
+        aiGeneratedKeywordsLength: Array.isArray(searchResults?.aiGeneratedKeywords) ? searchResults.aiGeneratedKeywords.length : 'not array',
+        aiGeneratedKeywordsPreview: Array.isArray(searchResults?.aiGeneratedKeywords) ? searchResults.aiGeneratedKeywords.slice(0, 3) : searchResults?.aiGeneratedKeywords
+      });
+
+      // DEBUG: Log the full structure to see what's available
+      logger.info('🔍 DEBUG: extractAIGeneratedKeywords input structure', {
+        searchResultsKeys: Object.keys(searchResults || {}),
+        hasAiGeneratedKeywords: !!searchResults?.aiGeneratedKeywords,
+        hasAuthorResults: !!searchResults?.authorResults,
+        hasMetadata: !!searchResults?.metadata,
+        hasCollectedInformation: !!searchResults?.collectedInformation,
+        hasTargetedKeywords: !!searchResults?.targetedKeywords,
+        fullStructure: JSON.stringify(searchResults, null, 2).substring(0, 2000) + '...'
+      });
+
       // Extract keywords from AI Author Generation step if available
       const targetedKeywords = searchResults?.aiGeneratedKeywords || 
                               searchResults?.authorResults?.[0]?.targetedKeywords ||
                               searchResults?.metadata?.targetedKeywords ||
+                              searchResults?.collectedInformation?.targetedKeywords ||
+                              searchResults?.targetedKeywords ||
                               [];
+      
+      logger.info('🔍 DEBUG: keyword extraction results', {
+        targetedKeywordsFound: !!targetedKeywords,
+        targetedKeywordsLength: Array.isArray(targetedKeywords) ? targetedKeywords.length : 0,
+        targetedKeywordsType: typeof targetedKeywords,
+        targetedKeywordsPreview: Array.isArray(targetedKeywords) ? targetedKeywords.slice(0, 3) : targetedKeywords
+      });
       
       if (Array.isArray(targetedKeywords) && targetedKeywords.length > 0) {
         // Extract keyword strings from objects if structured
-        return targetedKeywords.map((item: any) => {
+        const extractedKeywords = targetedKeywords.map((item: any) => {
           if (typeof item === 'string') return item;
           if (item?.keyword) return item.keyword;
           return item?.toString() || '';
         }).filter(k => k.length > 0);
+        
+        logger.info('✅ Successfully extracted AI keywords', {
+          originalCount: targetedKeywords.length,
+          extractedCount: extractedKeywords.length,
+          extractedKeywords: extractedKeywords.slice(0, 5)
+        });
+        
+        return extractedKeywords;
       }
+      
+      // FALLBACK: No AI keywords found, return empty array
+      logger.warn('❌ No AI-generated keywords found, using empty array', {
+        targetedKeywordsFound: !!targetedKeywords,
+        targetedKeywordsType: typeof targetedKeywords,
+        targetedKeywordsValue: targetedKeywords,
+        willFallbackToTopicWords: true
+      });
       
       return [];
     } catch (error) {
@@ -2325,35 +2379,40 @@ export class MetabaseService {
   }
 
   /**
-   * Prepare keywords for matching by combining topic, AI keywords, and related terms
+   * Prepare keywords for matching by prioritizing full multi-word keywords over individual words
    */
   private prepareKeywordsForMatching(topic: string, aiKeywords: string[]): string[] {
-    const keywords = new Set<string>();
+    const fullKeywords = new Set<string>();
+    const individualWords = new Set<string>();
     
-    // Add original topic and its variations
-    keywords.add(topic.toLowerCase());
-    if (topic.includes(' ')) {
-      topic.split(' ').forEach(word => {
-        if (word.length > 2) keywords.add(word.toLowerCase());
-      });
-    }
-    
-    // Add AI-generated keywords
+    // Add AI-generated keywords (prioritize full phrases)
     aiKeywords.forEach(keyword => {
-      keywords.add(keyword.toLowerCase());
-      // Add word variations
-      if (keyword.includes(' ')) {
-        keyword.split(' ').forEach(word => {
-          if (word.length > 2) keywords.add(word.toLowerCase());
-        });
+      const cleanKeyword = keyword.toLowerCase().replace(/[^\w\s]/g, '').trim();
+      if (cleanKeyword.length > 0) {
+        fullKeywords.add(cleanKeyword);
+        
+        // Also add individual words for fallback matching
+        if (cleanKeyword.includes(' ')) {
+          cleanKeyword.split(' ').forEach(word => {
+            if (word.length > 2) individualWords.add(word);
+          });
+        }
       }
     });
     
-    // Add related terms from our existing mapping
-    const relatedTerms = this.getRelatedTerms(topic);
-    relatedTerms.forEach(term => keywords.add(term.toLowerCase()));
+    // Add individual words from topic
+    if (topic.includes(' ')) {
+      topic.split(' ').forEach(word => {
+        const cleanWord = word.toLowerCase().replace(/[^\w]/g, '');
+        if (cleanWord.length > 2) individualWords.add(cleanWord);
+      });
+    } else {
+      const cleanTopic = topic.toLowerCase().replace(/[^\w]/g, '');
+      if (cleanTopic.length > 2) individualWords.add(cleanTopic);
+    }
     
-    return Array.from(keywords);
+    // Combine: full keywords first (higher priority), then individual words
+    return [...Array.from(fullKeywords), ...Array.from(individualWords)];
   }
 
   /**
@@ -2705,35 +2764,13 @@ export class MetabaseService {
     
     let score = 0;
     let totalKeywords = keywords.length;
-    
-    // Special patterns that indicate high relevance
-    const fundingPattern = /\$\d+(?:\.\d+)?[kmb]?(?:\s*(?:million|billion|m|b))?/i;
-    const roboticsCompanies = ['waymo', 'uber', 'doordash', 'tesla', 'cruise', 'argo', 'zoox', 'aurora', 'nuro'];
-    const fundingTerms = ['raised', 'funding', 'investment', 'capital', 'venture', 'series', 'round', 'valuation'];
-    
-    // Boost score for funding amounts
-    if (fundingPattern.test(text)) {
-      score += 30; // High relevance for funding mentions
-    }
-    
-    // Boost score for robotics/autonomous companies
-    roboticsCompanies.forEach(company => {
-      if (textLower.includes(company)) {
-        score += 25; // High relevance for industry companies
-      }
-    });
-    
-    // Boost score for funding terminology
-    fundingTerms.forEach(term => {
-      if (textLower.includes(term)) {
-        score += 15; // Moderate boost for funding terms
-      }
-    });
+    const matchDetails: string[] = [];
     
     keywords.forEach(keyword => {
       // 1. Exact match (full score)
       if (textLower.includes(keyword)) {
         score += 100;
+        matchDetails.push(`exact:${keyword}`);
         return;
       }
       
@@ -2743,23 +2780,16 @@ export class MetabaseService {
         const partial = keyword.substring(0, Math.floor(keyword.length * 0.75));
         if (textLower.includes(partial)) {
           score += 60;
+          matchDetails.push(`partial:${partial}`);
           return;
         }
       }
       
-      // 3. Related terms and synonyms
-      const relatedTerms = this.getRelatedTerms(keyword);
-      for (const term of relatedTerms) {
-        if (textLower.includes(term)) {
-          score += 40;
-          return;
-        }
-      }
-      
-      // 4. Word boundaries and variants
+      // 3. Word boundaries and variants
       const wordBoundaryRegex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
       if (wordBoundaryRegex.test(text)) {
         score += 30;
+        matchDetails.push(`boundary:${keyword}`);
         return;
       }
     });
@@ -2769,40 +2799,23 @@ export class MetabaseService {
     
     // Add small baseline score for having content (helps prevent all-zero scenarios)
     const baselineScore = text.length > 10 ? 5 : 0;
-    
-    return Math.min(100, Math.round(averageScore + baselineScore));
-  }
 
-  private getRelatedTerms(keyword: string): string[] {
-    const relatedTermsMap: Record<string, string[]> = {
-      'robotics': ['robot', 'automation', 'ai', 'artificial intelligence', 'technology', 'tech', 'autonomous', 'delivery', 'logistics', 'fleet', 'drones'],
-      'fundraising': ['funding', 'investment', 'capital', 'venture', 'investor', 'raise', 'series', 'round', 'financing', 'valuation', 'vc', 'seed'],
-      'autonomous': ['self-driving', 'driverless', 'unmanned', 'robotaxi', 'av', 'automated', 'autopilot', 'robotic'],
-      'delivery': ['logistics', 'fulfillment', 'last-mile', 'shipping', 'courier', 'transportation', 'distribution', 'supply chain'],
-      'platform': ['ecosystem', 'infrastructure', 'network', 'system', 'framework', 'solution', 'service'],
-      'vehicle': ['car', 'truck', 'van', 'fleet', 'automotive', 'transportation', 'mobility'],
-      'startup': ['company', 'firm', 'business', 'venture', 'enterprise', 'corporation'],
-      'technology': ['tech', 'innovation', 'digital', 'software', 'hardware', 'solution'],
-      'expansion': ['growth', 'scaling', 'scale', 'expand', 'development', 'rollout'],
-      'million': ['m', 'mil', 'million', 'millions'],
-      'billion': ['b', 'bil', 'billion', 'billions']
-    };
+    const finalScore = Math.min(100, Math.round(averageScore + baselineScore));
     
-    const keywordLower = keyword.toLowerCase();
-    
-    // Direct lookup
-    if (relatedTermsMap[keywordLower]) {
-      return relatedTermsMap[keywordLower];
+    // 🔍 DEBUG: Log detailed keyword matching
+    if (matchDetails.length > 0 || finalScore > 20) {
+      logger.info('🔍 TEXT RELEVANCE DEBUG', {
+        textPreview: text.substring(0, 150) + '...',
+        keywords: keywords.slice(0, 3),
+        matchDetails,
+        rawScore: score,
+        averageScore,
+        finalScore,
+        totalKeywords
+      });
     }
     
-    // Partial matches - if keyword contains any of the mapped terms
-    for (const [term, related] of Object.entries(relatedTermsMap)) {
-      if (keywordLower.includes(term) || term.includes(keywordLower)) {
-        return related;
-      }
-    }
-    
-    return [];
+    return finalScore;
   }
 
   private calculateIndexTermsRelevance(indexTerms: any[], keywords: string[]): number {
@@ -2832,14 +2845,6 @@ export class MetabaseService {
           }
         }
         
-        // 3. Related terms (50% weight)
-        const relatedTerms = this.getRelatedTerms(keyword);
-        for (const related of relatedTerms) {
-          if (termName.includes(related)) {
-            score += termScore * 0.5;
-            return;
-          }
-        }
         
         // 4. Word boundary match (40% weight)
         const wordBoundaryRegex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
@@ -2886,14 +2891,6 @@ export class MetabaseService {
           }
         }
         
-        // 3. Related terms (50% weight)
-        const relatedTerms = this.getRelatedTerms(keyword);
-        for (const related of relatedTerms) {
-          if (entityValue.includes(related)) {
-            score += entityScore * 0.5;
-            return;
-          }
-        }
         
         // 4. Word boundary match (40% weight)
         const wordBoundaryRegex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
@@ -2940,16 +2937,7 @@ export class MetabaseService {
           }
         }
         
-        // 3. Related terms (40% weight) - especially useful for tech/funding companies
-        const relatedTerms = this.getRelatedTerms(keyword);
-        for (const related of relatedTerms) {
-          if (companyName.includes(related)) {
-            score += mentionWeight * 0.4;
-            return;
-          }
-        }
-        
-        // 4. Industry-specific terms (30% weight)
+        // 3. Industry-specific terms (30% weight)
         if (this.isIndustryMatch(companyName, keyword)) {
           score += mentionWeight * 0.3;
           return;

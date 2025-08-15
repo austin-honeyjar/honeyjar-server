@@ -10,13 +10,25 @@ export const csvMetadata = pgTable('csv_metadata', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Thread type enum for context-aware chat
+export const threadTypeEnum = pgEnum('thread_type', ['global', 'asset', 'workflow', 'standard']);
+
+// Context type enum for context-aware chat
+export const contextTypeEnum = pgEnum('context_type', ['asset', 'workflow']);
+
 // Chat threads table
 export const chatThreads = pgTable('chat_threads', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull(),
   orgId: text('org_id'),
   title: text('title').notNull(),
+  threadType: threadTypeEnum('thread_type').default('standard').notNull(),
+  contextType: contextTypeEnum('context_type'),
+  contextId: text('context_id'),
+  isActive: boolean('is_active').default(true).notNull(),
+  metadata: jsonb('metadata'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Chat messages table
@@ -26,6 +38,7 @@ export const chatMessages = pgTable('chat_messages', {
   userId: text('user_id').notNull(),
   role: text('role').notNull(),
   content: jsonb('content').notNull(),
+  timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -139,6 +152,7 @@ export const assets = pgTable('assets', {
   subtitle: text('subtitle'),
   content: text('content').notNull(),
   author: text('author').notNull(), // User as author
+  orgId: text('org_id').notNull(), // Organization ID for proper filtering
   metadata: jsonb('metadata'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -495,3 +509,239 @@ export const newsPipelineRunsRelations = relations(newsPipelineRuns, ({ one }: {
 export const monitoringEventsRelations = relations(monitoringEvents, ({ one }: { one: any }) => ({
   // Relations can be added here if needed
 })); 
+
+// RAG System Tables
+
+// Security classification enum for RAG content
+export const ragSecurityLevelEnum = pgEnum('rag_security_level', ['public', 'internal', 'confidential', 'restricted']);
+
+// Content source enum for RAG uploads
+export const ragContentSourceEnum = pgEnum('rag_content_source', ['admin_global', 'user_personal', 'conversation', 'asset']);
+
+// User Knowledge Base - stores persistent user context
+export const userKnowledgeBase = pgTable('user_knowledge_base', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull(),
+  orgId: text('org_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  
+  // Company Information
+  companyName: text('company_name'),
+  companyDescription: text('company_description'),
+  industry: text('industry'),
+  companySize: text('company_size'),
+  headquarters: text('headquarters'),
+  
+  // User Information
+  jobTitle: text('job_title'), // User's job title from onboarding
+  
+  // User Preferences
+  preferredTone: text('preferred_tone'), // formal, casual, professional
+  preferredWorkflows: jsonb('preferred_workflows'), // ["Press Release", "Social Post"]
+  defaultPlatforms: jsonb('default_platforms'), // ["LinkedIn", "Twitter"]
+  writingStylePreferences: jsonb('writing_style_preferences'),
+});
+
+// Conversation Embeddings - for semantic search
+export const conversationEmbeddings = pgTable('conversation_embeddings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull(),
+  orgId: text('org_id').notNull(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  workflowId: uuid('workflow_id').references(() => workflows.id, { onDelete: 'cascade' }),
+  
+  // Content and Context
+  contentType: text('content_type'), // 'conversation', 'asset', 'feedback'
+  contentText: text('content_text').notNull(),
+  contentSummary: text('content_summary'),
+  structuredData: jsonb('structured_data'), // extracted entities, key info
+  
+  // Vector Embedding - UPDATED for pgvector migration
+  embedding: text('embedding'), // Keep for backward compatibility during migration
+  embeddingVector: text('embedding_vector'), // New pgvector column
+  embeddingProvider: text('embedding_provider').default('openai'), // Track embedding provider
+  
+  // Security Classification
+  securityLevel: ragSecurityLevelEnum('security_level').default('internal').notNull(),
+  securityTags: jsonb('security_tags'), // ['pii', 'financial', 'legal', 'proprietary']
+  aiSafeContent: text('ai_safe_content'), // Filtered version safe for AI
+  
+  // Metadata
+  workflowType: text('workflow_type'),
+  stepName: text('step_name'),
+  intent: text('intent'), // user intent/goal
+  outcome: text('outcome'), // 'completed', 'abandoned', 'revised'
+  
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Asset History - tracks generated content and feedback
+export const assetHistory = pgTable('asset_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull(),
+  orgId: text('org_id').notNull(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id),
+  workflowId: uuid('workflow_id').references(() => workflows.id),
+  
+  // Asset Details
+  assetType: text('asset_type'), // 'Press Release', 'Social Post', etc.
+  originalContent: text('original_content').notNull(),
+  finalContent: text('final_content'), // after user revisions
+  
+  // Security Classification
+  securityLevel: ragSecurityLevelEnum('security_level').default('internal').notNull(),
+  securityTags: jsonb('security_tags'), // Security-sensitive content markers
+  aiSafeContent: text('ai_safe_content'), // Version safe for AI processing
+  
+  // User Feedback
+  userSatisfaction: integer('user_satisfaction'), // 1-5
+  revisionCount: integer('revision_count').default(0),
+  feedbackText: text('feedback_text'),
+  approved: boolean('approved').default(false),
+  
+  // Learning Data
+  successfulPatterns: jsonb('successful_patterns'), // what worked well
+  improvementAreas: jsonb('improvement_areas'), // what needed changes
+  
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+});
+
+// User Interactions - detailed interaction tracking
+export const userInteractions = pgTable('user_interactions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull(),
+  orgId: text('org_id').notNull(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id),
+  workflowId: uuid('workflow_id').references(() => workflows.id),
+  stepId: uuid('step_id').references(() => workflowSteps.id),
+  
+  // Interaction Details
+  userInput: text('user_input').notNull(),
+  aiResponse: text('ai_response').notNull(),
+  interactionType: text('interaction_type'), // 'info_collection', 'revision_request', 'approval'
+  
+  // Security Classification
+  securityLevel: ragSecurityLevelEnum('security_level').default('internal').notNull(),
+  securityTags: jsonb('security_tags'),
+  containsSensitiveInfo: boolean('contains_sensitive_info').default(false),
+  
+  // Context at time of interaction
+  workflowContext: jsonb('workflow_context'),
+  userIntent: text('user_intent'),
+  confidenceScore: real('confidence_score'),
+  
+  // Learning Metrics
+  responseTimeMs: integer('response_time_ms'),
+  userSatisfaction: integer('user_satisfaction'), // 1-5
+  followUpRequired: boolean('follow_up_required').default(false),
+  
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Knowledge Retrieval Cache - optimization table
+export const knowledgeCache = pgTable('knowledge_cache', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  cacheKey: text('cache_key').unique().notNull(),
+  userId: text('user_id').notNull(),
+  orgId: text('org_id').notNull(),
+  
+  queryEmbedding: text('query_embedding'), // JSON string of vector array
+  retrievedContext: jsonb('retrieved_context'),
+  relevanceScore: real('relevance_score'),
+  
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// RAG Documents - Admin global and user personal uploads
+export const ragDocuments = pgTable('rag_documents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  
+  // Ownership and Access
+  contentSource: ragContentSourceEnum('content_source').notNull(),
+  uploadedBy: text('uploaded_by').notNull(), // admin user ID or regular user ID
+  orgId: text('org_id'), // null for admin_global docs
+  
+  // File Information
+  filename: text('filename').notNull(),
+  fileType: text('file_type').notNull(), // 'pdf', 'docx', 'txt', 'md'
+  fileSize: integer('file_size').notNull(),
+  filePath: text('file_path').notNull(), // Storage path
+  
+  // Content and Processing
+  title: text('title').notNull(),
+  description: text('description'),
+  extractedText: text('extracted_text'),
+  processedContent: text('processed_content'), // Cleaned/formatted text
+  
+  // Vector Embedding - UPDATED for pgvector migration
+  embedding: text('embedding'), // Keep for backward compatibility during migration
+  embeddingVector: text('embedding_vector'), // New pgvector column
+  embeddingProvider: text('embedding_provider').default('openai'), // Track embedding provider
+  
+  // Security Classification
+  securityLevel: ragSecurityLevelEnum('security_level').default('internal').notNull(),
+  securityTags: jsonb('security_tags'),
+  aiSafeContent: text('ai_safe_content'), // Version safe for AI
+  
+  // Categorization
+  contentCategory: text('content_category'), // 'pr_templates', 'style_guides', 'company_info'
+  tags: jsonb('tags'), // User-defined tags for organization
+  
+  // Usage Tracking
+  accessCount: integer('access_count').default(0),
+  lastAccessed: timestamp('last_accessed', { withTimezone: true }),
+  
+  // Status
+  processingStatus: text('processing_status').default('pending'), // 'pending', 'processing', 'completed', 'failed'
+  processingError: text('processing_error'),
+  
+  // Timestamps
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  processedAt: timestamp('processed_at', { withTimezone: true }),
+});
+
+// Enhanced User Uploads table
+export const userUploads = pgTable('user_uploads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull(),
+  orgId: text('org_id').notNull(),
+  threadId: uuid('thread_id').references(() => chatThreads.id, { onDelete: 'cascade' }),
+  
+  // File Information
+  filename: text('filename').notNull(),
+  fileType: text('file_type').notNull(),
+  fileSize: integer('file_size').notNull(),
+  filePath: text('file_path').notNull(), // S3/storage path
+  
+  // Extracted Content
+  extractedText: text('extracted_text'),
+  ocrData: jsonb('ocr_data'), // For images with OCR
+  
+  // Vector Embedding - UPDATED for pgvector migration
+  embedding: text('embedding'), // Keep for backward compatibility during migration
+  embeddingVector: text('embedding_vector'), // New pgvector column
+  embeddingProvider: text('embedding_provider').default('openai'), // Track embedding provider
+  
+  // Security Classification - Enhanced
+  securityLevel: ragSecurityLevelEnum('security_level').default('confidential').notNull(),
+  securityTags: jsonb('security_tags'), // Detected sensitive content types
+  aiSafeContent: text('ai_safe_content'), // Filtered version for AI
+  containsPii: boolean('contains_pii').default(false),
+  
+  // Metadata
+  uploadContext: text('upload_context'), // Current workflow/step when uploaded
+  userDescription: text('user_description'),
+  aiTags: jsonb('ai_tags'), // AI-generated content tags
+  aiSummary: text('ai_summary'), // AI-generated summary
+  
+  // Processing Status
+  processingStatus: text('processing_status').default('pending'),
+  processingError: text('processing_error'),
+  
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  processedAt: timestamp('processed_at', { withTimezone: true }), // When AI processing completed
+}); 

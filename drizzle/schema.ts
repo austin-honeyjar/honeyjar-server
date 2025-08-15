@@ -1,10 +1,15 @@
-import { pgTable, pgEnum, uuid, text, jsonb, timestamp, foreignKey, unique, serial, integer } from "drizzle-orm/pg-core"
+import { pgTable, pgEnum, uuid, text, jsonb, timestamp, foreignKey, unique, serial, integer, boolean } from "drizzle-orm/pg-core"
   import { sql } from "drizzle-orm"
 
 export const workflowStatus = pgEnum("workflow_status", ['failed', 'completed', 'active'])
 export const stepStatus = pgEnum("step_status", ['failed', 'complete', 'in_progress', 'pending'])
 export const stepType = pgEnum("step_type", ['asset_creation', 'data_transformation', 'api_call', 'user_input', 'ai_suggestion'])
 
+// Thread type enum for context-aware chat
+export const threadTypeEnum = pgEnum('thread_type', ['global', 'asset', 'workflow', 'standard']);
+
+// Context type enum for context-aware chat
+export const contextTypeEnum = pgEnum('context_type', ['asset', 'workflow']);
 
 export const workflowTemplates = pgTable("workflow_templates", {
 	id: uuid("id").defaultRandom().primaryKey().notNull(),
@@ -95,7 +100,13 @@ export const chatMessages = pgTable("chat_messages", {
 export const chatThreads = pgTable("chat_threads", {
 	id: uuid("id").defaultRandom().primaryKey().notNull(),
 	userId: text("user_id").notNull(),
-	title: text("title").notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	orgId: text("org_id"),
+	title: text("title").notNull(),
+	threadType: threadTypeEnum("thread_type").default('standard').notNull(),
+	contextType: contextTypeEnum("context_type"),
+	contextId: text("context_id"),
+	isActive: boolean("is_active").default(true).notNull(),
+	metadata: jsonb("metadata"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 });

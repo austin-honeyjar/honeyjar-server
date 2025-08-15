@@ -21,6 +21,26 @@ export const db = drizzle(client, { schema });
 // Export schema for use in other files
 export * from './schema';
 
+// Health check function for database
+export const checkDatabaseHealth = async () => {
+  try {
+    // Simple query to test database connectivity
+    const result = await client`SELECT 1 as health_check`;
+    return {
+      status: 'healthy',
+      connectionString: connectionString?.replace(/:[^:@]*@/, ':***@'), // Hide password
+      timestamp: new Date().toISOString(),
+      testQuery: result.length > 0 ? 'success' : 'failed'
+    };
+  } catch (error) {
+    return {
+      status: 'unhealthy',
+      error: error instanceof Error ? error.message : 'Unknown database error',
+      timestamp: new Date().toISOString()
+    };
+  }
+};
+
 // Function to ensure tables are created and migrations are run
 export const ensureTables = async () => {
   try {
